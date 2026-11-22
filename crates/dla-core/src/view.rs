@@ -314,7 +314,10 @@ pub fn queue_item(q: &crate::queue::RuntimeQueue) -> BlockingItem {
             None => f.to_string(),
         })
         .collect();
-    let kind = if q.focus && q.missed.is_empty() && !q.second.is_empty() {
+    let test_batch = !q.test_loop.batches.is_empty();
+    let kind = if test_batch {
+        "Next batch (test loop, nothing to write"
+    } else if q.focus && q.missed.is_empty() && !q.second.is_empty() {
         "Next batch (second look"
     } else if q.focus {
         "Next batch (focus"
@@ -332,6 +335,7 @@ pub fn queue_item(q: &crate::queue::RuntimeQueue) -> BlockingItem {
                 next.join(", ")
             ),
             (None, true) => format!(" {kind}): {}.", next.join(", ")),
+            (None, false) if test_batch => format!(" {kind}): {}.", next.join(", ")),
             (None, false) => format!(" Next batch: {}.", next.join(", ")),
         }
     };
@@ -356,11 +360,16 @@ pub fn queue_item(q: &crate::queue::RuntimeQueue) -> BlockingItem {
             }
         )
     };
+    let lead = if test_batch {
+        format!(" {}.", q.test_loop.sentence())
+    } else {
+        String::new()
+    };
     BlockingItem {
         kind: BlockingKind::Queue,
         id: q.runtime.clone(),
         description: format!(
-            "{} candidate(s) of {} are ranked for measurement and not targeted yet; {left} of {total} budget minutes remain.{next}{}{missed_note}",
+            "{} candidate(s) of {} are ranked for measurement and not targeted yet; {left} of {total} budget minutes remain.{lead}{next}{}{missed_note}",
             q.pending.len(),
             q.runtime,
             if q.no_coverage.is_empty() {
@@ -373,7 +382,19 @@ pub fn queue_item(q: &crate::queue::RuntimeQueue) -> BlockingItem {
                 )
             }
         ),
-        fix: if let (Some(h), true) = (&q.in_flight, q.batch.is_empty()) {
+        fix: if q.in_flight_test_loop
+            && let Some(h) = &q.in_flight
+        {
+            format!(
+                "dla harness run {h} (the project's own tests in a loop; nothing to fill), dla trend S<n>"
+            )
+        } else if test_batch {
+            format!(
+                "{}, dla harness run <H>, dla trend S<n>   (the project's own tests in a loop; nothing to fill; then, for the candidates that need a driver: {}, fill the hooks, dla harness run <H> --mode both, dla trend S<n>)",
+                q.batch_command,
+                crate::queue::batch_command(&q.runtime, false)
+            )
+        } else if let (Some(h), true) = (&q.in_flight, q.batch.is_empty()) {
             format!(
                 "fill the hooks of {h} so each unit reaches the targets listed in its driver with a new key, {}, dla trend S<n>",
                 q.command
@@ -465,7 +486,8 @@ pub fn status(view: &RunView) -> ReportStatus {
             let fix = if let Some(g) = grown.iter().find(|g| g.finding == f.id) {
                 g.commands().join("   then   ")
             } else if let Some(q) = pending_in {
-                q.command.clone()
+                // A candidate with no test class waits for a driver while the test loop runs.
+                q.command_for(&f.id)
             } else if let Some(step) = step {
                 step
             } else if queue_on

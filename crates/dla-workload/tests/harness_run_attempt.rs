@@ -147,6 +147,31 @@ fn a_failed_build_writes_a_failed_attempt_with_reason_build_fails() {
 }
 
 #[test]
+fn a_test_loop_that_does_not_build_prints_the_driver_command_for_its_targets() {
+    if !have_sh() {
+        eprintln!("skipped: sh is not available");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = ctx(dir.path(), &[1], false);
+    let mut m = manifest(&["true"], Some(&["sh", "-c", "echo boom >&2; exit 3"]));
+    m.runtime = Runtime::Jvm;
+    m.mode = HarnessMode::Driver;
+    m.tools = vec!["junit-platform-launcher".into(), "gradle".into()];
+    m.targets = vec![dla_core::FindingId::new(4), dla_core::FindingId::new(7)];
+    install(&ctx, &m);
+    let err = run(&ctx, "H1", &RunOptions::default()).unwrap_err();
+    assert_eq!(err.code, "harness-failed");
+    assert!(
+        err.fix
+            .contains("dla harness gen --lang jvm --driver --probe F4 --probe F7"),
+        "{}",
+        err.fix
+    );
+    assert!(err.fix.contains("not counted as measured"), "{}", err.fix);
+}
+
+#[test]
 fn a_run_with_no_usable_point_writes_reason_no_harness() {
     if !have_sh() {
         eprintln!("skipped: sh is not available");

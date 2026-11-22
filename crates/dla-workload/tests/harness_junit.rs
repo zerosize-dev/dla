@@ -1485,3 +1485,237 @@ fn a_mocking_jar_with_a_start_up_agent_entry_is_added_to_the_loops_jvm_and_none_
     let (args, file, _) = build_with_class_path(&[]);
     assert!(!args.contains("-javaagent") && file.is_none(), "{args}");
 }
+
+const OTHER_JAVA: &str = "package leak;\n\nimport java.util.HashMap;\nimport java.util.Map;\n\npublic final class Other {\n    static final Map<String, byte[]> REG = new HashMap<>();\n\n    private Other() {}\n\n    public static void put(String k) {\n        REG.put(k, new byte[16]);\n    }\n}\n";
+
+#[test]
+fn next_with_junit_takes_the_queues_test_loop_batch_and_says_which_tests_and_why() {
+    if !have_jdk() {
+        return;
+    }
+    let mut files = gradle_java();
+    files.push(("src/main/java/leak/Other.java", OTHER_JAVA));
+    let fx = project(&files);
+    let o = GenOptions {
+        next: Some(16),
+        ..junit_opts()
+    };
+    let out = gen_ok(&fx, &o);
+    let s = &out.summary;
+    let chosen = s["tests_chosen"].as_array().unwrap();
+    assert_eq!(chosen.len(), 1, "{s}");
+    assert!(
+        chosen[0]
+            .as_str()
+            .unwrap()
+            .starts_with("CacheTest (1 tests) for F"),
+        "{s}"
+    );
+    assert!(chosen[0].as_str().unwrap().ends_with("by name"), "{s}");
+    assert_eq!(s["test_loop"]["targets"], 1, "{s}");
+    assert!(
+        s["test_loop"]["queue"].as_str().unwrap().contains(
+            "1 candidate in 1 test-loop batch, nothing to write; then 1 candidate needs a driver"
+        ),
+        "{s}"
+    );
+    // The output is bounded: the whole summary stays small.
+    assert!(s.to_string().len() < 1900, "{}", s.to_string().len());
+    let m = manifest(&fx, "H1");
+    assert_eq!(m.targets.len(), 1);
+    assert!(m.is_test_loop());
+    assert_eq!(m.timeout_secs, 600);
+    assert!(driver_text(&fx, "H1").contains("\"leak.CacheTest\""));
+    assert!(fx.ctx.run_dir.join("harness/H1/tests.json").is_file());
+    // A second batch has nothing left that has a test: refused, with the driver command.
+    let r = gen_err(&fx, &o);
+    assert!(r.fix.contains("--driver --next"), "{r:?}");
+}
+
+#[test]
+fn next_with_junit_and_a_probe_is_refused_and_explicit_tests_keep_the_old_meaning() {
+    if !have_jdk() {
+        return;
+    }
+    let fx = project(&gradle_java());
+    let mut o = GenOptions {
+        next: Some(4),
+        probe_findings: vec![dla_core::FindingId::new(1)],
+        ..junit_opts()
+    };
+    assert_eq!(gen_err(&fx, &o).code, "invalid-value");
+    o.probe_findings.clear();
+    o.tests = vec!["leak.CacheTest".into()];
+    gen_ok(&fx, &o);
+    assert_eq!(manifest(&fx, "H1").targets.len(), 1);
+    // A bare `--next` of a hookless harness asks for 16, its own bound, and is taken; one more
+    // is refused, and the fix names the same kind of harness.
+    let fx = project(&gradle_java());
+    o.next = Some(16);
+    gen_ok(&fx, &o);
+    o.next = Some(17);
+    let r = gen_err(&fx, &o);
+    assert_eq!(r.code, "too-many-targets", "{r:?}");
+    assert!(
+        r.fix.contains("--junit --tests") && r.fix.contains("--next 16"),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn more_than_eight_targets_are_declared_by_a_hookless_harness_and_never_by_a_driver() {
+    if !have_jdk() {
+        return;
+    }
+    let fx = project(&gradle_java());
+    let mut o = junit_opts();
+    o.tests = vec!["leak.CacheTest".into()];
+    o.probe_findings = (1..=9).map(dla_core::FindingId::new).collect();
+    let r = gen_err(
+        &fx,
+        &GenOptions {
+            driver: true,
+            junit: false,
+            tests: Vec::new(),
+            ..o.clone()
+        },
+    );
+    assert_eq!(r.code, "too-many-targets", "{r:?}");
+    // The JUnit repeat takes them (findings that do not exist are refused for another reason).
+    let r = generate(&fx.ctx, &o);
+    if let Err(r) = r {
+        assert_ne!(r.code, "too-many-targets", "{r:?}");
+    }
+}
+
+#[test]
+fn a_class_that_cannot_run_is_dropped_and_the_others_are_measured() {
+    if !tool_ready("gradle") {
+        return;
+    }
+    let broken = "package leak;\n\nimport org.junit.jupiter.api.Test;\n\nclass BrokenTest {\n    @Test\n    void a() {\n        throw new IllegalStateException(\"Connection refused: kafka:9092\");\n    }\n}\n";
+    let mut files = gradle_java();
+    files.push(("src/test/java/leak/BrokenTest.java", broken));
+    let fx = project(&files);
+    let mut o = junit_opts();
+    o.tests = vec!["leak.CacheTest".into(), "leak.BrokenTest".into()];
+    gen_ok(&fx, &o);
+    let Some(series) = run_harness(&fx) else {
+        return;
+    };
+    assert_eq!(series.points.len(), 9);
+    let log = run_log(&fx);
+    assert!(
+        log.contains("DLA-JUNIT dropped test class leak.BrokenTest"),
+        "{log}"
+    );
+    assert!(log.contains("failed_units=1"), "{log}");
+    assert!(
+        series
+            .limitations
+            .iter()
+            .any(|l| l.contains("dropped test class leak.BrokenTest")),
+        "{:?}",
+        series.limitations
+    );
+}
+
+#[test]
+fn a_test_that_fails_in_every_run_does_not_sink_the_tests_that_pass() {
+    if !tool_ready("gradle") {
+        return;
+    }
+    // One class, two tests: one passes and feeds the cache, one fails every time (a service it
+    // needs is not there). Every run has a failure; the runs are still measurements of the test
+    // that passed.
+    let mixed = "package leak;\n\nimport org.junit.jupiter.api.Test;\n\nclass MixedTest {\n    @Test\n    void passes() {\n        Cache.touch();\n    }\n\n    @Test\n    void needsAService() {\n        throw new IllegalStateException(\"Connection refused: kafka:9092\");\n    }\n}\n";
+    let mut files = gradle_java();
+    files.push(("src/test/java/leak/MixedTest.java", mixed));
+    let fx = project(&files);
+    let mut o = junit_opts();
+    o.tests = vec!["leak.CacheTest".into(), "leak.MixedTest".into()];
+    gen_ok(&fx, &o);
+    let Some(series) = run_harness(&fx) else {
+        return;
+    };
+    assert_eq!(series.points.len(), 9);
+    let log = run_log(&fx);
+    assert!(log.contains("failed_units=18"), "{log}");
+    assert!(!log.contains("DLA-JUNIT every unit failed"), "{log}");
+    assert!(!log.contains("dropped test class"), "{log}");
+    assert!(
+        series
+            .limitations
+            .iter()
+            .any(|l| l.contains("run 1 of the tests had 1 failure(s)")
+                && l.contains("Connection refused: kafka:9092")),
+        "{:?}",
+        series.limitations
+    );
+}
+
+#[test]
+fn a_test_loop_that_cannot_build_or_measure_prints_the_driver_command_for_its_targets() {
+    if !tool_ready("gradle") {
+        return;
+    }
+    let boom = "package leak;\n\nimport org.junit.jupiter.api.Test;\n\nclass CacheTest {\n    @Test\n    void touches() {\n        throw new IllegalStateException(\"Connection refused: kafka:9092\");\n    }\n}\n";
+    let mut files = gradle_java();
+    files.retain(|(rel, _)| !rel.ends_with("CacheTest.java"));
+    files.push(("src/test/java/leak/CacheTest.java", boom));
+    let fx = project(&files);
+    let mut o = junit_opts();
+    o.probe_findings = vec![dla_core::FindingId::new(1)];
+    gen_ok(&fx, &o);
+    let m = manifest(&fx, "H1");
+    let result = run_points(&fx.ctx, &m, &RunOptions::default());
+    if build_blocked_by_network(&fx) {
+        return;
+    }
+    let r = result.expect_err("every unit failed");
+    assert!(
+        r.fix
+            .contains("dla harness gen --lang jvm --driver --probe F1"),
+        "{r:?}"
+    );
+    assert!(r.fix.contains("not counted as measured"), "{r:?}");
+}
+
+#[test]
+fn the_loop_fits_its_runs_into_the_time_limit_by_lowering_the_step_and_dropping_the_slowest_class()
+{
+    if !tool_ready("gradle") {
+        return;
+    }
+    let slow = "package leak;\n\nimport org.junit.jupiter.api.Test;\n\nclass SlowTest {\n    @Test\n    void sleeps() throws Exception {\n        Thread.sleep(2500);\n        Cache.touch();\n    }\n}\n";
+    let mut files = gradle_java();
+    files.push(("src/test/java/leak/SlowTest.java", slow));
+    let fx = project(&files);
+    let mut o = junit_opts();
+    o.tests = vec!["leak.CacheTest".into(), "leak.SlowTest".into()];
+    gen_ok(&fx, &o);
+    let mut m = manifest(&fx, "H1");
+    // The loop keeps 15 percent and 5 s of the limit back and counts the JVM's uptime: 9 runs of
+    // 2.5 s (22.5 s) fit a 40 s limit, so nothing would be dropped there. At 24 s the budget is
+    // about 15 s less the start of the JVM, the 8 runs left after the step is lowered to one
+    // need about 20 s, and the class that sleeps must go.
+    m.timeout_secs = 24;
+    m.save(&fx.ctx.run_dir).unwrap();
+    let Some(series) = run_harness(&fx) else {
+        return;
+    };
+    assert_eq!(series.points.len(), 9);
+    let log = run_log(&fx);
+    assert!(
+        log.contains("DLA-JUNIT dropped test class leak.SlowTest"),
+        "{log}"
+    );
+    assert!(
+        series
+            .limitations
+            .iter()
+            .any(|l| l.contains("lowered its step")),
+        "{:?}",
+        series.limitations
+    );
+}

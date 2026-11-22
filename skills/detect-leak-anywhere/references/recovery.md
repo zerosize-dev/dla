@@ -152,7 +152,8 @@ while F is ranked for measurement, no targeted workload has settled it, and the 
 open (budget over the floor, workload not blocked, candidates still pending). The message gives F's
 rank, the minutes left and the fix.
 - Remedy: run the batch command it prints (`dla harness gen --lang <rt> --driver --next`; a JVM project
-  with JUnit tests and no driver support keeps its generation command with `--next`), fill `setup` and
+  with JUnit 5 tests gets `dla harness gen --lang jvm --junit --next` first, the project's own tests in a
+  loop, nothing to fill, then the driver for the candidates with no test), fill `setup` and
   `unit` of the driver so each unit reaches the listed targets with a new key, `dla harness run H<n>
   --mode both`, `dla trend S<n>`, read `targets`. Never answer the refusal with another reason, a blocker
   reason you do not have, or a loop of `ledger resolve` calls.

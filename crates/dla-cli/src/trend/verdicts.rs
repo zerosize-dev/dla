@@ -5,7 +5,7 @@
 //! `grew`, `changed`, `constant`, `not_loaded`, then (no probe) `executed` or `not_executed`
 //! from the run's coverage, else `unknown`.
 
-use std::{fs, path::Path};
+use std::{collections::BTreeMap, fs, path::Path};
 
 use dla_census::parse::{Lang, parse};
 use dla_core::{
@@ -52,10 +52,27 @@ pub fn compute(inp: &Inputs<'_>) -> Vec<TargetVerdict> {
             ids.push((f.clone(), false));
         }
     }
+    let chosen = chosen_tests(inp.run_dir, &m);
+    let dropped = dropped_classes(inp.series);
     ids.into_iter()
         .filter(|(f, _)| inp.ledger.finding(f).is_some())
         .map(|(f, declared)| {
             let mut v = one(inp, &m, &f);
+            // A flat reading of a test-loop target whose chosen test classes were all dropped
+            // from the loop is no reading: no test chosen for it ran in the measured rounds
+            // (its code may have run once, in the run that failed). It is a miss.
+            if declared
+                && matches!(v.verdict, Verdict::Executed | Verdict::Constant)
+                && let Some(classes) = chosen.get(&f.to_string())
+                && !classes.is_empty()
+                && classes.iter().all(|c| dropped.contains(&c.as_str()))
+            {
+                v.verdict = Verdict::NotExecuted;
+                v.detail = format!(
+                    "the test class chosen for it ({}) was dropped from the loop (see the limitations of the series), so no test chosen for it ran in the measured rounds: this is a miss, not a flat reading",
+                    classes.join(", ")
+                );
+            }
             // "The code ran and no column passed" says nothing about a series the gate could
             // not judge: unknown does not settle the target.
             if let Some((n, need)) = inp.too_short
@@ -67,6 +84,46 @@ pub fn compute(inp: &Inputs<'_>) -> Vec<TargetVerdict> {
             v.declared = declared;
             v
         })
+        .collect()
+}
+
+/// The test classes a test-loop harness chose for each of its targets (`tests.json` of the
+/// harness, written by `dla harness gen --junit --next`), by finding id. Empty for any other
+/// harness.
+fn chosen_tests(run_dir: &Path, m: &HarnessManifest) -> BTreeMap<String, Vec<String>> {
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    if !m.is_test_loop() {
+        return out;
+    }
+    let path = run_dir.join("harness").join(&m.id).join("tests.json");
+    let Some(doc) = fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+    else {
+        return out;
+    };
+    for c in doc["classes"].as_array().into_iter().flatten() {
+        let Some(class) = c["class"].as_str() else {
+            continue;
+        };
+        for f in c["for"].as_array().into_iter().flatten() {
+            if let Some(id) = f["finding"].as_str() {
+                out.entry(id.to_owned()).or_default().push(class.to_owned());
+            }
+        }
+    }
+    out
+}
+
+/// The test classes the loop dropped (none of its tests passed, or it did not fit the time
+/// limit), from the limitations of the series: `dropped test class <name>: <why>`.
+fn dropped_classes(series: &SeriesFile) -> Vec<&str> {
+    const MARK: &str = "dropped test class ";
+    series
+        .limitations
+        .iter()
+        .filter_map(|l| l.find(MARK).map(|i| &l[i + MARK.len()..]))
+        .filter_map(|rest| rest.split_once(':').map(|(class, _)| class.trim()))
         .collect()
 }
 
@@ -656,6 +713,65 @@ mod tests {
             "{}",
             v[0].detail
         );
+    }
+
+    #[test]
+    fn a_flat_reading_of_a_test_loop_target_whose_test_class_was_dropped_is_a_miss() {
+        let s = scene();
+        let run = |junit: bool, classes: serde_json::Value, limitations: &[&str]| {
+            let mut m = manifest(json!([py_probe("P1", "F1", "CACHE")]), &["F1"]);
+            if junit {
+                m.tools.push(dla_core::harness::JUNIT_TOOL.to_owned());
+            }
+            m.save(s.dir.path()).unwrap();
+            fs::write(
+                s.dir.path().join("harness").join("H1").join("tests.json"),
+                json!({"classes": classes}).to_string(),
+            )
+            .unwrap();
+            let mut file = series("S1", 1, vec![Col::gauge("probe:a.CACHE", &[1.0; 9])]);
+            file.limitations = limitations.iter().map(|l| (*l).to_owned()).collect();
+            let mut analysed = analyze_series(&file, &[0], &GateThresholds::default());
+            tie(&mut analysed, 1);
+            compute(&Inputs {
+                project: s.dir.path(),
+                run_dir: s.dir.path(),
+                ledger: &s.ledger,
+                series: &file,
+                columns: &analysed,
+                too_short: None,
+            })
+            .remove(0)
+        };
+        let one = json!([{"class": "a.CartTests", "for": [{"finding": "F1", "by": "name"}]}]);
+        let two = json!([
+            {"class": "a.CartTests", "for": [{"finding": "F1", "by": "name"}]},
+            {"class": "a.CartUnitTests", "for": [{"finding": "F1", "by": "name"}]},
+        ]);
+        let dropped = "dropped test class a.CartTests: none of its tests passed in the first run (java.lang.IllegalStateException), so it is left out of the loop and the other classes are measured";
+        // Its only test class was dropped: the flat reading is a miss, and the detail says why.
+        let v = run(true, one.clone(), &[dropped]);
+        assert_eq!(v.verdict, Verdict::NotExecuted, "{v:?}");
+        assert!(
+            v.detail.contains("a.CartTests") && v.detail.contains("dropped from the loop"),
+            "{}",
+            v.detail
+        );
+        // Nothing dropped, another of its classes still ran, or another class was dropped: the
+        // reading stands.
+        assert_eq!(run(true, one.clone(), &[]).verdict, Verdict::Constant);
+        assert_eq!(run(true, two, &[dropped]).verdict, Verdict::Constant);
+        assert_eq!(
+            run(
+                true,
+                one.clone(),
+                &["dropped test class a.OtherTests: it was 3.0 s of the 4.0 s a run of the tests takes"]
+            )
+            .verdict,
+            Verdict::Constant
+        );
+        // A harness that is not a test loop has no chosen tests.
+        assert_eq!(run(false, one, &[dropped]).verdict, Verdict::Constant);
     }
 
     #[test]

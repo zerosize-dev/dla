@@ -83,6 +83,8 @@ pub struct GenArgs {
     /// Declare the next N pending candidates of the runtime's measurement queue, in rank
     /// order, as targets, exactly as if each were given with --probe (default and maximum 8
     /// in all). The driver lists each target with its writers, removers and what to do.
+    /// With --junit (JVM, no --tests): the queue's next test-loop batch, up to 16 candidates
+    /// that have a test class, with the test classes chosen for them; nothing to fill.
     #[arg(long, value_name = "N", num_args = 0..=1)]
     next: Option<Option<usize>>,
     /// An entry-path harness: a hook driver whose units call only the project's public entry
@@ -217,7 +219,12 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: HarnessCmd) -> 
                 // A bare `--next` fills the harness up to the limit of targets.
                 next: g.next.map(|n| {
                     n.unwrap_or_else(|| {
-                        dla_core::harness::MAX_TARGETS.saturating_sub(g.probe.len())
+                        if g.junit {
+                            // The test loop's batch: as many as the queue planned.
+                            dla_core::testloop::MAX_TARGETS
+                        } else {
+                            dla_core::harness::MAX_TARGETS.saturating_sub(g.probe.len())
+                        }
                     })
                 }),
                 probe_findings: g.probe,

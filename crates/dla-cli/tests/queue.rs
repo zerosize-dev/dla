@@ -1023,3 +1023,64 @@ fn an_aborted_run_keeps_its_queue_over_and_nothing_lifts_it() {
     assert_eq!(out["reason"]["time_budget"], 0, "{out}");
     assert_eq!(r.ok(&["run", "status"])["status"], "aborted");
 }
+
+/// A JVM project with a JUnit 5 test: the census writes the workload discovery result when the
+/// run has none, so the queue offers the project's own tests in a loop without a separate
+/// `dla workload discover`.
+#[test]
+fn a_jvm_census_discovers_the_tests_so_the_queue_starts_with_the_test_loop() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(
+        root,
+        "pom.xml",
+        "<project><modelVersion>4.0.0</modelVersion></project>\n",
+    );
+    write(root, "mvnw", "#!/bin/sh\n");
+    write(
+        root,
+        "src/main/java/shop/Registry.java",
+        "package shop;\n\nimport java.util.HashMap;\nimport java.util.Map;\n\npublic final class Registry {\n    private static final Map<String, Object> BY_KEY = new HashMap<>();\n\n    public static void put(String key, Object value) {\n        BY_KEY.put(key, value);\n    }\n}\n",
+    );
+    write(
+        root,
+        "src/test/java/shop/RegistryTests.java",
+        "package shop;\n\nimport org.junit.jupiter.api.Test;\n\nclass RegistryTests {\n    @Test\n    void puts() {\n        Registry.put(\"a\", 1);\n    }\n}\n",
+    );
+    let run = |args: &[&str]| {
+        let o = command(root)
+            .env("DLA_CONSENT_TIERS", "1,2,3")
+            .args(args)
+            .output()
+            .unwrap();
+        let text = String::from_utf8(o.stdout).unwrap();
+        assert!(o.status.success(), "{args:?}: {text}");
+        text
+    };
+    let init: Value = serde_json::from_str(&run(&["run", "init", "--session-id", "t"])).unwrap();
+    let run_dir = root.join(".dla").join(init["run_id"].as_str().unwrap());
+    let report = run_dir.join("workload").join("workloads.json");
+    assert!(!report.exists());
+
+    let census: Value = serde_json::from_str(&run(&["census", "--lang", "jvm"])).unwrap();
+    assert!(census["candidates"].as_u64().unwrap() > 0, "{census}");
+    assert!(
+        census["workloads"]
+            .as_str()
+            .is_some_and(|w| w.starts_with("discovered for the measurement queue")),
+        "{census}"
+    );
+    assert!(report.is_file());
+
+    // The queue names the test loop first, with nothing else run in between.
+    let status = run(&["run", "status"]);
+    assert!(
+        status.contains("dla harness gen --lang jvm --junit --next")
+            && status.contains("test-loop batch"),
+        "{status}"
+    );
+
+    // A result that is there is left alone.
+    let again: Value = serde_json::from_str(&run(&["census", "--lang", "jvm"])).unwrap();
+    assert!(again.get("workloads").is_none(), "{again}");
+}

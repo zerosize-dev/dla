@@ -58,6 +58,7 @@ pub mod slice;
 pub mod state;
 pub mod static_hit;
 mod strict;
+pub mod testloop;
 pub mod timebudget;
 pub mod toolctx;
 pub mod trend;

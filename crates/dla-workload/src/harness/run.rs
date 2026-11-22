@@ -239,12 +239,49 @@ fn harness_failed_fix(manifest: &HarnessManifest, logs: &str) -> String {
         .iter()
         .any(|t| t == "junit-platform-launcher")
     {
+        let fallback = if manifest.is_test_loop() {
+            format!(". {}", driver_fallback(manifest))
+        } else {
+            String::new()
+        };
         format!(
-            "read the tail of the logs ({logs}); a JUnit repeat harness has no hooks to fill. If the tests need a service that is not running (a database, a broker, a cache), start it and dla harness run {id}; if it cannot be started, record dla ledger resolve intake.workload --status unresolved --reason env_unavailable --remedy \"<the service {id} needs>\""
+            "read the tail of the logs ({logs}); a JUnit repeat harness has no hooks to fill. If the tests need a service that is not running (a database, a broker, a cache), start it and dla harness run {id}; if it cannot be started, record dla ledger resolve intake.workload --status unresolved --reason env_unavailable --remedy \"<the service {id} needs>\"{fallback}"
         )
     } else {
         format!("read the logs, fix the harness or its hooks, then dla harness run {id}")
     }
+}
+
+/// What to do for the targets of a test-loop harness that could not measure them (it did not
+/// build, or every unit failed): a driver with hooks for the same targets. The queue stops
+/// offering the harness, and its targets are not counted as measured. Empty for a harness
+/// that declares no target.
+fn driver_fallback(manifest: &HarnessManifest) -> String {
+    use dla_core::harness::MAX_TARGETS;
+    if manifest.targets.is_empty() {
+        return String::new();
+    }
+    let probes: Vec<String> = manifest
+        .targets
+        .iter()
+        .take(MAX_TARGETS)
+        .map(|t| format!("--probe {t}"))
+        .collect();
+    let rest = manifest.targets.len().saturating_sub(MAX_TARGETS);
+    format!(
+        "The tests did not measure {} target(s), so they are not counted as measured and the queue no longer offers this harness: write a driver for them instead (hooks to fill): dla harness gen --lang {} --driver {}{}",
+        manifest.targets.len(),
+        manifest.runtime.as_str(),
+        probes.join(" "),
+        if rest > 0 {
+            format!(
+                "   (at most {MAX_TARGETS} targets a harness; the other {rest} follow with dla harness gen --lang {} --driver --next)",
+                manifest.runtime.as_str()
+            )
+        } else {
+            String::new()
+        }
+    )
 }
 
 fn io_refusal(path: &Path, e: std::io::Error) -> Refusal {
@@ -997,12 +1034,7 @@ fn build_once(
             format!("{BUILD_MISSING}; see {}", ctx.pointer(&log_rel)),
             // A hook driver's own hook body is what does not compile (the build log names the
             // file), not the work copy of the project; a JUnit repeat has no hooks.
-            if manifest.mode == HarnessMode::Driver
-                && !manifest
-                    .tools
-                    .iter()
-                    .any(|t| t == "junit-platform-launcher")
-            {
+            if manifest.is_hook_driver() {
                 format!(
                     "fix the build error in {} (the build log names the file), then dla harness run {}",
                     ctx.pointer(&format!(
@@ -1011,6 +1043,13 @@ fn build_once(
                         manifest.id
                     )),
                     manifest.id
+                )
+            } else if manifest.is_test_loop() {
+                format!(
+                    "fix the build in {}, then dla harness run {}. {}",
+                    ctx.pointer(&manifest.scratch),
+                    manifest.id,
+                    driver_fallback(manifest)
                 )
             } else {
                 format!(
@@ -3003,8 +3042,14 @@ pub fn run_points(
             ),
             format!("at least one measured point; see {}", ctx.pointer(&log)),
             format!(
-                "fix the cause in the log, or regenerate with dla harness gen, then dla harness run {}",
-                manifest.id
+                "fix the cause in the log, or regenerate with dla harness gen, then dla harness run {}{}",
+                manifest.id,
+                // The queue stops offering a test loop that measured nothing.
+                if manifest.is_test_loop() && !manifest.targets.is_empty() {
+                    format!(". {}", driver_fallback(manifest))
+                } else {
+                    String::new()
+                }
             ),
         ));
     }
@@ -3699,9 +3744,25 @@ pub fn attention_lines(
         ));
     }
     if let Some(l) = out.limitations.iter().find(|l| {
-        l.starts_with("the driver lowered its step") || l.starts_with("the unit is too slow")
+        l.starts_with("the driver lowered its step")
+            || l.starts_with("the unit is too slow")
+            || l.starts_with("the test loop lowered its step")
+            || l.starts_with("the tests are too slow for a series")
     }) {
         lines.push(clip(&format!("DRIVER STEP: {l}"), 160));
+    }
+    // A test class the loop left out: the targets it was chosen for were not measured by it.
+    const DROPPED: &str = "dropped test class ";
+    let dropped: Vec<&str> = out
+        .limitations
+        .iter()
+        .filter_map(|l| l.find(DROPPED).map(|i| &l[i + DROPPED.len()..]))
+        .collect();
+    if let Some(first) = dropped.first() {
+        lines.push(clip(
+            &format!("TEST CLASS DROPPED ({}): {first}", dropped.len()),
+            160,
+        ));
     }
     if out
         .limitations
@@ -3801,6 +3862,30 @@ mod tests {
         );
         assert!(lines[2].starts_with("DRIVER STEP"), "{lines:?}");
         assert!(lines.iter().all(|l| l.len() <= 160));
+        // The test loop's own limitations are shown too: a lowered step and a dropped class.
+        let loop_out = RunOutput {
+            series: vec!["S1".into()],
+            points: 9,
+            modes: vec![KeyMode::Fresh],
+            limitations: vec![
+                "the test loop lowered its step from 2 to 1 runs of the tests per round in round 1: slow".into(),
+                "dropped test class a.BrokenTests: none of its tests passed in the first run (x), so it is left out of the loop and the other classes are measured".into(),
+                "dropped test class a.SlowTests: it was 9.0 s of the 10.0 s a run of the tests takes".into(),
+            ],
+            ..RunOutput::default()
+        };
+        let lines = attention_lines(&m, &loop_out, 9, &ledger, &dir.path().join("none.json"));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("DRIVER STEP: the test loop lowered its step")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l
+                .starts_with("TEST CLASS DROPPED (2): a.BrokenTests: none of its tests passed")),
+            "{lines:?}"
+        );
         // Nothing to say: no lines.
         let quiet = RunOutput {
             series: vec!["S1".into()],

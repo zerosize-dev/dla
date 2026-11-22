@@ -1,8 +1,18 @@
 import dla.harness.DlaDump;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import org.junit.platform.engine.TestExecutionResult;
+import org.junit.platform.engine.UniqueId;
 import org.junit.platform.launcher.Launcher;
 import org.junit.platform.launcher.LauncherDiscoveryRequest;
+import org.junit.platform.launcher.TestExecutionListener;
+import org.junit.platform.launcher.TestIdentifier;
 import org.junit.platform.launcher.core.LauncherDiscoveryRequestBuilder;
 import org.junit.platform.launcher.core.LauncherFactory;
 import org.junit.platform.launcher.listeners.SummaryGeneratingListener;
@@ -33,27 +43,253 @@ import static org.junit.platform.engine.discovery.DiscoverySelectors.selectMetho
  * line, the summary; the two early exits (launcher failure, no test found) print their cause line
  * last and no summary. A
  * parameterized test is selected as "pkg.Class#method(java.lang.String)".
+ *
+ * <p>Several classes run together (the test loop of the queue). After the first unit a class none of
+ * whose tests passed (every test failed, or it failed before its tests ran: a service it needs is not
+ * running) is dropped while another class passed: one class that cannot run must not sink the harness,
+ * and the drop is printed and recorded as a limitation. A class that passes once and fails later is
+ * kept. A run of the tests in which some tests fail and others pass is a measurement of the ones that
+ * passed (the first failure is recorded as a limitation); the process fails ("every unit failed") only
+ * when no test passed in any run. The loop also fits its rounds into the time limit of the process (DLA_TIME_LIMIT_SECS, set by
+ * {@code dla harness run} from the harness timeout): once a unit has been timed the step is lowered
+ * (never below one unit per round: the trend needs the points) and, when even that does not fit, the
+ * slowest classes of the first unit are dropped (never the last one); both are recorded.
  */
 public final class DlaJUnitLoop {
     private DlaJUnitLoop() {}
 
     private static final String[] SELECT = {@@DLA_SELECT@@};
 
+    /** Tests that passed and failed per class, and the time of each class, in one unit. */
+    private static final class Tally implements TestExecutionListener {
+        final Map<String, int[]> counts = new LinkedHashMap<>();
+        final Map<String, Long> nanos = new LinkedHashMap<>();
+        private final Map<String, Long> started = new LinkedHashMap<>();
+        final Map<String, String> firstFailure = new LinkedHashMap<>();
+
+        /** The class an identifier belongs to, and whether the identifier is that class itself. */
+        private static String[] classOf(TestIdentifier id) {
+            List<UniqueId.Segment> segments = UniqueId.parse(id.getUniqueId()).getSegments();
+            for (int i = 0; i < segments.size(); i++) {
+                if (segments.get(i).getType().equals("class")) {
+                    return new String[] {segments.get(i).getValue(), i == segments.size() - 1 ? "self" : ""};
+                }
+            }
+            return null;
+        }
+
+        @Override
+        public void executionStarted(TestIdentifier id) {
+            String[] c = classOf(id);
+            if (c != null && !c[1].isEmpty()) {
+                started.put(c[0], System.nanoTime());
+            }
+        }
+
+        @Override
+        public void executionFinished(TestIdentifier id, TestExecutionResult result) {
+            String[] c = classOf(id);
+            if (c == null) {
+                return;
+            }
+            int[] n = counts.computeIfAbsent(c[0], k -> new int[2]);
+            boolean failed = result.getStatus() == TestExecutionResult.Status.FAILED;
+            if (id.isTest()) {
+                if (result.getStatus() == TestExecutionResult.Status.SUCCESSFUL) {
+                    n[0]++;
+                } else if (failed) {
+                    n[1]++;
+                }
+            } else if (failed) {
+                // The class itself failed (its context did not start): none of its tests ran.
+                n[1]++;
+            }
+            if (failed) {
+                firstFailure.putIfAbsent(c[0], result.getThrowable().map(Throwable::toString).orElse("failed"));
+            }
+            if (!c[1].isEmpty() && started.containsKey(c[0])) {
+                nanos.merge(c[0], System.nanoTime() - started.get(c[0]), Long::sum);
+            }
+        }
+    }
+
+    private static final double LIMIT_SECS = doubleEnv("DLA_TIME_LIMIT_SECS");
+    private static int step;
+    private static int done;
+    private static long firstUnitNanos;
+    /**
+     * Time and count of the units since the set of classes last changed, the first unit of the process
+     * excluded (it holds the one-time costs: class loading, the Spring context).
+     */
+    private static long sinceNanos;
+    private static int sinceUnits;
+    /** The estimate of one unit right after the set of classes changed, in nanoseconds; 0: none. */
+    private static double estimateNanos;
+    private static List<String> active;
+    private static Map<String, Long> classNanos = new LinkedHashMap<>();
+    private static boolean warned;
+
+    private static String classOfSelector(String s) {
+        int i = s.indexOf('#');
+        return i < 0 ? s : s.substring(0, i);
+    }
+
+    private static LauncherDiscoveryRequest requestOf(List<String> selectors) {
+        LauncherDiscoveryRequestBuilder builder = LauncherDiscoveryRequestBuilder.request();
+        for (String s : selectors) {
+            builder.selectors(s.indexOf('#') < 0 ? selectClass(s) : selectMethod(s));
+        }
+        return builder.build();
+    }
+
+    private static double uptimeSecs() {
+        return java.lang.management.ManagementFactory.getRuntimeMXBean().getUptime() / 1000.0;
+    }
+
+    private static Set<String> distinct(List<String> selectors) {
+        Set<String> out = new LinkedHashSet<>();
+        for (String s : selectors) {
+            out.add(classOfSelector(s));
+        }
+        return out;
+    }
+
+    /**
+     * Lowers the step, then drops the slowest classes of the first unit, when the units left would
+     * not fit in the time limit (margin: 15 percent and 5 seconds). {@code inRound} units of the
+     * round in progress have run, {@code left} rounds follow it. Returns true when classes were
+     * dropped (the request is then rebuilt).
+     */
+    private static boolean fit(int round, int total, int inRound) {
+        if (!(LIMIT_SECS > 0) || done == 0) {
+            return false;
+        }
+        int left = total - round;
+        // The units measured since the classes last changed; right after a change, the estimate
+        // made then; before any second unit, the first one.
+        double perUnit = (sinceUnits > 0 ? (double) sinceNanos / sinceUnits
+            : estimateNanos > 0 ? estimateNanos : firstUnitNanos) / 1e9;
+        double budget = LIMIT_SECS * 0.85 - 5 - uptimeSecs();
+        double need = perUnit * ((double) step - inRound + (double) step * left);
+        if (need <= budget) {
+            return false;
+        }
+        int units = (int) (budget / perUnit);
+        int lowered = Math.max(1, Math.min(step, (units + inRound) / (left + 1)));
+        if (lowered < step) {
+            DlaDump.addLimitations(List.of(String.format(java.util.Locale.ROOT,
+                "the test loop lowered its step from %d to %d runs of the tests per round in round %d: one run takes %.1f s and the %s s time limit would cut the process (the x axis is still the cumulative run count)",
+                step, lowered, round, perUnit, Double.toString(LIMIT_SECS))));
+            step = lowered;
+        }
+        need = perUnit * ((double) step - inRound + (double) step * left);
+        boolean dropped = false;
+        // Only a steady-state reading (a run after the first, with the classes as they are now)
+        // decides to drop a class: the first run holds the one-time costs (class loading, the
+        // Spring context), and right after a drop nothing has been measured without the class.
+        if (need > budget && sinceUnits >= 1) {
+            long all = 0;
+            for (long n : classNanos.values()) {
+                all += n;
+            }
+            double share = 1.0;
+            while (need > budget && distinct(active).size() > 1 && all > 0) {
+                String slowest = null;
+                for (String c : distinct(active)) {
+                    if (slowest == null || classNanos.getOrDefault(c, 0L) > classNanos.getOrDefault(slowest, 0L)) {
+                        slowest = c;
+                    }
+                }
+                long n = classNanos.getOrDefault(slowest, 0L);
+                final String drop = slowest;
+                active = new ArrayList<>(active);
+                active.removeIf(x -> classOfSelector(x).equals(drop));
+                need = need * (1.0 - (double) n / all);
+                share = share * (1.0 - (double) n / all);
+                all -= n;
+                classNanos.remove(drop);
+                dropped = true;
+                String why = String.format(java.util.Locale.ROOT,
+                    "dropped test class %s: it was %.1f s of the %.1f s a run of the tests takes; the runs left of the other classes need about %.0f s of the %.0f s the %s s time limit leaves (left out from run %d on)",
+                    drop, n / 1e9, perUnit, need, budget, Double.toString(LIMIT_SECS), done + 1);
+                DlaDump.addLimitations(List.of(why));
+                System.err.println("DLA-JUNIT " + why);
+            }
+            if (dropped) {
+                // The next reading is of the classes that are left.
+                estimateNanos = Math.max(1.0, perUnit * 1e9 * share);
+                sinceNanos = 0;
+                sinceUnits = 0;
+            }
+        }
+        if (!warned && need > budget) {
+            warned = true;
+            DlaDump.addLimitations(List.of(String.format(java.util.Locale.ROOT,
+                "the tests are too slow for a series: even one run per round needs %.0f s for the runs left and %.0f s remain; choose fewer or faster test classes (--tests) or raise timeout_secs in harness.json",
+                need, Math.max(0.0, budget))));
+        }
+        return dropped;
+    }
+
+    /**
+     * After the first unit: a class none of whose tests passed (every test failed, or the class
+     * failed before its tests ran) is dropped while another class had a test that passed. Returns
+     * true when a class was dropped.
+     */
+    private static boolean dropClassesThatCannotRun(Tally tally) {
+        Set<String> classes = distinct(active);
+        if (classes.size() < 2) {
+            return false;
+        }
+        boolean anyPassed = false;
+        List<String> broken = new ArrayList<>();
+        for (String c : classes) {
+            int[] n = tally.counts.getOrDefault(c, new int[2]);
+            if (n[0] > 0) {
+                anyPassed = true;
+            } else if (n[1] > 0) {
+                broken.add(c);
+            }
+        }
+        if (!anyPassed) {
+            return false;
+        }
+        for (String c : broken) {
+            String why = "dropped test class " + c + ": none of its tests passed in the first run ("
+                + tally.firstFailure.getOrDefault(c, "failed")
+                + "), so it is left out of the loop and the other classes are measured";
+            DlaDump.addLimitations(List.of(why));
+            System.err.println("DLA-JUNIT " + why);
+            active = new ArrayList<>(active);
+            active.removeIf(x -> classOfSelector(x).equals(c));
+        }
+        if (!broken.isEmpty()) {
+            // The first run without the time of the classes that are gone (a connect timeout of a
+            // class that cannot run is not the time of a run of the others).
+            long gone = 0;
+            for (String c : broken) {
+                Long n = classNanos.remove(c);
+                gone += n == null ? 0 : n;
+            }
+            estimateNanos = Math.max(1.0, (double) (firstUnitNanos - gone));
+        }
+        return !broken.isEmpty();
+    }
+
     public static void main(String[] args) throws Exception {
-        int step = intEnv("DLA_STEP", @@DLA_STEP@@);
+        int stepDefault = intEnv("DLA_STEP", @@DLA_STEP@@);
         int warmup = intEnv("DLA_WARMUP", @@DLA_WARMUP@@);
         int rounds = intEnv("DLA_ROUNDS", @@DLA_ROUNDS@@);
 
-        LauncherDiscoveryRequestBuilder builder = LauncherDiscoveryRequestBuilder.request();
-        for (String s : SELECT) {
-            builder.selectors(s.indexOf('#') < 0 ? selectClass(s) : selectMethod(s));
-        }
-        LauncherDiscoveryRequest request = builder.build();
+        active = new ArrayList<>(List.of(SELECT));
+        LauncherDiscoveryRequest request = requestOf(active);
         Launcher launcher = LauncherFactory.create();
 
         int total = warmup + rounds;
-        int done = 0;
+        step = stepDefault;
+        done = 0;
         int failedUnits = 0;
+        int deadUnits = 0;
         long testsRun = 0;
         long abortedTests = 0;
         long skippedTests = 0;
@@ -61,8 +297,10 @@ public final class DlaJUnitLoop {
         for (int round = 1; round <= total; round++) {
             for (int k = 0; k < step; k++) {
                 SummaryGeneratingListener listener = new SummaryGeneratingListener();
+                Tally tally = new Tally();
+                long t0 = System.nanoTime();
                 try {
-                    launcher.execute(request, listener);
+                    launcher.execute(request, listener, tally);
                 } catch (RuntimeException e) {
                     // The launcher itself failed (a selected class does not exist, no engine).
                     System.err.println("DLA-JUNIT cannot run " + String.join(", ", SELECT) + ": "
@@ -70,8 +308,16 @@ public final class DlaJUnitLoop {
                     System.err.flush();
                     System.exit(3);
                 }
+                long took = System.nanoTime() - t0;
                 TestExecutionSummary summary = listener.getSummary();
                 done++;
+                if (done == 1) {
+                    firstUnitNanos = took;
+                    classNanos = new LinkedHashMap<>(tally.nanos);
+                } else {
+                    sinceNanos += took;
+                    sinceUnits++;
+                }
                 if (done == 1 && summary.getTestsFoundCount() == 0) {
                     System.err.println("DLA-JUNIT no test found for " + String.join(", ", SELECT)
                             + ": check the class names (--tests) and that the class is a JUnit 5 test");
@@ -88,18 +334,40 @@ public final class DlaJUnitLoop {
                 testsRun += summary.getTestsStartedCount() - aborted;
                 if (summary.getTotalFailureCount() > 0) {
                     failedUnits++;
+                    // A unit in which nothing passed measured nothing; one in which other tests
+                    // passed is a measurement of those.
+                    if (summary.getTestsSucceededCount() == 0) {
+                        deadUnits++;
+                    }
                     if (firstFailure == null) {
                         firstFailure = describe(summary);
                         StringWriter w = new StringWriter();
                         summary.printFailuresTo(new PrintWriter(w), 25);
                         System.err.println("DLA-JUNIT first failing unit: " + done);
                         System.err.print(w);
+                        DlaDump.addLimitations(List.of("run " + done + " of the tests had "
+                            + summary.getTotalFailureCount() + " failure(s) (first: " + firstFailure
+                            + "): a failing test may stop before the code it was chosen for, so the tests that"
+                            + " passed are the measurement; the log counts the runs with a failure (failed_units)"));
                     }
+                }
+                boolean changed = false;
+                if (done == 1) {
+                    changed = dropClassesThatCannotRun(tally);
+                }
+                if (done <= 2) {
+                    changed |= fit(round, total, k + 1);
+                }
+                if (changed) {
+                    request = requestOf(active);
                 }
             }
             DlaDump.checkpoint(done, round == total);
+            if (round < total && fit(round + 1, total, 0)) {
+                request = requestOf(active);
+            }
         }
-        int code = testsRun == 0 ? 3 : failedUnits == done ? 2 : 0;
+        int code = testsRun == 0 ? 3 : deadUnits == done ? 2 : 0;
         // The cause first, the summary line last: the log ends with the counts.
         if (testsRun == 0 && firstFailure != null) {
             System.err.println("DLA-JUNIT no test passed or failed: a class or test failed before any test ran: "
@@ -162,6 +430,15 @@ public final class DlaJUnitLoop {
         }
         String t = s.replace('\r', ' ').replace('\n', ' ').trim();
         return t.length() > 300 ? t.substring(0, 300) + "..." : t;
+    }
+
+    private static double doubleEnv(String name) {
+        String v = System.getenv(name);
+        try {
+            return v == null || v.isEmpty() ? 0 : Double.parseDouble(v.trim());
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     private static int intEnv(String name, int fallback) {
