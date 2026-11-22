@@ -555,3 +555,162 @@ fn the_site_column_comes_before_the_whole_process_hint_in_next() {
     );
     assert!(next.len() <= 8, "{next:?}");
 }
+
+/// Five allocation-site columns `py.blocks@s<k>.py:1` whose name order is the reverse of their
+/// slope order: `s1` grows by 10 blocks per run, `s5` by 50.
+fn five_sites() -> (tempfile::TempDir, PathBuf) {
+    let (dir, project) = synthetic();
+    let run_dir = fs::read_dir(project.join(".dla"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| p.join("series/S1.json").exists())
+        .unwrap();
+    let columns: Vec<Value> = (1..=5)
+        .map(|k| {
+            serde_json::json!({"name": format!("py.blocks@s{k}.py:1"), "unit": "count",
+                "kind": "counter", "region": "heap", "baseline": false, "after_gc": true,
+                "scope": "process", "site": format!("s{k}.py:1"), "source": "driver"})
+        })
+        .collect();
+    let points: Vec<Value> = (0..12)
+        .map(|i| {
+            let values: Vec<f64> = (1..=5)
+                .map(|k| f64::from(i) * f64::from(k) * 10.0)
+                .collect();
+            serde_json::json!({"x": f64::from(i + 1) * 10.0, "t_ms": i * 100, "values": values})
+        })
+        .collect();
+    fs::write(
+        run_dir.join("series/S1.json"),
+        serde_json::json!({"schema_version": 1, "id": "S1",
+            "source": {"kind": "harness", "harness": "H1", "mode": "fresh", "runtime": "python"},
+            "axis": "iteration", "warmup": 1,
+            "columns": columns, "points": points, "events": [], "limitations": []})
+        .to_string(),
+    )
+    .unwrap();
+    (dir, project)
+}
+
+/// The sites of the `ledger add` commands in `next`, in order.
+fn add_sites(t: &Value) -> Vec<String> {
+    t["next"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|n| n.starts_with(ADD_PREFIX))
+        .filter_map(|n| n.split(" --site ").nth(1))
+        .filter_map(|n| n.split_whitespace().next())
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn the_trend_names_the_lines_that_grow_most_first_and_a_finding_at_a_line_leads_next() {
+    let (_dir, project) = five_sites();
+    let t = ok(&project, &["trend", "S1"]);
+    let passed: Vec<&str> = t["passed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|c| c["column"].as_str())
+        .collect();
+    assert_eq!(
+        passed,
+        [
+            "py.blocks@s5.py:1",
+            "py.blocks@s4.py:1",
+            "py.blocks@s3.py:1",
+            "py.blocks@s2.py:1",
+            "py.blocks@s1.py:1"
+        ],
+        "{t}"
+    );
+    assert_eq!(
+        add_sites(&t),
+        ["s5.py:1", "s4.py:1", "s3.py:1"],
+        "{}",
+        t["next"]
+    );
+    // A finding added at the second largest line: the commands for it come before the add
+    // commands for the lines that still have none.
+    let add = Run::next_of(&t, ADD_PREFIX).unwrap();
+    let e = evidence_of(
+        t["next"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .find(|n| n.contains(" --site s4.py:1 "))
+            .unwrap(),
+    );
+    assert!(add.contains(" --site s5.py:1 "), "{add}");
+    let added = ok(
+        &project,
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "growth-series",
+            "--evidence",
+            &e,
+            "--site",
+            "s4.py:1",
+            "--region",
+            "heap",
+            "--holder",
+            "static/global",
+        ],
+    );
+    let f = added["id"].as_str().unwrap().to_owned();
+    let t2 = ok(&project, &["trend", "S1"]);
+    let first = t2["next"][0].as_str().unwrap();
+    assert!(
+        first.contains(&f) && !first.starts_with(ADD_PREFIX),
+        "{}",
+        t2["next"]
+    );
+    assert_eq!(
+        add_sites(&t2),
+        ["s5.py:1", "s3.py:1", "s2.py:1"],
+        "{}",
+        t2["next"]
+    );
+}
+
+#[test]
+fn the_final_gate_lists_the_untied_site_columns_largest_slope_first() {
+    let (_dir, project) = five_sites();
+    ok(&project, &["trend", "S1"]);
+    let _ = dla(&project, &["gate", "check", "--final"]);
+    let run_dir = fs::read_dir(project.join(".dla"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| p.join("gate/final.json").exists())
+        .unwrap();
+    let full: Value =
+        serde_json::from_str(&fs::read_to_string(run_dir.join("gate/final.json")).unwrap())
+            .unwrap();
+    let ids: Vec<&str> = full["missing"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["kind"] == "trend_column")
+        .filter_map(|m| m["id"].as_str())
+        .filter_map(|i| i.split_once(':').map(|(_, c)| c))
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "py.blocks@s5.py:1",
+            "py.blocks@s4.py:1",
+            "py.blocks@s3.py:1",
+            "py.blocks@s2.py:1",
+            "py.blocks@s1.py:1"
+        ],
+        "{full}"
+    );
+}

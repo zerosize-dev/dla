@@ -305,8 +305,11 @@ mod tests {
         let mut cols = vec![Col::gauge("aa.heap", &rising(1e7, 1e6)).site("x.java:1")];
         for (i, n) in ["a", "b", "c", "d", "e"].iter().enumerate() {
             cols.push(
-                Col::counter(&format!("py.blocks@{n}.py:1"), &rising(10.0, 1.0 + i as f64))
-                    .site(&format!("{n}.py:1")),
+                Col::counter(
+                    &format!("py.blocks@{n}.py:1"),
+                    &rising(10.0, 1.0 + i as f64),
+                )
+                .site(&format!("{n}.py:1")),
             );
         }
         cols.push(Col::gauge("zz.heap", &rising(1e7, 1e6)).site("x.java:2"));

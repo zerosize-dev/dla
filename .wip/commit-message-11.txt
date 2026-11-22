@@ -1,0 +1,62 @@
+Run a Python project's own tests in a loop first
+
+A leak that nothing holds has no static candidate, so the queue never
+names it, and a driver the agent writes reaches it only by luck. In a real
+unattended run on a Python library with C extension modules the agent
+wrote its own driver units, none of them made the call that leaks, and the
+run found nothing. The broadest workload a project has is its own tests.
+
+`dla harness gen --lang python --pytest [--tests a,b]` writes a driver with
+nothing to fill. One unit is one `pytest.main` of the test files in this
+process, with one checkpoint per round, so the `py.blocks@<file:line>`
+columns show the project lines whose live blocks grow with the runs. The
+project's addopts are cleared and the cache and xdist plugins are off.
+After the first run the loop drops a file none of whose tests passed, drops
+the slowest files until the series fits the time limit, and stops with a
+`DLA-PYTEST` line when no test passed, none was found, one file alone does
+not fit, or the tests import the project from outside the copy. Without
+pytest in the harness interpreter the command is refused with the install
+text.
+
+The loop is the first command of an open Python queue when the project has
+test files, until a loop wrote a series or an attempt failed. The queue
+reads the test files from the workload discovery result, and the agents of
+earlier real runs never ran `dla workload discover`, so `dla census --lang
+python` writes that result when the run has none and the project has
+Python test files. A project without test files gets none, as before.
+
+The scratch copy of a Python harness keeps the extension modules built in
+place (untracked `*.so`, `*.pyd`, `*.dylib` next to Python sources). A
+Python harness has no build step, and without them the package fails at
+import in the copy.
+
+A finding added at a line that grew in the loop is decided with a small
+driver of its own, not with an alloc-test on the loop, which would run the
+whole suite again per run. The printed commands name `dla harness gen
+--lang python --driver --probe F` first.
+
+`dla trend` and the final gate listed allocation-site columns in name
+order. On the real library that put the leak line tenth of twelve and
+outside the three add commands the trend prints. They now come largest
+growth first, and a line that already has a finding comes before the
+others.
+
+Also: `producer_hint` printed `dla trend <S> --finding F`, which is refused
+without `--against`; it prints `dla trend <S>`. The file-name rule of the
+agent's test-file test is pinned by a test. The Linux leg of the CI test
+job installs pytest, so the loop's tests run there and do not skip.
+
+Measured on that library in a fresh run with probe, sweep and census only:
+the queue named the loop first; the loop ran the whole suite (149 files,
+3736 tests per run) 9 times in 21 minutes with no edit; twelve site
+columns passed and the line of the leaking call had the second largest
+slope, 299 blocks per run; a finding at that line, a small driver made
+with `--probe F` and a unit that makes that call gave 1.03 blocks per
+unit; `dla alloc-test` decided by the site column for a leak in 7 seconds
+and the finding reached `confirmed`. Most of the other growing lines had
+one cause in the library: a module-level object stores an import error and
+raises it again on every use, each raise adds the caller's stack to the
+stored error, and those frames keep every pytest session alive.
+
+Not seen yet: an agent taking this route by itself. The loop was run on
+Linux only.

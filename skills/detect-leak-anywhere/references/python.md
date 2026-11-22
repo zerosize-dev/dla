@@ -76,7 +76,7 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   (`python3 -m pip install -e .`, or `python3 setup.py build_ext --inplace`) and then generate; if
   the tests import the project from somewhere else the loop stops with a `DLA-PYTEST` line that says so.
   Read its series with `dla trend`: the columns are the `py.blocks@<file:line>` sites that grew (test files
-  and the harness never count), and a site no finding is at gets the `dla ledger add ... --site ...` command.
+  and the harness never count), and a site no finding is at gets the `dla ledger add ... --site ...` command; the trend and the final gate name the lines largest growth first, so the first commands are for the lines that grow most.
   A finding made that way is decided with a small driver of its own, not with an alloc-test on the loop (which
   re-runs the whole suite per run): `dla harness gen --lang python --driver --probe F` with a unit that calls the
   function of that line, `dla harness run`, `dla trend`, `dla alloc-test` on that harness. The loop declares no
