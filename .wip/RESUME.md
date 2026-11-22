@@ -732,3 +732,6 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
   copies, `go clean -modcache` and `-cache` (the Go module cache must be downloaded again
   for a Go real run). Rerun: `<sp>/u61/verify3.sh` -> `status3`, `test-all3.log`.
   One whole-suite cycle after a change to dla-workload or dla-cli needs about 5 GB free.
+- 03:50 UTC: CI on main at cc003a0 green, all 15 jobs (run 44978201658). Release workflow
+  dispatched on main with publish=true: run 44982362127 (waiter bzv9cfuxm). Then check the
+  release `v0.9.0-preview.3` and its assets (compare with the asset list of preview.2).
