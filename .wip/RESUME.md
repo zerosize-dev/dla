@@ -1108,3 +1108,23 @@ flat test-loop readings get only 9 second looks.
 - When CI is green: commit three trees to main with commit-snapshot-tree.sh: 8253583 + commit-message-9.txt,
   7633949 + commit-message-10.txt, 868bfed + commit-message-11.txt; push main and main:dev/wonderful-mccarthy-algc5s;
   refresh /root/dla-real/plugin and bin; run pillow-2.
+
+## State at about 22:30 UTC 2026-11-22
+
+- pillow-2 (unattended, plugin from snapshot 86aef0c: W1 + X + Y + Z + S, before T): FOUND. 1165 s wall. Report:
+  python/F278 confirmed at src/PIL/ImageFont.py:580, growth py.blocks@...:580 3.05 per iteration, trigger reproduced
+  through the public API, mechanism named (the C function font_render takes a reference with a getattr and never
+  releases it). The worker did NOT run the loop (worker.md named the driver batch; gate item fix named it too).
+  Real-project score: aiohttp, grpc-go, axios, tokio-util, spring-data-commons, Pillow found; Jetty not run.
+- Report defects seen in pillow-2: heading UNCLASSIFIED (python archetype rows lack L-OWNERSHIP); Verified DISAGREES
+  on site (Python call line vs C line); top warning "0 of 739 entry points exercised" is false (editable install:
+  hook drivers import the package from the source tree, coverage maps only the scratch copy; task 78); status
+  INCOMPLETE with 175 findings closed time_budget while 41 of 60 minutes remained; budget stayed 1h (task 77).
+- CI round 1 on 868bfed: only failure was the over-exact block-count test (two OS); dynamic acceptance passed.
+- Eleventh frozen snapshot 658c8005427f8ffe24a7c968adefd276f8249a1d = tenth + test fix + builder T (worker.md,
+  census note names the command, ledger list queue command, pytest_hint) + VERIFY sentences. Local: whole suite
+  3285 passed 0 failed; clippy, schema, fmt clean. CI round 2 on it is running (waiter writes u79/ci11).
+- When CI round 2 is green: commit trees 8253583 (message 9), 7633949 (message 10), 658c800 (message 11) to main.
+- Builder U (dispatch-budget-brief.md) is working in the tree on top of 658c800: auto budget in dispatched runs,
+  gate fixes loop-first. Its work is a FOURTH commit (message 12 to write) and needs its own CI round.
+- After U: builder for task 78 (coverage under editable install), then pillow-3 (task 79).

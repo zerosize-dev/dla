@@ -507,6 +507,113 @@ fn the_worker_that_passes_first_sizes_the_run_from_every_workers_slice() {
     assert_eq!(r.state().budget.deadline, start + mins(170));
 }
 
+/// Records that sweep and census ran for `runtime`: the coverage manifest lists the `census`
+/// backend and one more (a dispatched run's workers write their rows there).
+fn sweep_and_census_ran(r: &Run, runtime: &str) {
+    use dla_core::{CoverageManifest, coverage::BackendCoverage};
+    let dir = r.run_dir();
+    let mut m = CoverageManifest::load_or_create(&dir).unwrap();
+    m.note_backend(runtime, "census", BackendCoverage::ran(None, 1));
+    m.note_backend(runtime, "dla", BackendCoverage::ran(None, 1));
+    m.save(&dir).unwrap();
+}
+
+fn worker_deadlines(r: &Run) -> Vec<(String, DateTime<Utc>)> {
+    r.state()
+        .workers
+        .iter()
+        .map(|w| (w.name.clone(), w.deadline))
+        .collect()
+}
+
+/// A dispatched run of `python` and `go` with 20 candidates in the python slice and sweep and
+/// census run for the go worker's runtime only; returns it and the deadlines before sizing.
+fn dispatched_with_a_big_slice() -> (Run, Vec<(String, DateTime<Utc>)>) {
+    let r = init(&[], &[]);
+    r.ok(&["run", "dispatch", "--workers", "python,go"]);
+    slice_candidates(&r, "python", "py", 20);
+    let before = worker_deadlines(&r);
+    (r, before)
+}
+
+/// The checks of a worker's first sizing: 20 candidates and 2 workers give
+/// 20 + 15x2 + 3x20 = 110 minutes, 50 more than the hour it started with.
+fn assert_sized_by_python_only(r: &Run, before: &[(String, DateTime<Utc>)]) {
+    let st = r.state();
+    let start = st.budget.started_at;
+    assert_eq!(st.budget.settled_workers, ["python"]);
+    assert!(!st.budget.settled, "go has not sized it yet");
+    let e = st.budget.estimate.clone().unwrap();
+    assert_eq!((e.runtimes, e.candidates, e.total_minutes), (2, 20, 110));
+    assert_eq!(st.budget.seconds, 110 * 60);
+    assert!(st.budget.seconds > 3600);
+    assert_eq!(st.budget.deadline, start + mins(110));
+    let after = worker_deadlines(r);
+    assert_eq!(after.len(), 2);
+    for ((n, b), (m, a)) in before.iter().zip(&after) {
+        assert_eq!(n, m);
+        assert_eq!(*a - *b, mins(50), "{n}");
+    }
+}
+
+#[test]
+fn a_workers_first_command_after_sweep_and_census_sizes_the_run() {
+    let (r, before) = dispatched_with_a_big_slice();
+    // Go has not run sweep and census: its command sizes nothing.
+    r.ok(&["--worker", "go", "ledger", "list"]);
+    assert!(r.state().budget.settled_workers.is_empty());
+    // Python's first command after them is not a gate check.
+    sweep_and_census_ran(&r, "python");
+    r.ok(&["--worker", "python", "ledger", "list"]);
+    assert_sized_by_python_only(&r, &before);
+    // A second sizing by the same worker changes nothing, even with more candidates.
+    let sized = r.state().budget;
+    let deadlines = worker_deadlines(&r);
+    slice_candidates(&r, "python", "py", 5);
+    r.ok(&["--worker", "python", "ledger", "list"]);
+    r.out(&["--worker", "python", "gate", "check", "--stage", "sweep"]);
+    assert_eq!(r.state().budget, sized);
+    assert_eq!(worker_deadlines(&r), deadlines);
+    // The other worker may only raise it: its own smaller estimate is not smaller, since it
+    // counts every slice, and it makes the sizing final.
+    sweep_and_census_ran(&r, "go");
+    r.ok(&["--worker", "go", "run", "status"]);
+    let st = r.state();
+    assert!(st.budget.settled);
+    assert_eq!(st.budget.settled_workers, ["python", "go"]);
+    assert!(st.budget.deadline >= sized.deadline);
+    assert_eq!(st.budget.estimate.as_ref().unwrap().candidates, 25);
+}
+
+#[test]
+fn a_failing_gate_check_of_the_worker_sizes_the_run_too() {
+    let (r, before) = dispatched_with_a_big_slice();
+    sweep_and_census_ran(&r, "python");
+    let (c, v, err) = r.out(&["--worker", "python", "gate", "check", "--stage", "sweep"]);
+    assert_eq!(c, 2, "{v} {err}");
+    assert_sized_by_python_only(&r, &before);
+}
+
+#[test]
+fn the_core_of_a_dispatched_run_never_sizes_the_budget() {
+    let (r, _) = dispatched_with_a_big_slice();
+    sweep_and_census_ran(&r, "python");
+    sweep_and_census_ran(&r, "go");
+    r.ok(&["run", "status"]);
+    r.ok(&["ledger", "list"]);
+    let (c, v, err) = r.out(&["gate", "check", "--stage", "sweep"]);
+    assert!(c == 0 || c == 2, "{v} {err}");
+    assert!(v.get("budget").is_none(), "{v}");
+    let b = r.state().budget;
+    assert!(!b.settled && b.estimate.is_none(), "{b:?}");
+    assert_eq!(b.seconds, 3600);
+    // A worker still sizes it afterwards, from the slices.
+    r.ok(&["--worker", "python", "ledger", "list"]);
+    let b = r.state().budget;
+    assert!(!b.settled);
+    assert_eq!(b.estimate.unwrap().candidates, 20);
+}
+
 #[test]
 fn a_fixed_budget_never_settles() {
     let r = init(&["--budget", "60m"], &[]);
