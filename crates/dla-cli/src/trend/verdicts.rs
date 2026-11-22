@@ -357,6 +357,18 @@ struct Func {
     first: u32,
 }
 
+/// True when the two `file:line` sites lie in the same function of the same file (the same
+/// name and the same first line). False when either is outside any function or cannot be read.
+pub(crate) fn same_function(project: &Path, a: &str, b: &str) -> bool {
+    match (
+        enclosing_function(project, a),
+        enclosing_function(project, b),
+    ) {
+        (Some((fa, x)), Some((fb, y))) => fa == fb && x.lo == y.lo && x.name == y.name,
+        _ => false,
+    }
+}
+
 fn enclosing_function(project: &Path, site: &str) -> Option<(String, Func)> {
     let (file, line) = site.rsplit_once(':')?;
     let file = file.replace('\\', "/");

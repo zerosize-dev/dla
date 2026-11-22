@@ -3093,8 +3093,37 @@ impl Ledger {
         bundle: &str,
         archetypes: Archetypes<'_>,
     ) -> Result<(LedgerLine, Option<LedgerLine>), Error> {
+        self.verify_among(
+            finding,
+            site,
+            holder,
+            mechanism,
+            label,
+            bundle,
+            archetypes,
+            &[],
+        )
+    }
+
+    /// [`Self::verify`] with more sites that count as the finding's own (`same_place`): the
+    /// caller, which can read the project's sources, passes the verifier's site there when it
+    /// lies in the same function as the finding's site or one of its writers or removers.
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_among(
+        &mut self,
+        finding: &FindingId,
+        site: Option<String>,
+        holder: crate::finding::Holder,
+        mechanism: &str,
+        label: &str,
+        bundle: &str,
+        archetypes: Archetypes<'_>,
+        same_place: &[String],
+    ) -> Result<(LedgerLine, Option<LedgerLine>), Error> {
         self.locked(|this| {
-            this.verify_held(finding, site, holder, mechanism, label, bundle, archetypes)
+            this.verify_held(
+                finding, site, holder, mechanism, label, bundle, archetypes, same_place,
+            )
         })
     }
 
@@ -3108,6 +3137,7 @@ impl Ledger {
         label: &str,
         bundle: &str,
         archetypes: Archetypes<'_>,
+        same_place: &[String],
     ) -> Result<(LedgerLine, Option<LedgerLine>), Error> {
         if self.slice.is_some() {
             return Err(core_only("verification").into());
@@ -3151,7 +3181,10 @@ impl Ledger {
             .get(finding)
             .map_or_else(Vec::new, |a| {
                 a.writers.iter().chain(&a.removers).cloned().collect()
-            });
+            })
+            .into_iter()
+            .chain(same_place.iter().cloned())
+            .collect();
         let v = verify::record(
             f,
             site,
