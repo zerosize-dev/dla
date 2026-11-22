@@ -658,3 +658,18 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
   probably wrong: a Java capturing lambda or `new` instance is a fresh key per unit. Step 1
   is the experiment; then a general line in the driver block for holders keyed by a
   caller's object. Report `<sp>/u60/report.md`. Its edits are NOT in the frozen snapshot.
+
+## State 2026-11-22 (brief Q result)
+
+- Builder report `<sp>/u60/report.md`: on a copy of spring-data-commons the documented cache
+  grows with a fresh key per unit, but in Java only via a serializable lambda made per unit
+  with `LambdaMetafactory.altMetafactory`; a capturing lambda, `new` of an implementing
+  class and a bound method reference are rejected by the library's reader. Finding
+  confirmed by hand through the printed commands (alloc-test leak).
+- In the tree (NOT in frozen snapshot ecbbe4e): `HolderFacts::key_from_caller`, `key:` line
+  of the target block, trend constant reason sentence, close-rest remedy clause, docs.
+  My rewording: value keys vs identity keys. Checked: two tests, mutation MUT_K1.
+  Whole suite running: `<sp>/u61/verify.sh` -> `<sp>/u61/status`, `test-all.log`.
+- Open: a real plugin rerun on spring with a frozen build that has this change (does the
+  model find the factory form from the line?). A Kotlin unit for the JVM driver stays a
+  separate decision for the owner.

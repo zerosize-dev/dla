@@ -168,8 +168,18 @@ fn one(inp: &Inputs<'_>, m: &HarnessManifest, f: &FindingId) -> TargetVerdict {
                 Verdict::Constant,
                 Some(&name),
                 format!(
-                    "{name} stayed {} over {n} points: every unit used the same key or never reached a writer",
-                    num(value)
+                    "{name} stayed {} over {n} points: every unit used the same key or never reached a writer{}",
+                    num(value),
+                    // The key comes from the caller: one shared object is one key.
+                    if inp
+                        .ledger
+                        .annotation(f)
+                        .is_some_and(|a| a.facts.key_from_caller())
+                    {
+                        "; the key of this holder comes from the caller, so constant can also mean the unit passed the same keys every time (a key compared by identity needs a fresh object per unit: see the key line of the target in the driver file)"
+                    } else {
+                        ""
+                    }
                 ),
             ),
             None => make(
@@ -660,6 +670,55 @@ mod tests {
             v[0].detail.contains(
                 "stayed 1 over 8 points: every unit used the same key or never reached a writer"
             ),
+            "{}",
+            v[0].detail
+        );
+    }
+
+    #[test]
+    fn a_constant_probe_of_a_key_the_caller_passes_says_the_unit_may_have_passed_the_same_objects()
+    {
+        use dla_core::census::{HolderFacts, SiteFact, SiteKind};
+        let mut s = scene();
+        let fact = |param: bool| SiteFact {
+            site: "a.py:6".into(),
+            kind: SiteKind::Insert,
+            depth: 0,
+            function: Some("add".into()),
+            init: false,
+            startup: false,
+            param,
+            constant: false,
+            exported: true,
+        };
+        let m = manifest(json!([py_probe("P1", "F1", "CACHE")]), &["F1"]);
+        let flat = [1.0; 9];
+        // No fact that the key is a parameter: the sentence of before.
+        let v = verdicts(&s, &m, vec![Col::gauge("probe:a.CACHE", &flat)], |c| {
+            tie(c, 1)
+        });
+        assert!(
+            !v[0].detail.contains("comes from the caller"),
+            "{}",
+            v[0].detail
+        );
+        // The census says the key derives from a parameter: one more sentence.
+        s.ledger
+            .annotate_record(dla_core::FindingAnnotation {
+                writers: vec!["a.py:6".into()],
+                facts: HolderFacts {
+                    writer_sites: vec![fact(true)],
+                    ..HolderFacts::default()
+                },
+                ..dla_core::FindingAnnotation::new(FindingId::new(1))
+            })
+            .unwrap();
+        let v = verdicts(&s, &m, vec![Col::gauge("probe:a.CACHE", &flat)], |c| {
+            tie(c, 1)
+        });
+        assert_eq!(v[0].verdict, Verdict::Constant);
+        assert!(
+            v[0].detail.contains("stayed 1 over 8 points: every unit used the same key or never reached a writer; the key of this holder comes from the caller, so constant can also mean the unit passed the same keys every time"),
             "{}",
             v[0].detail
         );

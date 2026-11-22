@@ -2290,6 +2290,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             &derived.targets,
             &derived.probes,
             &siblings,
+            rt,
         )
     };
     if rt == Runtime::Rust {

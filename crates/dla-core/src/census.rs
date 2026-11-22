@@ -210,6 +210,15 @@ pub struct HolderFacts {
 }
 
 impl HolderFacts {
+    /// True when an insert at the holder itself takes its key from a parameter of the
+    /// enclosing function (not a constant, not at start-up only): the object a caller passes
+    /// is the key, so the holder grows only when each unit passes one it has not seen.
+    pub fn key_from_caller(&self) -> bool {
+        self.writer_sites
+            .iter()
+            .any(|s| s.kind.adds() && s.depth == 0 && s.param && !s.constant && !s.startup)
+    }
+
     /// True when nothing is recorded.
     pub fn is_empty(&self) -> bool {
         *self == Self::default()

@@ -282,7 +282,7 @@ under the run directory and need tier 1.
      (`dla harness gen --lang jvm --junit --next`).
   2. Read the target block of the driver. Per target it gives the finding, site, holder, owner, the rule's
      message, up to 3 writers and 3 removers (`file:line` with the enclosing function), what its probe
-     reads (or "no probe: tied by allocation stacks or type counts"), and one instruction by holder:
+     reads (or "no probe: tied by allocation stacks or type counts"), a `key:` line when the census says the key of the holder comes from the caller (the holder grows only when each unit passes a key it has not seen: a key compared by value is built from the unit's key, a key compared by identity must be a fresh object per unit; the line says what makes a fresh one in the driver's language and that a method reference, a lambda that captures nothing or a module-level function is one object for the whole run), and one instruction by holder:
      a cached function: call the owner with arguments that differ for every unit (derive them from `key`);
      `static/global` or `container-field`: make every unit reach a writer so that it adds an entry whose
      key derives from `key`; `registration-table`: register through the public API once per unit and
