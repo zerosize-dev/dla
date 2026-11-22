@@ -838,3 +838,18 @@ flat test-loop readings get only 9 second looks.
   commit, push, then the real run spring-7.
 - Open points not changed: close-rest closes flat test-loop readings before any second look (cap 9);
   status says "not targeted yet" for missed ones; a model may tire of 24 batches of 3 commands each.
+
+## State 2026-11-22, later (review fixes built and checked)
+
+- Whole suite on the builder's tree: 166 binaries, 3165 passed, 0 failed, 5 ignored (u66/test-all.log).
+- Review fixes (list above) built; affected tests pass (u66/t1-*.log, t2-junit.log: harness_junit 39/39).
+- My mutations (u66/mut.py, results u66/mutrun.out + mut-k2.log): V1..V12 on my fixes and B1..B4 samples
+  of the builder's rules, each seen failing its test, all reverted, no marker left.
+- Seventh frozen snapshot WITH CI: 55f31eb6d836d3cddb3f4824a8ebb7d41fac2c59 (id in u66/tree-sha-ci);
+  CI waiter writes u66/ci-wait.out, failed job logs to u66/ci/.
+- Local whole suite on the final tree running: u66/verify2.out, u66/test-all2.log.
+- When both are green: `bash wip-notes/commit-snapshot-tree.sh 55f31eb... wip-notes/commit-message-6.txt`,
+  push main and main:dev/wonderful-mccarthy-algc5s; then freeze binary + plugin copy and start spring-7:
+  cp target/debug/dla /root/dla-real/bin/dla; refresh /root/dla-real/plugin from the snapshot;
+  nohup setsid python3 /root/dla-real/run.py spring-7 /root/dla-real/src/spring-data-commons
+  /root/dla-real/prompt-generic.txt --timeout 9000 --max-turns 600 --warm-m2 /root/dla-real/m2warm
