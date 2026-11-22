@@ -535,31 +535,16 @@ fn a_failed_run_of_the_loop_lets_the_queue_go_on_with_the_driver() {
 }
 
 #[test]
-fn the_census_discovers_the_workloads_so_the_queue_can_name_the_loop_first() {
-    // As for a JVM project: the queue reads the tests from the workload discovery result, and a
-    // run that skipped `dla workload discover` still gets the loop first.
+fn the_queue_names_the_loop_once_the_workload_discovery_lists_test_files() {
+    // The queue reads the test files from the workload discovery result: until `dla workload
+    // discover` has run, it knows none and starts with the driver batch.
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("project");
     project(&p, true);
     ok(&p, &["run", "init", "--session-id", "t"]);
     ok(&p, &["sweep", "--lang", "python"]);
-    // Nothing discovered the tests yet: the queue knows no test file.
+    ok(&p, &["census", "--lang", "python"]);
     assert_eq!(queue_command(&p), DRIVER);
-    let c = ok(&p, &["census", "--lang", "python"]);
-    assert!(
-        c["workloads"]
-            .as_str()
-            .is_some_and(|w| w.starts_with("discovered for the measurement queue")
-                && w.contains("the queue of a Python project starts with the project's own tests")),
-        "{c}"
-    );
+    ok(&p, &["workload", "discover", "--lang", "python"]);
     assert_eq!(queue_command(&p), LOOP_FIRST);
-    // A project without test files: the discovery is written too, and the queue shows no loop.
-    let dir2 = tempfile::tempdir().unwrap();
-    let p2 = dir2.path().join("project");
-    project(&p2, false);
-    ok(&p2, &["run", "init", "--session-id", "t"]);
-    ok(&p2, &["sweep", "--lang", "python"]);
-    ok(&p2, &["census", "--lang", "python"]);
-    assert_eq!(queue_command(&p2), DRIVER);
 }
