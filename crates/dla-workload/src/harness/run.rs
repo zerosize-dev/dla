@@ -120,6 +120,21 @@ pub struct RunOptions {
     /// `(x, seconds)` pairs to estimate the run's duration from when the harness has no
     /// series of its own (a clone made by `dla intervene` borrows its control's).
     pub pace_seed: Vec<(f64, f64)>,
+    /// A test-loop harness only: the static field whose growth is attributed to the test class
+    /// that fed it, and the finding it belongs to. The loop writes its per-class figures to
+    /// `harness/<H>/attribution-<F>.json` ([`dla_core::testloop::attribution_path`]).
+    pub attribute: Option<Attribution>,
+}
+
+/// The holder a test loop attributes to its test classes (`dla alloc-test <H> --finding <F>`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attribution {
+    /// The finding the holder belongs to.
+    pub finding: String,
+    /// The holder's class, as its probe spells it.
+    pub class: String,
+    /// The holder's static field.
+    pub field: String,
 }
 
 impl Default for RunOptions {
@@ -136,6 +151,7 @@ impl Default for RunOptions {
             capture_dumps: None,
             tool: None,
             pace_seed: Vec::new(),
+            attribute: None,
         }
     }
 }
@@ -1895,7 +1911,24 @@ fn run_driver_mode(
     clear_phase(&dump);
     clear_stale_capture_files(paths, &label, capturing);
     let command = manifest.run.argv.join(" ");
-    let spec = pe.exec_spec(timeout, &command, &[]);
+    let attribution: Vec<(&str, String)> = match &opts.attribute {
+        Some(a) if manifest.is_test_loop() => {
+            let out = paths
+                .hdir
+                .join(dla_core::testloop::attribution_file(&a.finding));
+            // A file of an earlier run is not this run's figures.
+            let _ = fs::remove_file(&out);
+            vec![
+                ("DLA_ATTRIBUTE", format!("{}#{}", a.class, a.field)),
+                (
+                    "DLA_ATTRIBUTE_OUT",
+                    dla_core::paths::plain(out).to_string_lossy().into_owned(),
+                ),
+            ]
+        }
+        _ => Vec::new(),
+    };
+    let spec = pe.exec_spec(timeout, &command, &attribution);
     let res = exec(ctx, &spec)?;
     let mut run = ModeRun {
         processes: 1,

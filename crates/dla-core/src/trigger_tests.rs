@@ -188,80 +188,139 @@ fn a_harness_that_runs_the_projects_own_workload_reproduces_it() {
     );
 }
 
-/// Writes `harness/<h>/tests.json` with one class per `(class, findings)`.
-fn tests_json(run: &Run, h: &str, classes: &[(&str, &[u32])]) {
-    let doc = json!({"classes": classes.iter().map(|(c, ids)| json!({
-        "class": c, "file": "src/test/X.java", "tests": 3,
-        "for": ids.iter().map(|n| json!({"by": "name", "finding": format!("F{n}")})).collect::<Vec<_>>(),
-    })).collect::<Vec<_>>()});
+/// Writes `harness/<h>/attribution-F<n>.json`: what the loop measured per class, as
+/// `(class, first run, later runs)`, over `later` runs after the first.
+fn attribution_json(run: &Run, h: &str, n: u32, later: u64, classes: &[(&str, i64, i64)]) {
+    let doc = json!({
+        "probe": "org.acme.Cache#resolved",
+        "later_runs": later,
+        "classes": classes.iter().map(|(c, first, rest)| json!({
+            "class": c, "first_run": first, "later_runs": rest,
+        })).collect::<Vec<_>>(),
+        "dropped": [],
+    });
     std::fs::write(
-        run.dir.path().join("harness").join(h).join("tests.json"),
+        run.dir
+            .path()
+            .join("harness")
+            .join(h)
+            .join(format!("attribution-F{n}.json")),
         doc.to_string(),
     )
     .unwrap();
 }
 
-#[test]
-fn a_test_loop_trigger_names_the_test_classes_chosen_for_the_finding() {
-    let run = Run::new(3);
-    run.harness("H1", Kind::TestLoop, &[1, 2, 3]);
-    tests_json(
-        &run,
-        "H1",
-        &[
-            ("org.acme.a.FooUnitTests", &[1, 2]),
-            ("org.acme.b.BarUnitTests", &[2]),
-            ("org.acme.c.BazUnitTests", &[3]),
-        ],
-    );
-    run.run(
-        "S1",
-        "H1",
-        "aa",
-        None,
-        Some(&[(1, Verdict::Grew), (2, Verdict::Grew), (3, Verdict::Grew)]),
-    );
-    let t = run.triggers();
-    let varies = |n| match t.trigger(&f(n)) {
+fn varies_of(t: &Triggers, n: u32) -> String {
+    match t.trigger(&f(n)) {
         Trigger::Reproduced { varies, .. } => varies,
         other => panic!("{other:?}"),
-    };
-    assert_eq!(varies(1), "the project's own tests FooUnitTests");
-    assert_eq!(
-        varies(2),
-        "the project's own tests FooUnitTests, BarUnitTests"
+    }
+}
+
+fn grew_in_a_test_loop(n: u32) -> Run {
+    let run = Run::new(n);
+    let ids: Vec<u32> = (1..=n).collect();
+    run.harness("H1", Kind::TestLoop, &ids);
+    let verdicts: Vec<(u32, Verdict)> = ids.iter().map(|i| (*i, Verdict::Grew)).collect();
+    run.run("S1", "H1", "aa", None, Some(&verdicts));
+    run
+}
+
+#[test]
+fn a_test_loop_trigger_names_the_classes_that_were_measured_feeding_the_holder() {
+    let run = grew_in_a_test_loop(2);
+    attribution_json(
+        &run,
+        "H1",
+        1,
+        20,
+        &[
+            ("org.acme.a.FlatUnitTests", 267, 0),
+            ("org.acme.b.SmallUnitTests", 0, 20),
+            ("org.acme.c.BigUnitTests", 3, 266),
+        ],
     );
-    assert_eq!(varies(3), "the project's own tests BazUnitTests");
+    let t = run.triggers();
+    // Largest per run first; the figure is the later-runs sum over the later runs.
+    assert_eq!(
+        varies_of(&t, 1),
+        "the project's own tests BigUnitTests, SmallUnitTests (13.3, 1 entries per run)"
+    );
     assert_eq!(t.test_loop_harnesses(&f(1)), ["H1"]);
-    // A finding that did not grow there, or a harness that is not a test loop, is not listed.
+    // F2 has no attribution: not measured, with the command that measures it.
+    assert_eq!(
+        varies_of(&t, 2),
+        "the project's own tests in H1; which test class feeds it is not measured (dla alloc-test H1 --finding F2)"
+    );
+}
+
+#[test]
+fn a_test_loop_trigger_names_at_most_three_feeders_and_counts_the_rest() {
+    let run = grew_in_a_test_loop(1);
+    attribution_json(
+        &run,
+        "H1",
+        1,
+        10,
+        &[
+            ("a.One", 0, 50),
+            ("a.Two", 0, 40),
+            ("a.Three", 0, 30),
+            ("a.Four", 0, 20),
+            ("a.Five", 0, 10),
+        ],
+    );
+    assert_eq!(
+        varies_of(&run.triggers(), 1),
+        "the project's own tests One, Two, Three and 2 more (5, 4, 3 entries per run)"
+    );
+}
+
+#[test]
+fn a_test_loop_trigger_with_an_attribution_and_no_feeder_says_so() {
+    let run = grew_in_a_test_loop(1);
+    attribution_json(
+        &run,
+        "H1",
+        1,
+        20,
+        &[
+            ("org.acme.a.FooUnitTests", 5, 0),
+            ("org.acme.b.BarUnitTests", 0, 0),
+        ],
+    );
+    assert_eq!(
+        varies_of(&run.triggers(), 1),
+        "the project's own tests; no single test class added entries per run in H1"
+    );
+}
+
+#[test]
+fn a_class_chosen_for_a_finding_is_not_named_as_what_feeds_it() {
+    let run = grew_in_a_test_loop(1);
+    // The queue chose a class for F1 by name; nothing measured that it feeds anything.
+    let doc = json!({"classes": [{
+        "class": "org.acme.a.FooUnitTests", "file": "src/test/X.java", "tests": 3,
+        "for": [{"by": "name", "finding": "F1"}],
+    }]});
+    std::fs::write(
+        run.dir.path().join("harness/H1/tests.json"),
+        doc.to_string(),
+    )
+    .unwrap();
+    let v = varies_of(&run.triggers(), 1);
+    assert!(!v.contains("FooUnitTests"), "{v}");
+    assert!(v.contains("not measured"), "{v}");
+}
+
+#[test]
+fn a_finding_that_did_not_grow_in_a_test_loop_or_grew_in_another_harness_is_not_listed() {
+    let run = grew_in_a_test_loop(1);
     run.harness("H2", Kind::TestLoop, &[1]);
     run.run("S2", "H2", "bb", None, Some(&[(1, Verdict::Constant)]));
     run.harness("H3", Kind::Command, &[1]);
     run.run("S3", "H3", "cc", None, Some(&[(1, Verdict::Grew)]));
     assert_eq!(run.triggers().test_loop_harnesses(&f(1)), ["H1"]);
-}
-
-#[test]
-fn a_test_loop_trigger_without_a_class_for_the_finding_keeps_the_workload_text() {
-    let run = Run::new(2);
-    run.harness("H1", Kind::TestLoop, &[1, 2]);
-    // No tests.json for F1; one that names only F1 for F2.
-    run.run(
-        "S1",
-        "H1",
-        "aa",
-        None,
-        Some(&[(1, Verdict::Grew), (2, Verdict::Grew)]),
-    );
-    let w = |t: &Triggers, n| match t.trigger(&f(n)) {
-        Trigger::Reproduced { varies, .. } => varies,
-        other => panic!("{other:?}"),
-    };
-    assert_eq!(w(&run.triggers(), 1), "the project's workload W2");
-    tests_json(&run, "H1", &[("org.acme.a.FooUnitTests", &[1])]);
-    let t = run.triggers();
-    assert_eq!(w(&t, 1), "the project's own tests FooUnitTests");
-    assert_eq!(w(&t, 2), "the project's workload W2");
 }
 
 #[test]

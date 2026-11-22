@@ -1,0 +1,44 @@
+Measure which test class feeds a holder; stop misreading JVM holders as not loaded
+
+A run on a Java library found its documented leak through the test loop and
+confirmed it: a static cache keyed by the caller's lambda object, which a
+Kotlin property reference makes anew on every call. The independent
+verifier then read it as an intended cache, and the report counted it as
+"confirmed but disputed". Its bundle held the growth figures and nothing
+about the tests that fed the cache.
+
+`dla alloc-test <H> --finding <F>` on a test loop now measures which test
+class feeds the finding's static holder: the loop reads the holder when each
+test class starts and finishes, keeps the first run of the tests (the
+one-time fill) apart from the later runs, and counts the later runs a class
+added in. A class that added in more than half of them feeds the holder; one
+that added in a few filled something late. The result is stored next to the
+harness, printed (`fed_by`, `ran_flat`, `added_once`) and recorded with the
+discriminator evidence. On the library the feeder is a Kotlin test class
+chosen for a different candidate, 14.5 entries per run; the two classes
+chosen for the cache by name add nothing.
+
+The trigger line and the bundle use that measurement: the classes that feed
+the holder with their entries per run, the classes that ran and added
+nothing, or a statement that it was not measured with the command that
+measures it. They never name a class because the queue chose it.
+
+The verifier's instructions gain two things: how to read test-loop evidence
+(the same tests repeat every round, so steady growth means some call adds an
+entry each time it runs; find that call and ask whether a program makes it
+the same way), and a rule for caches (a memo is intended only when a later
+call can find what an earlier call stored; a key that is a new
+identity-compared object per call never hits; weak and soft references do
+not settle it). With the measured bundle the verifier agent labelled the
+cache a leak in 3 of 3 runs and kept a control cache of the same library,
+fed by a test that builds a new factory per test, as intended in 3 of 3.
+
+JVM holders that read `not_loaded` although their class was loaded:
+- a holder in an instance field (its class probe reads static fields only)
+  and a holder owned by a class initialiser now get the coverage verdict,
+  with a detail that says the size is not measured;
+- the agent now finds a nested class (`Outer.Inner` in a probe,
+  `Outer$Inner` in the JVM), so static holders inside nested classes are
+  measured at all.
+Before, the queue asked for hand-written drivers for such candidates that
+could never read anything else.

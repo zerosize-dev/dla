@@ -304,7 +304,8 @@ under the run directory and need tier 1.
      included, are in the stored trend report and in `dla ledger list`) and counts the other verdicts.
      Verdicts: `grew` (a column tied to the finding passed the gate): go on with stage 5 for it (sibling,
      `dla ledger test`). `changed` (its probe moved but did not pass): counts as measured; `dla alloc-test`
-     may decide it. `constant` (its probe stayed flat), `not_loaded` (the module of its probe was never
+     may decide it. On the JVM a holder that is not a static field (an instance field, a class initialiser)
+     has no size to read: its verdict comes from coverage and its detail says so. `constant` (its probe stayed flat), `not_loaded` (the module of its probe was never
      imported) and `not_executed` (its function or a writer never ran) mean the unit did not reach the
      target or reused a key: read `detail`, fix the unit, `dla harness run H<n> --mode both` once more
      (the same harness, or a new one with `dla harness gen ... --driver --probe F<n>` when the driver
@@ -557,8 +558,9 @@ Verification is not limited to runs with workers. Once the leak-side findings ar
 `dla:verifier` subagent given only the bundle directory, the run id, `F3` and the manifest sha256. The
 bundle holds raw evidence and up to four code excerpts around frames that the evidence names; it does not
 hold the site, the hypothesis, the label or the explanation. The bundle of a finding that grew in the test loop
-also carries `test-loop/<H>/tests.json`: the test classes chosen for that finding, which the verifier reads as
-callers. The verifier states a site, holder and
+also carries `test-loop/<H>/tests.json`: the test classes that fed the holder in the loop, with the entries each
+added per run, and the classes that ran and added nothing (measured by `dla alloc-test <H> --finding F3`; without
+that run it lists the classes that ran and says which of them feeds the holder was not measured). The verifier states a site, holder and
 mechanism in words, decides from them whether the owner would call this a defect, picks an ID or
 UNCLASSIFIED and runs `dla ledger verify`. A verifier that reads the finding as bounded, intended or
 proportional to load records the matching `N-*` ID; the ledger accepts it, the label disagrees and the open

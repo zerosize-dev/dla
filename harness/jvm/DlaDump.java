@@ -971,6 +971,41 @@ public final class DlaDump {
         return null;
     }
 
+    private static final Map<String, Field> ATTRIBUTION_FIELDS = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * The number of objects reachable from one static field: the figure the field's probe record
+     * reports as {@code reachable}. The class and the field are spelled as a probe spells them
+     * ({@code pkg.Outer.Inner} for a nested class). A negative value: the class is not loaded, the
+     * field does not exist, or the field could not be read. The class is never loaded here: a class
+     * that is not loaded holds nothing.
+     */
+    public static long reachableFromStatic(String className, String fieldName) {
+        try {
+            String key = className + "#" + fieldName;
+            Field f = ATTRIBUTION_FIELDS.get(key);
+            if (f == null) {
+                if (inst == null) {
+                    return -1;
+                }
+                Class<?> c = findClass(className, loadedClasses());
+                if (c == null) {
+                    return -1;
+                }
+                try {
+                    f = c.getDeclaredField(fieldName);
+                } catch (NoSuchFieldException e) {
+                    return -1;
+                }
+                ATTRIBUTION_FIELDS.put(key, f);
+            }
+            Object r = probeOne("", className, f, new ArrayList<>()).get("reachable");
+            return r instanceof Number n ? n.longValue() : -1;
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
     private static boolean probeField(Field f) {
         if (!Modifier.isStatic(f.getModifiers()) || f.isSynthetic()) {
             return false;

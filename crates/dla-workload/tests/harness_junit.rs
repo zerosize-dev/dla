@@ -1620,6 +1620,115 @@ fn a_class_that_cannot_run_is_dropped_and_the_others_are_measured() {
     );
 }
 
+const HOLDER_JAVA: &str = "package leak;\n\nimport java.util.HashMap;\nimport java.util.Map;\n\npublic final class Holder {\n    static final Map<Object, Object> ITEMS = new HashMap<>();\n\n    private Holder() {}\n\n    public static void put(Object key) {\n        ITEMS.put(key, \"v\");\n    }\n}\n";
+const FEEDS_TEST_JAVA: &str = "package leak;\n\nimport org.junit.jupiter.api.Test;\n\nclass FeedsTest {\n    @Test\n    void newKeyEachRun() {\n        Holder.put(new Object());\n    }\n}\n";
+const IDLE_TEST_JAVA: &str = "package leak;\n\nimport org.junit.jupiter.api.Test;\n\nclass IdleTest {\n    @Test\n    void doesNothing() {}\n}\n";
+const FLAT_TEST_JAVA: &str = "package leak;\n\nimport org.junit.jupiter.api.Test;\n\nclass FlatTest {\n    @Test\n    void sameKeyEachRun() {\n        Holder.put(\"constant\");\n    }\n}\n";
+
+fn attribution_project() -> Fx {
+    let mut files = gradle_java();
+    files.push(("src/main/java/leak/Holder.java", HOLDER_JAVA));
+    files.push(("src/test/java/leak/FeedsTest.java", FEEDS_TEST_JAVA));
+    files.push(("src/test/java/leak/FlatTest.java", FLAT_TEST_JAVA));
+    files.push(("src/test/java/leak/IdleTest.java", IDLE_TEST_JAVA));
+    let fx = project(&files);
+    let mut o = junit_opts();
+    // The idle class runs first, before the holder's class is loaded.
+    o.tests = vec![
+        "leak.IdleTest".into(),
+        "leak.FlatTest".into(),
+        "leak.FeedsTest".into(),
+    ];
+    gen_ok(&fx, &o);
+    fx
+}
+
+#[test]
+fn the_loop_measures_which_test_class_feeds_a_holder_and_writes_nothing_without_the_ask() {
+    if !tool_ready("gradle") {
+        return;
+    }
+    let fx = attribution_project();
+    let m = manifest(&fx, "H1");
+    let file = fx.ctx.run_dir.join("harness/H1/attribution-F1.json");
+    // Without the option no file is written.
+    if run_harness(&fx).is_none() {
+        return;
+    }
+    assert!(!file.exists(), "no attribution was asked for");
+    // With it the loop names the class that adds an entry per run and the one that does not.
+    let opts = RunOptions {
+        attribute: Some(dla_workload::harness::run::Attribution {
+            finding: "F1".into(),
+            class: "leak.Holder".into(),
+            field: "ITEMS".into(),
+        }),
+        ..RunOptions::default()
+    };
+    run_points(&fx.ctx, &m, &opts).unwrap();
+    let a = dla_core::testloop::Attributed::parse(&fs::read_to_string(&file).unwrap())
+        .expect("a parsable attribution file");
+    assert_eq!(a.probe, "leak.Holder#ITEMS");
+    assert_eq!(a.later_runs, 17, "{a:?}");
+    assert!(!a.parallel);
+    let fig = |c: &str| a.classes.iter().find(|f| f.class == c).unwrap().clone();
+    let feeds = fig("leak.FeedsTest");
+    let flat = fig("leak.FlatTest");
+    let idle = fig("leak.IdleTest");
+    // One new key per run: one entry per later run; the constant key adds one entry once, in the
+    // first run, and nothing after it.
+    assert_eq!(feeds.later_runs, 17, "{a:?}");
+    assert!(feeds.first_run >= 1, "{a:?}");
+    // The class that feeds the holder added in every later run; the others in none.
+    assert_eq!(feeds.grew_in, Some(17), "{a:?}");
+    assert_eq!(flat.later_runs, 0, "{a:?}");
+    assert_eq!(flat.grew_in, Some(0), "{a:?}");
+    // A class that runs before the holder's class is loaded added nothing: a negative reading
+    // counts as 0, never as a loss.
+    assert_eq!((idle.first_run, idle.later_runs), (0, 0), "{a:?}");
+    let fed = a.fed_by();
+    assert_eq!(fed.len(), 1, "{fed:?}");
+    assert_eq!(fed[0].class, "leak.FeedsTest");
+    assert!((fed[0].per_run - 1.0).abs() < 1e-9, "{fed:?}");
+    let ran_flat: Vec<&str> = a.ran_flat().iter().map(|c| c.class.as_str()).collect();
+    assert_eq!(ran_flat, ["leak.IdleTest", "leak.FlatTest"]);
+}
+
+#[test]
+fn tests_that_run_in_parallel_say_that_the_figures_of_the_classes_overlap() {
+    if !tool_ready("gradle") {
+        return;
+    }
+    let props = "junit.jupiter.execution.parallel.enabled=true\njunit.jupiter.execution.parallel.mode.classes.default=concurrent\n";
+    let mut files = gradle_java();
+    files.push(("src/main/java/leak/Holder.java", HOLDER_JAVA));
+    files.push(("src/test/java/leak/FeedsTest.java", FEEDS_TEST_JAVA));
+    files.push(("src/test/java/leak/FlatTest.java", FLAT_TEST_JAVA));
+    files.push(("src/test/resources/junit-platform.properties", props));
+    let fx = project(&files);
+    let mut o = junit_opts();
+    o.tests = vec!["leak.FlatTest".into(), "leak.FeedsTest".into()];
+    gen_ok(&fx, &o);
+    let m = manifest(&fx, "H1");
+    let opts = RunOptions {
+        attribute: Some(dla_workload::harness::run::Attribution {
+            finding: "F1".into(),
+            class: "leak.Holder".into(),
+            field: "ITEMS".into(),
+        }),
+        ..RunOptions::default()
+    };
+    match run_points(&fx.ctx, &m, &opts) {
+        Ok(_) => {}
+        Err(_) if build_blocked_by_network(&fx) => return,
+        Err(r) => panic!("{r:?}"),
+    }
+    let file = fx.ctx.run_dir.join("harness/H1/attribution-F1.json");
+    let a = dla_core::testloop::Attributed::parse(&fs::read_to_string(&file).unwrap()).unwrap();
+    assert!(a.parallel, "{a:?}");
+    assert_eq!(a.classes.len(), 2, "{a:?}");
+}
+
 #[test]
 fn a_test_that_fails_in_every_run_does_not_sink_the_tests_that_pass() {
     if !tool_ready("gradle") {

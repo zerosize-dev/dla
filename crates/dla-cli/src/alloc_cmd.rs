@@ -1000,6 +1000,95 @@ fn unread_field_probe(
     })
 }
 
+/// A test-loop harness asked about a finding whose holder is a `jvm-static` probe: the holder to
+/// attribute to the test classes (`DLA_ATTRIBUTE`). `None` for any other harness or finding.
+fn attribution_target(
+    manifest: &HarnessManifest,
+    finding: Option<&Finding>,
+) -> Option<dla_workload::harness::run::Attribution> {
+    use dla_core::harness::ProbeTarget;
+    let finding = finding?;
+    if !manifest.is_test_loop() {
+        return None;
+    }
+    let root = finding.root_id();
+    manifest.probes.iter().find_map(|p| {
+        let ProbeTarget::JvmStatic { class, field } = &p.target else {
+            return None;
+        };
+        (p.finding.as_ref() == Some(&root) || p.finding.as_ref() == Some(&finding.id)).then(|| {
+            dla_workload::harness::run::Attribution {
+                finding: root.to_string(),
+                class: class.clone(),
+                field: field.clone(),
+            }
+        })
+    })
+}
+
+/// Test classes named in the printed result: the full names are in the stored file.
+const MAX_FED_NAMED: usize = 4;
+const MAX_FLAT_NAMED: usize = 8;
+
+/// `fed_by` (the classes whose later-runs sum is positive, with the entries each added per run,
+/// largest first) and `ran_flat` (the classes that ran and added nothing in the later runs), by
+/// simple name, so that the result stays inside its size bound. The stored file has the full names.
+fn attribution_summary(a: &dla_core::testloop::Attributed) -> Map<String, Value> {
+    let simple = |c: &str| c.rsplit(['.', '$']).next().unwrap_or(c).to_owned();
+    let fed = a.fed_by();
+    let flat = a.ran_flat();
+    let mut m = Map::new();
+    m.insert("holder".into(), json!(a.probe));
+    m.insert("later_runs".into(), json!(a.later_runs));
+    m.insert(
+        "fed_by".into(),
+        Value::Array(
+            fed.iter()
+                .take(MAX_FED_NAMED)
+                .map(|f| {
+                    json!({"class": simple(&f.class), "per_run": (f.per_run * 10.0).round() / 10.0})
+                })
+                .collect(),
+        ),
+    );
+    if fed.len() > MAX_FED_NAMED {
+        m.insert("fed_by_more".into(), json!(fed.len() - MAX_FED_NAMED));
+    }
+    m.insert(
+        "ran_flat".into(),
+        json!(
+            flat.iter()
+                .take(MAX_FLAT_NAMED)
+                .map(|c| simple(&c.class))
+                .collect::<Vec<_>>()
+        ),
+    );
+    if flat.len() > MAX_FLAT_NAMED {
+        m.insert("ran_flat_more".into(), json!(flat.len() - MAX_FLAT_NAMED));
+    }
+    let stepped = a.stepped();
+    if !stepped.is_empty() {
+        // A late one-time fill, not a feed.
+        m.insert(
+            "added_once".into(),
+            json!(
+                stepped
+                    .iter()
+                    .take(MAX_FED_NAMED)
+                    .map(|c| simple(&c.class))
+                    .collect::<Vec<_>>()
+            ),
+        );
+    }
+    if a.parallel {
+        m.insert(
+            "parallel".into(),
+            json!("the figures of the classes overlap"),
+        );
+    }
+    m
+}
+
 /// Runs `dla alloc-test`.
 pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) -> Res<Value> {
     if !a.harness.starts_with('H') {
@@ -1058,9 +1147,24 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         first_point: reuse
             .as_ref()
             .map_or(1, |_| manifest.warmup + manifest.iterations + 1),
+        attribute: attribution_target(&manifest, bound.as_ref()),
         ..RunOptions::default()
     };
     let out = run_points(&tc, &manifest, &opts)?;
+    // The loop wrote its per-class figures to `harness/<H>/attribution-<F>.json`, the place the
+    // trigger and the bundle read.
+    let attributed = opts.attribute.as_ref().and_then(|t| {
+        dla_core::testloop::Attributed::parse(
+            &fs::read_to_string(tc.run_dir.join(format!(
+                "{}/{}/{}",
+                dla_core::harness::HARNESS_DIR,
+                a.harness,
+                dla_core::testloop::attribution_file(&t.finding)
+            )))
+            .ok()?,
+        )
+    });
+    let attribution = attributed.as_ref().map(attribution_summary);
     let partial: Vec<String> = out.partial.clone();
     let env_reused: Vec<String> = out.env_reused.clone();
     let series_id = out.series.first().cloned().ok_or_else(|| {
@@ -1091,6 +1195,12 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     let event = purge_event(&series);
     let mut limitations: Vec<String> = series.limitations.clone();
     limitations.extend(out.gaps.iter().cloned());
+    if opts.attribute.is_some() && attribution.is_none() {
+        limitations.push(
+            "which test class feeds the holder was not measured: the loop wrote no attribution file (see the run log)"
+                .to_owned(),
+        );
+    }
     match (&purge_kind, &event) {
         (None, _) => {
             limitations.push("purge disabled (--purge none): the purge test was not run".into())
@@ -1269,6 +1379,11 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         .extra
         .insert("iterations".into(), json!(manifest.iterations));
     result.extra.insert("extra".into(), json!(extra));
+    if let Some(att) = &attribution {
+        for (k, v) in att {
+            result.extra.insert(k.clone(), v.clone());
+        }
+    }
     if !partial.is_empty() {
         result.extra.insert(
             "partial".into(),
@@ -1369,6 +1484,11 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     out.insert("purge".into(), json!(purge_kind));
     if !env_reused.is_empty() {
         out.insert("env_reused".into(), json!(env_reused));
+    }
+    if let Some(att) = &attribution {
+        for (k, v) in att {
+            out.insert(k.clone(), v.clone());
+        }
     }
     if let Some(Drift::Agent(note)) = &drift {
         out.insert("caution".into(), json!(note));
@@ -3445,5 +3565,78 @@ mod tests {
         read.columns[1] = col("probe:health.Server.statusMap");
         assert!(unread_field_probe(&m, &read, &f).is_none());
         assert!(unread_field_probe(&go_field_manifest("F9"), &s, &f).is_none());
+    }
+
+    fn test_loop_manifest(finding: &str, tools: serde_json::Value) -> HarnessManifest {
+        serde_json::from_value(json!({
+            "id": "H1", "runtime": "jvm", "mode": "driver", "scratch": "harness/H1/work",
+            "run": {"argv": ["java", "x"], "cwd": "."}, "warmup": 2, "iterations": 6,
+            "step": 2, "key_modes": ["fresh"], "agent": "driver-jvm", "timeout_secs": 300,
+            "tools": tools,
+            "probes": [{"id": "P1", "finding": finding,
+                "target": {"kind": "jvm-static", "class": "org.acme.Cache", "field": "resolved"}}]
+        }))
+        .unwrap()
+    }
+
+    fn finding(n: u32) -> Finding {
+        Finding::candidate(
+            FindingId::new(n),
+            dla_core::Origin::parse("residual").unwrap(),
+            vec![],
+        )
+    }
+
+    #[test]
+    fn only_a_test_loop_with_a_jvm_static_probe_of_the_finding_is_attributed() {
+        let loop_tools = json!(["junit-platform-launcher"]);
+        let m = test_loop_manifest("F3", loop_tools.clone());
+        let t = attribution_target(&m, Some(&finding(3))).unwrap();
+        assert_eq!(
+            (t.finding.as_str(), t.class.as_str(), t.field.as_str()),
+            ("F3", "org.acme.Cache", "resolved")
+        );
+        // Another finding, no finding, and a harness that is not a test loop: nothing changes.
+        assert!(attribution_target(&m, Some(&finding(4))).is_none());
+        assert!(attribution_target(&m, None).is_none());
+        let hooks = test_loop_manifest("F3", json!([]));
+        assert!(attribution_target(&hooks, Some(&finding(3))).is_none());
+        // A probe of another kind is not a holder the loop can read.
+        let mut go = go_field_manifest("F3");
+        go.tools = loop_tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t.as_str().unwrap().to_owned())
+            .collect();
+        assert!(attribution_target(&go, Some(&finding(3))).is_none());
+    }
+
+    #[test]
+    fn the_printed_attribution_names_feeders_by_simple_name_largest_first_and_bounds_them() {
+        let classes: Vec<serde_json::Value> = [json!({"class": "org.acme.Gone", "first_run": 1, "later_runs": 0, "dropped": true})]
+            .into_iter()
+            .chain((0..7).map(|i| json!({"class": format!("org.acme.p{i}.Feeds{i}Tests"), "first_run": 0, "later_runs": 20 * (i + 1)})))
+            .chain((0..11).map(|i| json!({"class": format!("org.acme.Flat{i}Tests"), "first_run": 5, "later_runs": 0})))
+            .collect();
+        let doc = json!({"probe": "org.acme.Cache#resolved", "later_runs": 20, "classes": classes});
+        let a = dla_core::testloop::Attributed::parse(&doc.to_string()).unwrap();
+        let m = attribution_summary(&a);
+        let fed = m["fed_by"].as_array().unwrap();
+        assert_eq!(fed.len(), MAX_FED_NAMED);
+        assert_eq!(fed[0], json!({"class": "Feeds6Tests", "per_run": 7.0}));
+        assert_eq!(fed[1]["class"], "Feeds5Tests");
+        assert_eq!(m["fed_by_more"], 3);
+        let flat = m["ran_flat"].as_array().unwrap();
+        // The class the loop dropped had no later run: it did not run flat.
+        assert_eq!(flat.len(), MAX_FLAT_NAMED);
+        assert_eq!(flat[0], "Flat0Tests");
+        assert_eq!(m["ran_flat_more"], 3);
+        assert!(serde_json::to_string(&m).unwrap().len() < MAX_RESULT_BYTES / 2);
+        // Parallel tests: said so.
+        let mut p = doc.clone();
+        p["parallel"] = json!(true);
+        let a = dla_core::testloop::Attributed::parse(&p.to_string()).unwrap();
+        assert!(attribution_summary(&a).contains_key("parallel"));
     }
 }

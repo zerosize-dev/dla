@@ -93,7 +93,9 @@ variable. Driver mode adds `-XX:StartFlightRecording=filename=<harness>/out/<pid
   arrays, Collection/Map contents (through their API, so JDK-internal nodes are not counted) and
   reference fields of application classes; it counts but does not descend into enums, strings,
   boxed numbers and references, and skips `Class`, `ClassLoader`, `Thread`, reflection, `Module`
-  and `java.lang.invoke` objects. A class that is not loaded gives `error: "class not loaded: ..."`.
+  and `java.lang.invoke` objects. A class that is not loaded gives `error: "class not loaded: ..."`. A probe spells a nested class as the
+  source does (`pkg.Outer.Inner`); the agent finds it under the JVM's name (`pkg.Outer$Inner`) and the
+  record keeps the probe's spelling.
   A static field whose value is a `ThreadLocal` (or subclass) is measured through its values: the
   sum over all live threads of the value it holds in the thread's `threadLocals` and
   `inheritableThreadLocals` maps (`size`: the collection, map or array length, summed; `reachable`

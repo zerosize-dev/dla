@@ -905,3 +905,21 @@ flat test-loop readings get only 9 second looks.
   expecting N-INTENT to stay); VERIFY rows; snapshot WITH CI; commit; then real rerun spring-8.
 - Scratch to delete when done: /root/dla-real/attr, /root/dla-real/vbase, /root/dla-real/v160-*,
   /root/dla-real/plugin-u, /root/dla-real/bin-u.
+
+## State 2026-11-22 about 10:10 UTC
+
+- Brief V builder (a5a873422ed5e7361) done: attribution per test class during alloc-test (suite 3189).
+- My additions: `grew_in` (later runs a class added in) -> feeder = added in more than half of the
+  later runs; others `added_once` / `added_in_a_few_runs_only`; docs (verifier.md, VERIFY rows, jvm
+  README, stages.md); commit message wip-notes/commit-message-7.txt.
+- Real tree (/root/dla-real/attr2/project, clean run, printed route): alloc-test H1 --finding F160
+  -> fed_by KPropertyReferenceUnitTests 14.4/run, added_once TypedPropertyPathUnitTests, 7 ran_flat;
+  trigger line names the Kotlin class.
+- Verifier model check (vrun.py, plugin copy plugin-u, binary bin-u): F160 on vbase2 -> L-COLLECT in
+  3 of 3 (v160-3,4,5); control F436 on vbase3 (fed_by ReturnedTypeUnitTests 162/run) -> N-INTENT in
+  3 of 3 (v436-2,3,4). Before the attribution: F160 N-INTENT in v160-1, v160-2.
+- My mutations (u68/mut.py, u68/mutrun.out, mut-a6.log): W1..W5 (mine) and X1..X5 (builders' rules),
+  each seen failing, all reverted.
+- Next: whole suite (u68/verify.sh -> u68/verify.out, test-all.log), eighth frozen snapshot WITH CI,
+  commit with commit-snapshot-tree.sh + commit-message-7.txt, push main and dev branch, then real
+  rerun spring-8 on that build.

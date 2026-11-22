@@ -139,8 +139,47 @@ struct Run {
     declared: BTreeSet<FindingId>,
     /// The harness is a test loop (the project's own JUnit tests in a loop).
     test_loop: bool,
-    /// The simple names of the test classes a test-loop harness chose, by finding.
-    tests: BTreeMap<FindingId, Vec<String>>,
+    /// What the loop measured per test class for each finding it was asked about
+    /// (`dla alloc-test <H> --finding <F>`).
+    attributed: BTreeMap<FindingId, crate::testloop::Attributed>,
+}
+
+/// At most this many feeders are named in a trigger line.
+const MAX_FEEDERS_NAMED: usize = 3;
+
+/// What a test loop's own tests vary, for a holder that grew in it: the classes the loop
+/// measured feeding it, or the plain statement that this is not measured.
+fn test_loop_varies(
+    harness: &str,
+    id: &FindingId,
+    attributed: Option<&crate::testloop::Attributed>,
+) -> String {
+    let Some(a) = attributed else {
+        return format!(
+            "the project's own tests in {harness}; which test class feeds it is not measured (dla alloc-test {harness} --finding {id})"
+        );
+    };
+    let feeders = a.fed_by();
+    if feeders.is_empty() {
+        return format!(
+            "the project's own tests; no single test class added entries per run in {harness}"
+        );
+    }
+    let named = &feeders[..feeders.len().min(MAX_FEEDERS_NAMED)];
+    let names: Vec<&str> = named.iter().map(|f| f.simple_name()).collect();
+    let mut text = names.join(", ");
+    if feeders.len() > named.len() {
+        text = format!("{text} and {} more", feeders.len() - named.len());
+    }
+    let figures: Vec<String> = named.iter().map(|f| f.per_run_text()).collect();
+    let mut out = format!(
+        "the project's own tests {text} ({} entries per run)",
+        figures.join(", ")
+    );
+    if a.parallel {
+        out.push_str("; the tests ran in parallel, so the figures of the classes overlap");
+    }
+    out
 }
 
 /// What the stored trend reports and harness records say about triggers.
@@ -242,15 +281,11 @@ impl Triggers {
                     .unwrap_or_default(),
                 declared: m.targets.iter().cloned().collect(),
                 test_loop: m.is_test_loop(),
-                tests: if m.is_test_loop() {
+                attributed: if m.is_test_loop() {
                     m.targets
                         .iter()
-                        .map(|f| {
-                            let names = crate::testloop::chosen_for(run_dir, h, f)
-                                .iter()
-                                .map(|c| c.simple_name().to_owned())
-                                .collect();
-                            (f.clone(), names)
+                        .filter_map(|f| {
+                            crate::testloop::read_attribution(run_dir, h, f).map(|a| (f.clone(), a))
                         })
                         .collect()
                 } else {
@@ -437,12 +472,13 @@ impl Triggers {
         if let Some(r) = self.runs.iter().filter(|r| r.own_workload).find(grew) {
             return Trigger::Reproduced {
                 harness: r.harness.clone(),
-                varies: match r.tests.get(id).filter(|t| !t.is_empty()) {
-                    Some(names) => format!("the project's own tests {}", names.join(", ")),
-                    None => format!(
+                varies: if r.test_loop {
+                    test_loop_varies(&r.harness, id, r.attributed.get(id))
+                } else {
+                    format!(
                         "the project's workload {}",
                         r.workload.as_deref().unwrap_or(&r.harness)
-                    ),
+                    )
                 },
             };
         }
