@@ -735,3 +735,9 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - 03:50 UTC: CI on main at cc003a0 green, all 15 jobs (run 44978201658). Release workflow
   dispatched on main with publish=true: run 44982362127 (waiter bzv9cfuxm). Then check the
   release `v0.9.0-preview.3` and its assets (compare with the asset list of preview.2).
+- 03:56 UTC: `v0.9.0-preview.3` PUBLISHED (pre-release, target cc003a0, release run
+  44982362127 green): 11 assets, all uploaded: archives and `.sha256` for
+  aarch64-apple-darwin, x86_64-apple-darwin, aarch64-unknown-linux-musl,
+  x86_64-unknown-linux-musl, x86_64-pc-windows-msvc, plus `SHA256SUMS`. Task 71 done.
+  Not in it: the key line and the test-loop start-up agent (working tree, whole suite
+  rerunning: `<sp>/u61/status3`).
