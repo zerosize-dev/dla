@@ -679,3 +679,84 @@ fn the_usual_order_probe_sweep_census_offers_the_loop_when_the_census_only_joins
     assert!(discovery_file(&p).is_file(), "{census}");
     assert_eq!(queue_command(&p), LOOP_FIRST);
 }
+
+/// The summary of `dla harness gen --lang python --driver --next`.
+fn driver_summary(project: &Path) -> Value {
+    let g = dla(
+        project,
+        &["harness", "gen", "--lang", "python", "--driver", "--next"],
+    );
+    assert_eq!(g.code, 0, "{}", g.text);
+    g.json["summary"].clone()
+}
+
+#[test]
+fn the_census_note_names_the_loop_command() {
+    let (_d, _p, census) = census_only(&[], |p| project(p, true));
+    let note = census["workloads"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{census}"));
+    assert!(
+        note.contains("dla harness gen --lang python --pytest (nothing to write)"),
+        "{note}"
+    );
+}
+
+#[test]
+fn a_hook_driver_before_the_loop_carries_the_pytest_hint_and_not_otherwise() {
+    let (_d, p, _census) = census_only(&[], |p| project(p, true));
+    let summary = driver_summary(&p);
+    let hint = summary["pytest_hint"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no pytest_hint: {summary}"));
+    assert!(
+        hint.contains("dla harness gen --lang python --pytest"),
+        "{hint}"
+    );
+    assert!(hint.contains("before you fill these hooks"), "{hint}");
+    // No test files: no hint.
+    let (_d2, p2, _c2) = census_only(&[], |p| project(p, false));
+    let summary = driver_summary(&p2);
+    assert!(summary.get("pytest_hint").is_none(), "{summary}");
+    // After a refused generation of the loop the queue goes on with the drivers: no hint.
+    let (_d3, p3, _c3) = census_only(&[], |p| project(p, true));
+    let shim = tempfile::tempdir().unwrap();
+    let path = path_without_pytest(shim.path());
+    let o = dla_with(
+        &p3,
+        Some(&path),
+        &["harness", "gen", "--lang", "python", "--pytest"],
+    );
+    assert_ne!(o.code, 0);
+    let summary = driver_summary(&p3);
+    assert!(summary.get("pytest_hint").is_none(), "{summary}");
+}
+
+/// `totals.queue.python.command` of `dla ledger list`.
+fn ledger_queue_command(project: &Path) -> String {
+    let o = dla(project, &["ledger", "list"]);
+    assert_eq!(o.code, 0, "{}", o.text);
+    let first = o.text.lines().next().unwrap();
+    let v: Value = serde_json::from_str(first).unwrap();
+    v["totals"]["queue"]["python"]["command"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no command: {first}"))
+        .to_owned()
+}
+
+#[test]
+fn ledger_list_prints_the_queue_command_of_run_status() {
+    let (_d, p) = prepared(true);
+    assert_eq!(ledger_queue_command(&p), LOOP_FIRST);
+    assert_eq!(ledger_queue_command(&p), queue_command(&p));
+    let shim = tempfile::tempdir().unwrap();
+    let path = path_without_pytest(shim.path());
+    let o = dla_with(
+        &p,
+        Some(&path),
+        &["harness", "gen", "--lang", "python", "--pytest"],
+    );
+    assert_ne!(o.code, 0);
+    assert_eq!(ledger_queue_command(&p), DRIVER);
+    assert_eq!(ledger_queue_command(&p), queue_command(&p));
+}

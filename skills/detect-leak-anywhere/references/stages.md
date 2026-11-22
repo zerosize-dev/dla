@@ -267,7 +267,7 @@ under the run directory and need tier 1.
   `dla run status` prints a `queue` object per runtime (eligible, settled, pending, the ids of the
   next batch, the `command`, and `open` or the reason it is not open: floor reached, workload
   blocked, empty). While a queue is open, work it in batches of 8 targets by rank, plus the siblings of their owners (16 at most):
-  1. `dla harness gen --lang <rt> --driver --next` (the command in `queue`; `--next N` takes fewer).
+  1. `dla harness gen --lang <rt> --driver --next` (the command in `queue`, the one `dla run status` prints for the queue; `--next N` takes fewer; a Python hook driver generated before the test loop ran carries `pytest_hint`, which names the loop command).
      It declares the next pending candidates as targets of the harness, same as `--probe F<n>` for each
      (at most 8 targets by rank per harness, more is refused `too-many-targets`), then also every
      other pending candidate of the same owner (fields of one struct or class, same file; module-level

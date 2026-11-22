@@ -1825,6 +1825,21 @@ fn junit_hint_text(ctx: &ToolCtx) -> String {
     }
 }
 
+/// What a Python hook driver's output says while the first step of the queue, the project's own
+/// tests in a loop, has not run: the command the queue gives for that step. `None` when the
+/// queue has no such step (no test files, the loop wrote a series or failed, the queue is
+/// closed or blocked).
+fn pytest_hint_text(ctx: &ToolCtx) -> Option<String> {
+    let view = dla_core::RunView::load_for(&ctx.run_dir, ctx.worker.as_deref()).ok()?;
+    let step = dla_core::queue::queues(&view, ctx.worker.as_deref())
+        .into_iter()
+        .find(|q| q.runtime == "python" && q.open())?
+        .py_loop?;
+    Some(format!(
+        "this project has Python test files and the first step of the queue has not run: {step} runs the project's own tests in a loop with nothing to fill; run it and read its trend before you fill these hooks"
+    ))
+}
+
 /// A chosen test class: fully qualified name, file, tests, and the candidates it was taken for.
 type TestLoopClass = (
     String,
@@ -2288,6 +2303,10 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
                 .any(|w| w.runtime == rt && junit_problem(&ctx.project, w).is_none())
         }))
     .then(|| junit_hint_text(ctx));
+    // A Python hook driver written while the queue's first step, the test loop, has not run.
+    let pytest_hint = (opts.driver && !opts.pytest && rt == Runtime::Python)
+        .then(|| pytest_hint_text(ctx))
+        .flatten();
     let iter_arg = opts
         .iter_arg
         .clone()
@@ -3000,6 +3019,9 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             );
             if let Some(hint) = junit_hint {
                 m.insert("junit_hint".into(), json!(hint));
+            }
+            if let Some(hint) = pytest_hint {
+                m.insert("pytest_hint".into(), json!(hint));
             }
         }
         if !info.extra_files.is_empty() {

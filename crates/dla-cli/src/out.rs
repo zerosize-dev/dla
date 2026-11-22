@@ -58,9 +58,9 @@ const PROTECTED: [&str; 9] = [
 ];
 
 /// Sentences that name the next step; a cut one reads as a different instruction: never shrunk.
-/// `junit_hint` points at the project's own tests as a hookless harness; `queue_next` is the
-/// queue's next command with the count of what is left.
-const KEPT_WHOLE: [&str; 2] = ["junit_hint", "queue_next"];
+/// `junit_hint` and `pytest_hint` point at the project's own tests as a hookless harness;
+/// `queue_next` is the queue's next command with the count of what is left.
+const KEPT_WHOLE: [&str; 3] = ["junit_hint", "pytest_hint", "queue_next"];
 
 /// Longest string kept whole in a protected value.
 const PROTECTED_STR: usize = 160;
@@ -245,6 +245,10 @@ mod tests {
     #[test]
     fn the_sentences_that_name_the_next_step_are_never_cut() {
         let hint = format!("this project has JUnit 5 tests: {} END", "x ".repeat(150));
+        let py = format!(
+            "this project has Python test files: {} END",
+            "w ".repeat(150)
+        );
         let next = format!(
             "347 candidates in 24 test-loop batches {} END",
             "y ".repeat(150)
@@ -253,7 +257,7 @@ mod tests {
         let v = json!({
             "ok": true,
             "queue_next": next,
-            "summary": {"junit_hint": hint, "other": "z".repeat(900)},
+            "summary": {"junit_hint": hint, "pytest_hint": py, "other": "z".repeat(900)},
             "rows": vec!["a long text ".repeat(20); 40],
         });
         let b = bound(v);
@@ -261,11 +265,16 @@ mod tests {
         assert_eq!(b["truncated"], true);
         assert_eq!(b["queue_next"], next);
         assert_eq!(b["summary"]["junit_hint"], hint);
+        assert_eq!(b["summary"]["pytest_hint"], py);
     }
 
     #[test]
     fn the_last_resort_keeps_the_sentences_that_name_the_next_step() {
         let hint = format!("this project has JUnit 5 tests: {} END", "x ".repeat(150));
+        let py = format!(
+            "this project has Python test files: {} END",
+            "w ".repeat(150)
+        );
         let next = format!(
             "347 candidates in 24 test-loop batches {} END",
             "y ".repeat(150)
@@ -273,7 +282,10 @@ mod tests {
         let mut o = Map::new();
         o.insert("ok".into(), json!(true));
         o.insert("queue_next".into(), json!(next));
-        o.insert("summary".into(), json!({"junit_hint": hint}));
+        o.insert(
+            "summary".into(),
+            json!({"junit_hint": hint, "pytest_hint": py}),
+        );
         for i in 0..400 {
             o.insert(format!("key{i}"), json!(i));
         }
@@ -281,6 +293,7 @@ mod tests {
         assert!(serde_json::to_string(&b).unwrap().len() < MAX_OUTPUT_BYTES);
         assert_eq!(b["queue_next"], next);
         assert_eq!(b["junit_hint"], hint);
+        assert_eq!(b["pytest_hint"], py);
     }
 
     #[test]

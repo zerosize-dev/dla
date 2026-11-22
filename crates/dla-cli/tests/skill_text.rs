@@ -677,3 +677,20 @@ fn the_references_teach_the_pytest_loop_as_the_first_pass_of_a_python_queue() {
         "agents/verifier.md does not say what a Python bundle lists"
     );
 }
+
+#[test]
+fn the_worker_is_told_to_run_the_command_run_status_prints_and_the_python_loop_is_named() {
+    let worker = fs::read_to_string(root().join("agents/worker.md")).unwrap();
+    for want in [
+        "run the command it prints for that queue (`next_command`, the same as `queue.<runtime>.command`), exactly as printed",
+        "harness gen --lang python --pytest",
+    ] {
+        assert!(worker.contains(want), "worker.md lacks {want:?}");
+    }
+    assert!(
+        !worker.contains(
+            "run the batch command it prints (`dla --run <id> --worker <name> harness gen --lang <runtime> --driver --next`)"
+        ),
+        "worker.md still names the driver batch as the queue command"
+    );
+}

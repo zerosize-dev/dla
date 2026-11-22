@@ -72,12 +72,12 @@ fn discover_for_the_queue(
     )
     .ok()??;
     let tail = if python {
-        "the queue of a Python project that has test files starts with the project's own tests"
+        "the queue of a Python project that has test files starts with the project's own tests: dla harness gen --lang python --pytest (nothing to write)"
     } else {
         "the queue of a JVM project starts with the project's own tests"
     };
     Some(format!(
-        "discovered for the measurement queue ({} workload(s), evidence {}): {tail}; dla workload discover repeats it",
+        "discovered for the measurement queue ({} workload(s), evidence {}): {tail}; dla workload discover repeats the discovery",
         found.summary["workloads"].as_u64().unwrap_or(0),
         found.evidence.join(", ")
     ))

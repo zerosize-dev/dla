@@ -200,10 +200,17 @@ pub fn list(ctx: &Ctx, a: ListArgs) -> Res<String> {
             "matching": total,
             "ranked": ranked.len(),
             "eligible": eligible,
-            "queue": queues.iter().map(|q| (q.runtime.clone(), json!({
-                "eligible": q.eligible, "settled": q.settled, "pending": q.pending.len(),
-                "open": q.open(), "closed": q.closed,
-            }))).collect::<serde_json::Map<_, _>>(),
+            "queue": queues.iter().map(|q| {
+                let mut e = json!({
+                    "eligible": q.eligible, "settled": q.settled, "pending": q.pending.len(),
+                    "open": q.open(), "closed": q.closed,
+                });
+                // The command `dla run status` prints for this queue, while it is open.
+                if q.open() {
+                    e["command"] = json!(q.command);
+                }
+                (q.runtime.clone(), e)
+            }).collect::<serde_json::Map<_, _>>(),
         }
     });
     if total > limit {
