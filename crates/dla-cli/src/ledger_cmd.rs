@@ -780,7 +780,7 @@ fn refuse_target_pending(
             ),
             format!(
                 "{} (the focus batch: the best-ranked pending candidate was missed), fill the hooks so each unit calls the writer function of each target with a new key, dla harness run <H> --mode both, dla trend S<n>; or dla ledger resolve {id} --as unresolved --reason env_unavailable --remedy \"<what it needs>\"{}",
-                q.batch_command,
+                dla_core::queue::batch_command(&q.runtime, false),
                 if m.verdict == dla_core::trend::Verdict::Unknown {
                     format!(". {id} read `unknown`: {}", dla_core::queue::NO_COVERAGE)
                 } else {

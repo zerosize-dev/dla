@@ -676,6 +676,14 @@ fn queue_json(queues: &[dla_core::queue::RuntimeQueue]) -> Value {
         if q.focus {
             e["focus"] = json!(true);
         }
+        if !q.test_loop.batches.is_empty() {
+            e["test_loop"] = json!({
+                "candidates": q.test_loop.candidates(),
+                "batches": q.test_loop.batches.len(),
+                "need_a_driver": q.test_loop.driver.len(),
+                "text": q.test_loop.sentence(),
+            });
+        }
         if !q.second.is_empty() {
             e["second_look"] = json!(true);
         }

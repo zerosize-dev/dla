@@ -340,7 +340,7 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
         }
         // Pending in an open queue: it waits for a measurement.
         if q.is_some_and(|q| q.open() && q.pending.contains(&f.id)) {
-            let cmd = q.map(|q| q.command.clone()).unwrap_or_default();
+            let cmd = q.map(|q| q.command_for(&f.id)).unwrap_or_default();
             left.push((
                 f.id.to_string(),
                 format!(
@@ -499,6 +499,9 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
     });
     if let Some(q) = queues.iter().find(|q| q.open()) {
         out["batch_command"] = json!(q.command);
+        if let Some(line) = q.test_loop_line() {
+            out["next"] = json!(line);
+        }
     }
     if left.len() > 8 {
         out["left_more"] = json!(left.len() - 8);

@@ -756,3 +756,8 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
   (`python3 /root/dla-real/run.py spring-7 /root/dla-real/src/spring-data-commons
   /root/dla-real/prompt-generic.txt --timeout 9000 --max-turns 600 --warm-m2
   /root/dla-real/m2warm`).
+- 04:38 UTC: the container was RESTARTED (about 04:35). Files survived (working tree,
+  scratchpad, /root/dla-real); processes did not. Restarted: the CI waiter for 0302e2b
+  (task btvg9i2c0) and the builder on brief T (resumed by message; its partial edits, about
+  1240 lines over 15 files, were in the tree with no marker). `main` and the release are
+  untouched: main = cc003a0, `v0.9.0-preview.3` published.

@@ -1836,7 +1836,7 @@ fn blocker_recorded(view: &RunView, h: &str) -> bool {
 }
 
 /// The attempt record of harness `h`, when one was written and parses.
-fn attempt_of(run_dir: &Path, h: &str) -> Option<crate::harness::HarnessAttempt> {
+pub(crate) fn attempt_of(run_dir: &Path, h: &str) -> Option<crate::harness::HarnessAttempt> {
     let text = std::fs::read_to_string(crate::harness::HarnessAttempt::path_in(run_dir, h)).ok()?;
     serde_json::from_str(&text).ok()
 }
@@ -1871,7 +1871,7 @@ fn harness_tried(view: &RunView, run_dir: &Path, h: &str) -> bool {
 /// An attempt reason that says nothing about the workload: the driver's template hooks
 /// failed, the caller stopped the run before it measured, or the run was refused for time
 /// (the plan did not fit, which says nothing about the harness).
-fn attempt_is_no_try(reason: Option<&str>) -> bool {
+pub(crate) fn attempt_is_no_try(reason: Option<&str>) -> bool {
     matches!(
         reason,
         Some(

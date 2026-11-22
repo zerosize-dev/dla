@@ -532,6 +532,14 @@ impl HarnessManifest {
 }
 
 impl HarnessManifest {
+    /// True for a test-loop harness: the project's own JUnit 5 tests in a loop, no hooks
+    /// (`dla harness gen --lang jvm --junit`).
+    pub fn is_test_loop(&self) -> bool {
+        self.mode == HarnessMode::Driver && self.tools.iter().any(|t| t == JUNIT_TOOL)
+    }
+}
+
+impl HarnessManifest {
     /// True for an entry-path harness (`dla harness gen --driver --entry`).
     pub fn is_entry_path(&self) -> bool {
         self.purpose == Some(HarnessPurpose::EntryPath)

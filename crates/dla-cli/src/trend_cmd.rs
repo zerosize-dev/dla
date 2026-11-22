@@ -322,6 +322,15 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
     out.insert("evidence".into(), json!(ev));
     let all: Vec<&ColumnTrend> = cols.iter().collect();
     let mut passed = summary::passing(&all);
+    // The columns of the findings the harness was made for come first (stable): a series can
+    // hold other growing columns (another cache the same tests touch), and the steps below name
+    // the first column's finding.
+    let declared: Vec<FindingId> = target_verdicts
+        .iter()
+        .filter(|v| v.declared)
+        .map(|v| v.finding.clone())
+        .collect();
+    summary::declared_first(&mut passed, &declared);
     // The column of a detector hit's registration site leads: its finding is the one the
     // ledger lines below should name.
     if let Some(site) = detector_site(ctx, &main.series) {
@@ -354,23 +363,43 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
     }
     if !target_verdicts.is_empty() {
         let (declared, rest): (Vec<_>, Vec<_>) = target_verdicts.iter().partition(|v| v.declared);
-        out.insert(
-            "targets".into(),
-            Value::Array(
-                declared
-                    .iter()
-                    .take(8)
-                    .map(|v| {
-                        json!({
-                            "finding": v.finding,
-                            "verdict": v.verdict.as_str(),
-                            "column": v.column,
-                            "detail": v.detail,
+        // A test-loop harness declares up to 16 targets and the output is bounded: one short
+        // entry each (`F21 executed`), the reasons are in the stored report.
+        let many = declared.len() > 8;
+        if many {
+            out.insert(
+                "targets".into(),
+                Value::Array(
+                    declared
+                        .iter()
+                        .map(|v| json!(format!("{} {}", v.finding, v.verdict.as_str())))
+                        .collect(),
+                ),
+            );
+            out.insert(
+                "targets_full".into(),
+                json!(ctx.pointer(&format!("trend/{trend_id}.json"))),
+            );
+        }
+        if !many {
+            out.insert(
+                "targets".into(),
+                Value::Array(
+                    declared
+                        .iter()
+                        .take(8)
+                        .map(|v| {
+                            json!({
+                                "finding": v.finding,
+                                "verdict": v.verdict.as_str(),
+                                "column": v.column,
+                                "detail": v.detail,
+                            })
                         })
-                    })
-                    .collect(),
-            ),
-        );
+                        .collect(),
+                ),
+            );
+        }
         if !rest.is_empty() {
             let rest: Vec<_> = rest.into_iter().cloned().collect();
             out.insert(
@@ -415,10 +444,15 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         &evidence,
         keys.as_ref(),
         a.finding.as_ref(),
+        &declared,
     );
     let mut next = next;
     if let Some(entry) = missed_targets_entry(ctx, &main.series, &target_verdicts) {
         next.insert(0, entry);
+    }
+    // While test-loop batches are left, the queue's next step is the test loop, with the count.
+    if let Some(entry) = test_loop_entry(ctx, &main.series) {
+        out.insert("queue_next".into(), json!(entry));
     }
     let counter_evidence = evidence
         .iter()
@@ -585,6 +619,21 @@ fn detector_entry(
             )
         }
     })
+}
+
+/// The `next` entry of a JVM series while the measurement queue has test-loop batches left: the
+/// count, and the command that makes the next one. `None` otherwise.
+fn test_loop_entry(ctx: &Ctx, series: &dla_core::SeriesFile) -> Option<String> {
+    let h = series.source.harness.as_deref()?;
+    let m = dla_core::HarnessManifest::load(&ctx.run_dir, h).ok()?;
+    if m.runtime != dla_core::runtime::Runtime::Jvm {
+        return None;
+    }
+    let view = dla_core::RunView::load_for(&ctx.run_dir, ctx.worker.as_deref()).ok()?;
+    let q = dla_core::queue::queues(&view, ctx.worker.as_deref())
+        .into_iter()
+        .find(|q| q.runtime == "jvm" && q.open())?;
+    q.test_loop_line()
 }
 
 /// The first `next` entry of a hook-driver series of the measurement queue that missed some
@@ -862,6 +911,7 @@ fn suggestions(
     evidence: &[(EvidenceKind, EvidenceId)],
     keys: Option<&Keys>,
     bound: Option<&FindingId>,
+    declared: &[FindingId],
 ) -> Vec<String> {
     let mut next: Vec<String> = Vec::new();
     let mut seen_roots: Vec<FindingId> = Vec::new();
@@ -871,7 +921,13 @@ fn suggestions(
         let Some(e) = evidence_of(evidence, c) else {
             continue;
         };
-        let cand = c.candidates.iter().find_map(|f| ledger.finding(f));
+        // The finding the harness declared that this column is tied to, else the first one.
+        let cand = c
+            .candidates
+            .iter()
+            .filter(|f| declared.contains(f))
+            .chain(c.candidates.iter())
+            .find_map(|f| ledger.finding(f));
         match cand {
             Some(f) => {
                 let root = f.root_id();

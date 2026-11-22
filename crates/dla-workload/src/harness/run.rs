@@ -234,17 +234,46 @@ fn failed(why: impl Into<String>, missing: impl Into<String>, fix: impl Into<Str
 /// loop, so the text names the log tail and the usual cause, a service the tests need.
 fn harness_failed_fix(manifest: &HarnessManifest, logs: &str) -> String {
     let id = &manifest.id;
-    if manifest
-        .tools
-        .iter()
-        .any(|t| t == "junit-platform-launcher")
-    {
+    if manifest.is_test_loop() {
         format!(
-            "read the tail of the logs ({logs}); a JUnit repeat harness has no hooks to fill. If the tests need a service that is not running (a database, a broker, a cache), start it and dla harness run {id}; if it cannot be started, record dla ledger resolve intake.workload --status unresolved --reason env_unavailable --remedy \"<the service {id} needs>\""
+            "read the tail of the logs ({logs}); a JUnit repeat harness has no hooks to fill. If the tests need a service that is not running (a database, a broker, a cache), start it and dla harness run {id}; if it cannot be started, record dla ledger resolve intake.workload --status unresolved --reason env_unavailable --remedy \"<the service {id} needs>\". {}",
+            driver_fallback(manifest)
         )
     } else {
         format!("read the logs, fix the harness or its hooks, then dla harness run {id}")
     }
+}
+
+/// What to do for the targets of a test-loop harness that could not measure them (it did not
+/// build, or every unit failed): a driver with hooks for the same targets. The queue stops
+/// offering the harness, and its targets are not counted as measured. Empty for a harness
+/// that declares no target.
+fn driver_fallback(manifest: &HarnessManifest) -> String {
+    use dla_core::harness::MAX_TARGETS;
+    if manifest.targets.is_empty() {
+        return String::new();
+    }
+    let probes: Vec<String> = manifest
+        .targets
+        .iter()
+        .take(MAX_TARGETS)
+        .map(|t| format!("--probe {t}"))
+        .collect();
+    let rest = manifest.targets.len().saturating_sub(MAX_TARGETS);
+    format!(
+        "The tests did not measure {} target(s), so they are not counted as measured and the queue no longer offers this harness: write a driver for them instead (hooks to fill): dla harness gen --lang {} --driver {}{}",
+        manifest.targets.len(),
+        manifest.runtime.as_str(),
+        probes.join(" "),
+        if rest > 0 {
+            format!(
+                "   (at most {MAX_TARGETS} targets a harness; the other {rest} follow with dla harness gen --lang {} --driver --next)",
+                manifest.runtime.as_str()
+            )
+        } else {
+            String::new()
+        }
+    )
 }
 
 fn io_refusal(path: &Path, e: std::io::Error) -> Refusal {
@@ -997,12 +1026,7 @@ fn build_once(
             format!("{BUILD_MISSING}; see {}", ctx.pointer(&log_rel)),
             // A hook driver's own hook body is what does not compile (the build log names the
             // file), not the work copy of the project; a JUnit repeat has no hooks.
-            if manifest.mode == HarnessMode::Driver
-                && !manifest
-                    .tools
-                    .iter()
-                    .any(|t| t == "junit-platform-launcher")
-            {
+            if manifest.is_hook_driver() {
                 format!(
                     "fix the build error in {} (the build log names the file), then dla harness run {}",
                     ctx.pointer(&format!(
@@ -1011,6 +1035,13 @@ fn build_once(
                         manifest.id
                     )),
                     manifest.id
+                )
+            } else if manifest.is_test_loop() {
+                format!(
+                    "fix the build in {}, then dla harness run {}. {}",
+                    ctx.pointer(&manifest.scratch),
+                    manifest.id,
+                    driver_fallback(manifest)
                 )
             } else {
                 format!(

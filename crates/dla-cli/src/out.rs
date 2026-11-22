@@ -57,6 +57,11 @@ const PROTECTED: [&str; 9] = [
     "run_id",
 ];
 
+/// Sentences that name the next step; a cut one reads as a different instruction: never shrunk.
+/// `junit_hint` points at the project's own tests as a hookless harness; `queue_next` is the
+/// queue's next command with the count of what is left.
+const KEPT_WHOLE: [&str; 2] = ["junit_hint", "queue_next"];
+
 /// Longest string kept whole in a protected value.
 const PROTECTED_STR: usize = 160;
 
@@ -165,6 +170,13 @@ pub fn bound(v: Value) -> Value {
                 }
             }
             o.insert("truncated".to_owned(), Value::Bool(true));
+            // The hint that names the project's own tests as a hookless first harness is a
+            // sentence, not a detail: it is never cut.
+            for k in KEPT_WHOLE {
+                if let Some(h) = orig.get(k) {
+                    o.insert(k.to_owned(), h.clone());
+                }
+            }
         }
         if size(&s) <= LIMIT {
             return s;

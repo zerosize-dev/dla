@@ -209,6 +209,8 @@ pub fn ranked(view: &RunView) -> Vec<Ranked> {
 struct DeclaredRun {
     harness: String,
     hook_driver: bool,
+    /// A test-loop harness: the project's own JUnit 5 tests in a loop, no hooks.
+    test_loop: bool,
     /// The driver digest of the run, or the harness id when none was recorded.
     driver_key: String,
     verdict: Option<Verdict>,
@@ -220,6 +222,17 @@ struct DeclaredRun {
     entry: bool,
     /// A second-look harness.
     second_look: bool,
+}
+
+impl DeclaredRun {
+    /// One flat reading of a first pass: a hook driver read `executed`; the test loop read
+    /// `executed` or `constant`. A fixed command's flat reading says nothing about other call
+    /// orders, so it is one reading, and the second look is what follows it.
+    fn flat_reading(&self) -> bool {
+        (self.hook_driver && self.verdict == Some(Verdict::Executed))
+            || (self.test_loop
+                && matches!(self.verdict, Some(Verdict::Executed | Verdict::Constant)))
+    }
 }
 
 /// Where a candidate stands with respect to its second look.
@@ -278,6 +291,13 @@ pub struct Index {
     runtime: BTreeMap<String, String>,
     /// The second-look harnesses (any state) of each runtime.
     second_looks: BTreeMap<String, Vec<String>>,
+    /// The test-loop harnesses (any state).
+    test_loops: std::collections::BTreeSet<String>,
+    /// The findings a test-loop harness declared, run or not.
+    test_loop_declared: std::collections::BTreeSet<FindingId>,
+    /// The test-loop harnesses whose attempt failed (they did not build, or every unit
+    /// failed): they are not run again, and what they declared waits for a driver.
+    test_loop_failed: std::collections::BTreeSet<String>,
 }
 
 impl Index {
@@ -307,6 +327,16 @@ impl Index {
             }
             for t in &m.targets {
                 ix.declared_by.entry(t.clone()).or_default().push(h.clone());
+            }
+            if m.is_test_loop() {
+                ix.test_loops.insert(h.clone());
+                ix.test_loop_declared.extend(m.targets.iter().cloned());
+                if gate::attempt_of(run_dir, &h).is_some_and(|a| {
+                    a.outcome == crate::harness::AttemptOutcome::Failed
+                        && !gate::attempt_is_no_try(a.reason.as_deref())
+                }) {
+                    ix.test_loop_failed.insert(h.clone());
+                }
             }
             manifests.insert(h, m);
         }
@@ -338,6 +368,7 @@ impl Index {
                 ix.declared.entry(f.clone()).or_default().push(DeclaredRun {
                     harness: h.clone(),
                     hook_driver: m.is_hook_driver(),
+                    test_loop: m.is_test_loop(),
                     driver_key: key.clone(),
                     verdict,
                     detail,
@@ -367,10 +398,7 @@ impl Index {
         let runs = self.declared.get(id).map_or(&[][..], Vec::as_slice);
         // `unknown` (the run had no coverage data) says nothing about the target's code: it
         // counts as a driver run for the two-drivers rule below, not as a settled target.
-        if runs
-            .iter()
-            .any(|r| r.hook_driver && r.verdict == Some(Verdict::Executed))
-        {
+        if runs.iter().any(|r| r.flat_reading()) {
             return Standing::Settled(Why::Executed);
         }
         // Not reached: missed by two different drivers, at least one of the runs a focused
@@ -394,11 +422,10 @@ impl Index {
                 .any(|(_, x)| matches!(x, Verdict::Grew | Verdict::Changed))
         });
         let live = |r: &&DeclaredRun| r.hook_driver && !r.entry;
-        let executed: Vec<&DeclaredRun> = runs
-            .iter()
-            .filter(live)
-            .filter(|r| r.verdict == Some(Verdict::Executed))
-            .collect();
+        // One flat reading: a hook driver that read `executed`, or the test loop (the project's
+        // own tests) that read `executed` or `constant`. Only a hand-written focus harness ends
+        // the wait (`done` below).
+        let executed: Vec<&DeclaredRun> = runs.iter().filter(|r| r.flat_reading()).collect();
         if moved || executed.is_empty() || self.missed_in(id).is_some() {
             return SecondLook::No;
         }
@@ -428,7 +455,16 @@ impl Index {
             .get(id)
             .map_or(&[][..], Vec::as_slice)
             .iter()
-            .filter(|r| r.hook_driver && !r.entry && r.verdict.is_some_and(is_miss))
+            .filter(|r| {
+                !r.entry
+                    && ((r.hook_driver && r.verdict.is_some_and(is_miss))
+                        // The test loop's flat reading is `constant` or `executed`; the rest is
+                        // a miss, as for a driver.
+                        || (r.test_loop
+                            && r.verdict.is_some_and(|v| {
+                                is_miss(v) && v != Verdict::Constant
+                            })))
+            })
             .collect()
     }
 
@@ -484,7 +520,11 @@ impl Index {
     fn in_flight(&self, runtime: &str, pending: &[FindingId]) -> Option<String> {
         self.runtime
             .iter()
-            .filter(|(h, rt)| rt.as_str() == runtime && !self.run.contains(*h))
+            .filter(|(h, rt)| {
+                rt.as_str() == runtime
+                    && !self.run.contains(*h)
+                    && !self.test_loop_failed.contains(*h)
+            })
             .map(|(h, _)| h)
             .find(|h| {
                 pending
@@ -729,8 +769,16 @@ pub struct RuntimeQueue {
     pub declarable: Vec<FindingId>,
     /// A generated harness that declares pending candidates and has not run.
     pub in_flight: Option<String>,
-    /// The command that makes the next batch.
+    /// True when `in_flight` is a test-loop harness: nothing to fill, only to run.
+    pub in_flight_test_loop: bool,
+    /// The command that makes the next batch: the test loop while a test-loop batch is left,
+    /// else the driver.
     pub batch_command: String,
+    /// The test loop (JVM): the pending candidates that have a test class, cut into the
+    /// batches `dla harness gen --lang jvm --junit --next` makes, and the candidates that need
+    /// a driver. Empty when the project has no tests the loop can run, and once every batch is
+    /// made. While it holds a batch, `batch` is the first one and `batch_command` makes it.
+    pub test_loop: crate::testloop::Plan,
     /// The command to run next: the batch command, or the run of the harness in flight when
     /// every pending candidate is already declared by it.
     pub command: String,
@@ -744,6 +792,27 @@ impl RuntimeQueue {
     /// True while the queue refuses to close pending candidates unmeasured.
     pub fn open(&self) -> bool {
         self.closed.is_none()
+    }
+
+    /// The command that gives the pending candidate `id` its measurement: the test loop's when
+    /// a test-loop batch holds it, the driver's when a test-loop batch is left that does not
+    /// (the candidate has no test class the loop can run), else the queue's next command.
+    pub fn command_for(&self, id: &FindingId) -> String {
+        if self.test_loop.batches.is_empty()
+            || self.test_loop.batches.iter().any(|b| b.ids.contains(id))
+        {
+            self.command.clone()
+        } else {
+            batch_command(&self.runtime, false)
+        }
+    }
+
+    /// The sentence that names the next step with the test loop first while a test-loop batch
+    /// is left: "N candidates in M test-loop batches, nothing to write; then K candidates need
+    /// a driver: <command>". `None` without a test-loop batch.
+    pub fn test_loop_line(&self) -> Option<String> {
+        (!self.test_loop.batches.is_empty())
+            .then(|| format!("{}: {}", self.test_loop.sentence(), self.command))
     }
 
     /// The batch of `--next n`: the first `n` (at most [`MAX_BATCH`]) declarable candidates
@@ -814,23 +883,10 @@ impl RuntimeQueue {
     }
 }
 
-/// The command that makes the next batch of `runtime`. A JVM project that has a JUnit repeat
-/// harness and no driver with hooks keeps generating JUnit repeats.
-pub fn batch_command(view: &RunView, runtime: &str) -> String {
-    let junit_only = runtime == "jvm"
-        && view.run_dir.as_deref().is_some_and(|d| {
-            let all: Vec<_> = gate::harness_ids(d)
-                .into_iter()
-                .filter_map(|(_, h)| HarnessManifest::load(d, &h).ok())
-                .filter(|m| m.runtime.as_str() == runtime)
-                .collect();
-            !all.is_empty()
-                && all.iter().all(|m| !m.is_hook_driver())
-                && all
-                    .iter()
-                    .any(|m| m.tools.iter().any(|t| t == crate::harness::JUNIT_TOOL))
-        });
-    if junit_only {
+/// The command that makes the next batch of `runtime`: the project's own tests in a loop
+/// (`test_loop`, JVM) while a test-loop batch is left, else a driver with hooks.
+pub fn batch_command(runtime: &str, test_loop: bool) -> String {
+    if test_loop {
         format!("dla harness gen --lang {runtime} --junit --next")
     } else {
         format!("dla harness gen --lang {runtime} --driver --next")
@@ -862,6 +918,10 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
     }
     let budget = gate::budget_over_floor(&view.state, worker);
     let blocked = gate::workload_unresolved(view, true);
+    let tindex = by_rt
+        .contains_key("jvm")
+        .then(|| crate::testloop::TestIndex::of(view, worker))
+        .flatten();
     by_rt
         .into_iter()
         .map(|(runtime, list)| {
@@ -922,13 +982,41 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                 .cloned()
                 .collect();
             let in_flight = ix.in_flight(&runtime, &pending);
+            let in_flight_of = |p: &FindingId| {
+                in_flight
+                    .as_ref()
+                    .is_some_and(|h| ix.declared_by.get(p).is_some_and(|v| v.contains(h)))
+            };
+            // The test loop first: the pending candidates that have a test class and no
+            // test-loop harness yet, in batches (see `testloop`).
+            let mut test_loop = crate::testloop::Plan::default();
+            if runtime == "jvm"
+                && view.state.queue
+                && budget.is_some()
+                && !blocked
+                && let Some(tix) = &tindex
+            {
+                let order: Vec<(FindingId, Option<crate::testloop::Pick>)> = pending
+                    .iter()
+                    .filter(|p| !ix.test_loop_declared.contains(*p) && !second.contains_key(*p))
+                    .filter(|p| !in_flight_of(p))
+                    .map(|p| {
+                        let file = view
+                            .ledger
+                            .finding(p)
+                            .and_then(|f| f.site.as_deref())
+                            .and_then(|s| s.rsplit_once(':'))
+                            .map(|(f, _)| f.replace('\\', "/"));
+                        (p.clone(), file.and_then(|f| tix.pick(&f)))
+                    })
+                    .collect();
+                test_loop = crate::testloop::plan(tix, &order);
+            }
+            let planned: std::collections::BTreeSet<&FindingId> =
+                test_loop.batches.iter().flat_map(|b| &b.ids).collect();
             let free: Vec<&FindingId> = pending
                 .iter()
-                .filter(|p| {
-                    in_flight
-                        .as_ref()
-                        .is_none_or(|h| !ix.declared_by.get(*p).is_some_and(|v| v.contains(h)))
-                })
+                .filter(|p| !in_flight_of(p) && !planned.contains(p))
                 .collect();
             let missed: BTreeMap<FindingId, Miss> = pending
                 .iter()
@@ -949,8 +1037,14 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                 package,
                 ..
             } = chooser.batch_for(view, MAX_BATCH);
-            let batch_command = batch_command(view, &runtime);
+            test_loop.driver = declarable.clone();
+            let (batch, siblings, focus) = match test_loop.batches.first() {
+                Some(b) => (b.ids.clone(), BTreeMap::new(), false),
+                None => (batch, siblings, focus),
+            };
+            let batch_command = batch_command(&runtime, !test_loop.batches.is_empty());
             let command = match (&in_flight, batch.is_empty()) {
+                (Some(h), _) if ix.test_loops.contains(h) => format!("dla harness run {h}"),
                 (Some(h), true) => format!("dla harness run {h} --mode both"),
                 _ => batch_command.clone(),
             };
@@ -989,8 +1083,16 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                 second,
                 no_coverage,
                 declarable,
+                in_flight_test_loop: in_flight
+                    .as_ref()
+                    .is_some_and(|h| ix.test_loops.contains(h)),
                 in_flight,
                 batch_command,
+                test_loop: if closed.is_some() {
+                    crate::testloop::Plan::default()
+                } else {
+                    test_loop
+                },
                 command,
                 closed,
                 minutes: budget,
@@ -1025,10 +1127,42 @@ pub fn steps(q: &RuntimeQueue, run_id: &str) -> String {
         let ids: Vec<String> = q.no_coverage.iter().map(ToString::to_string).collect();
         format!(" {} read `unknown`: {NO_COVERAGE}.", ids.join(", "))
     };
+    let resolve = format!(
+        "If no driver can be built or run for {}, record why: dla ledger resolve intake.workload --status unresolved --reason <env_unavailable|tool_missing|build_fails|privilege_declined> --remedy \"<text>\" (that closes the queue of the runtime).{unknown}{focus}",
+        q.runtime
+    );
+    if q.in_flight_test_loop {
+        return format!(
+            "{}: the project's own tests in a loop, nothing to fill; then dla trend S<n>. {}{resolve}",
+            q.command,
+            test_loop_rules()
+        );
+    }
+    let driver = batch_command(&q.runtime, false);
+    if !q.test_loop.batches.is_empty() {
+        return format!(
+            "{}. Next: {} (it chooses the test classes from the owner classes of the candidates and prints which and why; nothing to fill), dla harness run <H>, then dla trend S<n>. {} After the test loop, for the candidates that need a driver: {driver}, fill the hooks so each unit reaches the listed targets with a new key, dla harness run <H> --mode both, then dla trend S<n>. {resolve}",
+            capitalized(&q.test_loop.sentence()),
+            q.command,
+            test_loop_rules()
+        );
+    }
     format!(
-        "{}. Fill the hooks so each unit reaches the listed targets with a new key, dla harness run <H> --mode both, then dla trend S<n>. If no driver can be built or run for {}, record why: dla ledger resolve intake.workload --status unresolved --reason <env_unavailable|tool_missing|build_fails|privilege_declined> --remedy \"<text>\" (that closes the queue of the runtime).{unknown}{focus}",
-        q.command, q.runtime
+        "{}. Fill the hooks so each unit reaches the listed targets with a new key, dla harness run <H> --mode both, then dla trend S<n>. {resolve}",
+        q.command
     )
+}
+
+/// What a reading of the test loop means for the queue.
+pub fn test_loop_rules() -> &'static str {
+    "A target that grew goes on as usual (sibling, refute, test, confirm); a flat reading (`constant`, `executed`) is one reading, and a hand-written harness with a different driver looks at it again while budget is left; a target no test reached (`not_loaded`, `not_executed`) is a miss and gets a focus harness; if the harness cannot be built or every test fails, the run prints the driver command for the same targets and they are not counted as measured."
+}
+
+fn capitalized(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
+        .unwrap_or_default()
 }
 
 /// What the report says about the queue: its header line and, per finding, how it was
@@ -1046,16 +1180,39 @@ pub struct ReportFacts {
     counted: Vec<FindingId>,
     index: Index,
     queue_on: bool,
+    /// Of the candidates no harness declared: how many have a test class the test loop runs,
+    /// in how many batches (JVM).
+    test_loop: Option<(usize, usize)>,
 }
 
 impl ReportFacts {
     /// The facts of a view loaded from disk; `None` for a view without a run directory.
     pub fn of(view: &RunView) -> Option<Self> {
         view.run_dir.as_ref()?;
-        let ranks = ranked(view)
-            .into_iter()
-            .map(|r| (r.id, (r.rank, r.tier)))
-            .collect();
+        let all = ranked(view);
+        let index = Index::of(view);
+        let test_loop = crate::testloop::TestIndex::of(view, None).and_then(|tix| {
+            let order: Vec<(FindingId, Option<crate::testloop::Pick>)> = all
+                .iter()
+                .filter(|r| {
+                    r.eligible()
+                        && r.runtime.as_deref() == Some("jvm")
+                        && index.targeted_in(&r.id).is_empty()
+                })
+                .map(|r| {
+                    let file = view
+                        .ledger
+                        .finding(&r.id)
+                        .and_then(|f| f.site.as_deref())
+                        .and_then(|s| s.rsplit_once(':'))
+                        .map(|(f, _)| f.replace('\\', "/"));
+                    (r.id.clone(), file.and_then(|f| tix.pick(&f)))
+                })
+                .collect();
+            let plan = crate::testloop::plan(&tix, &order);
+            (plan.candidates() > 0).then(|| (plan.candidates(), plan.batches.len()))
+        });
+        let ranks = all.into_iter().map(|r| (r.id, (r.rank, r.tier))).collect();
         let counted = view
             .ledger
             .findings()
@@ -1070,8 +1227,9 @@ impl ReportFacts {
         Some(Self {
             ranks,
             counted,
-            index: Index::of(view),
+            index,
             queue_on: view.state.queue,
+            test_loop,
         })
     }
 
@@ -1155,10 +1313,19 @@ impl ReportFacts {
         } else {
             format!("; second look {} (grew {grew_on_look})", looked.len())
         };
+        let not_targeted = ranked.len() - targeted;
+        // Where the rest goes: the test loop first (nothing to write), then a driver.
+        let split = match self.test_loop {
+            Some((n, m)) if n <= not_targeted => format!(
+                " ({n} in {m} test-loop batch{}, nothing to write; {} need a driver)",
+                if m == 1 { "" } else { "es" },
+                not_targeted - n
+            ),
+            _ => String::new(),
+        };
         Some(format!(
-            "{targeted} of {} ranked candidates targeted{in_h}{verdicts}; {} not targeted{second}",
-            ranked.len(),
-            ranked.len() - targeted
+            "{targeted} of {} ranked candidates targeted{in_h}{verdicts}; {not_targeted} not targeted{split}{second}",
+            ranked.len()
         ))
     }
 
@@ -2178,5 +2345,303 @@ mod tests {
         let q = &queues(&view, None)[0];
         assert_eq!(q.batch.len(), MAX_BATCH_WITH_SIBLINGS);
         assert_eq!(q.siblings.len(), MAX_BATCH_WITH_SIBLINGS - MAX_BATCH);
+    }
+    /// A JVM run: a project directory with a `mvnw`, the given test files (project-relative
+    /// path, source), and census candidates whose sites are `src/main/java/a/<Owner>.java:3`
+    /// (F1 for the first owner, and so on). The workload discovery result lists every test
+    /// file as a Maven test workload.
+    fn jvm_run(tests: &[(&str, &str)], owners: &[&str]) -> (Run, tempfile::TempDir) {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(project.path().join("mvnw"), "#!/bin/sh\n").unwrap();
+        let mut workloads = Vec::new();
+        for (file, text) in tests {
+            let path = project.path().join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, text).unwrap();
+            workloads.push(json!({
+                "id": format!("jvm:test:{file}"), "kind": "test", "runtime": "jvm",
+                "command": "mvn -q -o test", "cwd": ".", "file": file, "rank": 1,
+            }));
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let st = RunState::init(
+            project.path().to_str().unwrap(),
+            None,
+            3600,
+            None,
+            now_utc(),
+        )
+        .unwrap();
+        st.save(dir.path()).unwrap();
+        std::fs::create_dir_all(dir.path().join("workload")).unwrap();
+        std::fs::write(
+            dir.path().join("workload").join("workloads.json"),
+            json!({"schema_version": 1, "workloads": workloads, "entry_points": []}).to_string(),
+        )
+        .unwrap();
+        let mut l = Ledger::create(dir.path()).unwrap();
+        l.add_evidence(evidence("jvm")).unwrap();
+        for (i, owner) in owners.iter().enumerate() {
+            let n = u32::try_from(i + 1).unwrap();
+            let mut nf = NewFinding::new(
+                Origin::parse("census").unwrap(),
+                vec![crate::EvidenceId::new(1)],
+            );
+            let file = format!("src/main/java/a/{owner}.java");
+            nf.site = Some(format!("{file}:3"));
+            l.add_finding(nf).unwrap();
+            l.annotate(
+                &FindingId::new(n),
+                vec![format!("{file}:9")],
+                vec![],
+                Some("n".into()),
+            )
+            .unwrap();
+        }
+        (Run { dir }, project)
+    }
+
+    const JUNIT5: &str =
+        "import org.junit.jupiter.api.Test;\nclass X {\n@Test void a() {}\n@Test void b() {}\n}\n";
+
+    fn jvm_queue(run: &Run) -> RuntimeQueue {
+        queues(&run.reload(), None).remove(0)
+    }
+
+    /// A test-loop harness H<n> (driver mode, the launcher in its tools) declaring `targets`.
+    fn test_loop_harness(run: &Run, h: &str, targets: &[u32]) {
+        let mut m = manifest(h, targets, true);
+        m.runtime = crate::runtime::Runtime::Jvm;
+        m.tools.push(crate::harness::JUNIT_TOOL.to_owned());
+        run.harness(&m);
+    }
+
+    fn read(run: &Run, h: &str, s: &str, v: &[(u32, Verdict)]) {
+        run.series(s, h);
+        run.trend(&format!("T{}", &s[1..]), s, v);
+    }
+
+    #[test]
+    fn the_test_loop_is_the_first_pass_of_a_jvm_queue_and_the_driver_follows() {
+        let (run, _p) = jvm_run(
+            &[
+                ("src/test/java/a/AaaTests.java", JUNIT5),
+                (
+                    "src/test/java/a/UsesCccTests.java",
+                    &format!("{JUNIT5}// Ccc\n"),
+                ),
+            ],
+            &["Aaa", "Bbb", "Ccc"],
+        );
+        let q = jvm_queue(&run);
+        assert_eq!(q.batch_command, "dla harness gen --lang jvm --junit --next");
+        assert_eq!(q.command, q.batch_command);
+        assert_eq!(
+            q.batch.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            ["F1", "F3"]
+        );
+        assert_eq!(q.test_loop.driver, [FindingId::new(2)]);
+        assert_eq!(
+            q.test_loop.sentence(),
+            "2 candidates in 1 test-loop batch, nothing to write; then 1 candidate needs a driver"
+        );
+        // Everything that names the next step says so.
+        let item = crate::view::queue_item(&q);
+        assert!(
+            item.description.contains(&q.test_loop.sentence()),
+            "{}",
+            item.description
+        );
+        assert!(item.fix.starts_with(&q.batch_command), "{}", item.fix);
+        assert!(item.fix.contains("--driver --next"), "{}", item.fix);
+        let steps = steps(&q, "r");
+        assert!(
+            steps.starts_with("2 candidates in 1 test-loop batch"),
+            "{steps}"
+        );
+        assert!(
+            steps.contains("--junit --next") && steps.contains("--driver --next"),
+            "{steps}"
+        );
+        // The candidate with no test is told the driver command in its own finding item.
+        let st = crate::view::status(&run.reload());
+        let fix_of = |f: &str| {
+            st.blocking
+                .iter()
+                .find(|b| b.id == f)
+                .map(|b| b.fix.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(fix_of("F2"), "dla harness gen --lang jvm --driver --next");
+        assert_eq!(fix_of("F1"), "dla harness gen --lang jvm --junit --next");
+    }
+
+    #[test]
+    fn a_project_without_a_test_the_loop_can_run_keeps_the_driver() {
+        // No test files at all.
+        let (run, _p) = jvm_run(&[], &["Aaa"]);
+        let q = jvm_queue(&run);
+        assert_eq!(
+            q.batch_command,
+            "dla harness gen --lang jvm --driver --next"
+        );
+        assert!(q.test_loop.batches.is_empty() && q.test_loop.sentence().is_empty());
+        // A JUnit 4 test is not one the launcher runs.
+        let (run, _p) = jvm_run(
+            &[(
+                "src/test/java/a/AaaTests.java",
+                "import org.junit.Test;\n@Test void a() {}\n",
+            )],
+            &["Aaa"],
+        );
+        assert_eq!(
+            jvm_queue(&run).batch_command,
+            "dla harness gen --lang jvm --driver --next"
+        );
+    }
+
+    #[test]
+    fn without_a_build_tool_the_loop_is_not_offered() {
+        let (run, p) = jvm_run(&[("src/test/java/a/AaaTests.java", JUNIT5)], &["Aaa"]);
+        assert_eq!(jvm_queue(&run).test_loop.batches.len(), 1);
+        std::fs::remove_file(p.path().join("mvnw")).unwrap();
+        // `mvn` may be on the PATH of the machine that runs this test: then it is offered.
+        if !crate::testloop::on_path("mvn") {
+            assert!(jvm_queue(&run).test_loop.batches.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_flat_test_loop_reading_is_one_reading_and_a_miss_is_a_miss() {
+        for flat in [Verdict::Executed, Verdict::Constant] {
+            let (run, _p) = jvm_run(&[("src/test/java/a/AaaTests.java", JUNIT5)], &["Aaa"]);
+            test_loop_harness(&run, "H1", &[1]);
+            read(&run, "H1", "S1", &[(1, flat)]);
+            let q = jvm_queue(&run);
+            // Settled by the first pass, then the second look by a hand-written harness.
+            assert_eq!(q.settled, 0, "{flat:?}: the second look counts it pending");
+            assert!(q.second.contains_key(&FindingId::new(1)), "{flat:?}");
+            assert!(q.test_loop.batches.is_empty());
+            assert_eq!(
+                q.batch_command,
+                "dla harness gen --lang jvm --driver --next"
+            );
+            assert!(q.focus && q.missed.is_empty());
+        }
+        for miss in [Verdict::NotLoaded, Verdict::NotExecuted, Verdict::Unknown] {
+            let (run, _p) = jvm_run(&[("src/test/java/a/AaaTests.java", JUNIT5)], &["Aaa"]);
+            test_loop_harness(&run, "H1", &[1]);
+            read(&run, "H1", "S1", &[(1, miss)]);
+            let q = jvm_queue(&run);
+            assert!(q.missed.contains_key(&FindingId::new(1)), "{miss:?}");
+            assert!(q.second.is_empty());
+            // A focus batch by a hand-written harness, never the test loop again.
+            assert!(q.focus && q.test_loop.batches.is_empty(), "{miss:?}");
+            assert_eq!(
+                q.batch_command,
+                "dla harness gen --lang jvm --driver --next"
+            );
+        }
+    }
+
+    #[test]
+    fn a_test_loop_miss_and_a_focus_miss_are_two_drivers_and_settle_the_candidate() {
+        let (run, _p) = jvm_run(&[("src/test/java/a/AaaTests.java", JUNIT5)], &["Aaa"]);
+        test_loop_harness(&run, "H1", &[1]);
+        read(&run, "H1", "S1", &[(1, Verdict::NotLoaded)]);
+        ran(
+            &run,
+            "H2",
+            &[1],
+            "a driver written for F1",
+            "S2",
+            &[(1, Verdict::NotExecuted)],
+        );
+        let view = run.reload();
+        assert_eq!(
+            Index::of(&view).standing(&FindingId::new(1)),
+            Standing::Settled(Why::NotReached)
+        );
+    }
+
+    #[test]
+    fn a_grown_test_loop_target_settles_by_growth_as_before() {
+        let (run, _p) = jvm_run(&[("src/test/java/a/AaaTests.java", JUNIT5)], &["Aaa"]);
+        test_loop_harness(&run, "H1", &[1]);
+        read(&run, "H1", "S1", &[(1, Verdict::Grew)]);
+        let view = run.reload();
+        assert_eq!(
+            Index::of(&view).standing(&FindingId::new(1)),
+            Standing::Settled(Why::Moved)
+        );
+    }
+
+    #[test]
+    fn a_generated_test_loop_harness_is_run_before_more_are_made() {
+        let (run, _p) = jvm_run(
+            &[
+                ("src/test/java/a/AaaTests.java", JUNIT5),
+                ("src/test/java/a/BbbTests.java", JUNIT5),
+            ],
+            &["Aaa", "Bbb"],
+        );
+        test_loop_harness(&run, "H1", &[1]);
+        let q = jvm_queue(&run);
+        assert!(q.in_flight_test_loop);
+        assert_eq!(q.command, "dla harness run H1");
+        // The other candidate is still planned, so the sentence counts it.
+        assert_eq!(q.test_loop.candidates(), 1);
+        let item = crate::view::queue_item(&q);
+        assert!(item.fix.starts_with("dla harness run H1"), "{}", item.fix);
+        assert!(
+            steps(&q, "r").starts_with("dla harness run H1"),
+            "{}",
+            steps(&q, "r")
+        );
+    }
+
+    #[test]
+    fn a_test_loop_harness_that_failed_is_not_run_again_and_its_targets_need_a_driver() {
+        use crate::harness::{AttemptOutcome, HarnessAttempt};
+        let (run, _p) = jvm_run(&[("src/test/java/a/AaaTests.java", JUNIT5)], &["Aaa"]);
+        test_loop_harness(&run, "H1", &[1]);
+        let attempt = |reason: &str| HarnessAttempt {
+            harness: "H1".into(),
+            started_at: HarnessAttempt::now(),
+            finished_at: HarnessAttempt::now(),
+            outcome: AttemptOutcome::Failed,
+            reason: Some(reason.into()),
+            message: None,
+        };
+        // A run refused for time says nothing about the tests: the harness is still to run.
+        attempt("time_budget").save(run.dir.path()).unwrap();
+        assert_eq!(jvm_queue(&run).command, "dla harness run H1");
+        for reason in ["build_fails", "no_harness"] {
+            attempt(reason).save(run.dir.path()).unwrap();
+            let q = jvm_queue(&run);
+            assert!(q.in_flight.is_none(), "{reason}");
+            assert_eq!(q.pending, [FindingId::new(1)], "{reason}: not measured");
+            assert!(q.test_loop.batches.is_empty(), "{reason}");
+            assert_eq!(q.declarable, [FindingId::new(1)], "{reason}");
+            assert_eq!(
+                q.command, "dla harness gen --lang jvm --driver --next",
+                "{reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_report_line_splits_the_candidates_nobody_targeted() {
+        let (run, _p) = jvm_run(
+            &[("src/test/java/a/AaaTests.java", JUNIT5)],
+            &["Aaa", "Bbb", "Ccc"],
+        );
+        let line = ReportFacts::of(&run.reload()).unwrap().line().unwrap();
+        assert!(
+            line.contains(
+                "3 not targeted (1 in 1 test-loop batch, nothing to write; 2 need a driver)"
+            ),
+            "{line}"
+        );
     }
 }

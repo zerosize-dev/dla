@@ -58,6 +58,10 @@ const JUNIT_STEP: u64 = 2;
 /// Default timeout of one measured JUnit repeat process: a Spring context start is paid once
 /// and every later unit is a repeat.
 const JUNIT_TIMEOUT_SECS: u64 = 1800;
+/// The time limit of a test-loop batch: the batch is cut to about two minutes of tests, the
+/// loop fits its rounds into this (`DLA_TIME_LIMIT_SECS`), so a slow class cannot hold the
+/// run for half an hour.
+const TEST_LOOP_TIMEOUT_SECS: u64 = 600;
 
 /// Options of `dla harness gen`.
 #[derive(Debug, Clone)]
@@ -122,13 +126,7 @@ fn write(path: &Path, text: &str) -> Result<(), Refusal> {
 
 /// True when `name` is an executable on `PATH`.
 pub fn on_path(name: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|dir| {
-        let p = dir.join(name);
-        p.is_file() || (cfg!(windows) && dir.join(format!("{name}.exe")).is_file())
-    })
+    dla_core::testloop::on_path(name)
 }
 
 /// Runs a tool to completion; `Err` carries the tail of its output.
@@ -308,55 +306,16 @@ fn choose_workload(
 
 /// The build tool a discovered JVM test workload runs through (`mvn ...`, `./gradlew ...`).
 fn junit_tool(w: &Workload) -> Option<commands::JunitTool> {
-    let first = w.command.split_whitespace().next()?;
-    let name = first.rsplit('/').next().unwrap_or(first);
-    if name.starts_with("mvn") {
-        Some(commands::JunitTool::Maven)
-    } else if name.starts_with("gradle") {
-        Some(commands::JunitTool::Gradle)
-    } else {
-        None
+    match dla_core::testloop::build_tool(w)? {
+        "maven" => Some(commands::JunitTool::Maven),
+        _ => Some(commands::JunitTool::Gradle),
     }
 }
 
 /// Why workload `w` cannot be run by the JUnit repeat driver; `None` when it can: a JVM test
 /// of a Gradle or Maven project whose file uses the JUnit 5 (`org.junit.jupiter`) API.
 fn junit_problem(project: &Path, w: &Workload) -> Option<String> {
-    if w.runtime != Runtime::Jvm || w.kind != WorkloadKind::Test {
-        return Some(format!(
-            "workload {} is a {} {} workload, not a JVM test",
-            w.id,
-            w.runtime.as_str(),
-            w.kind.as_str()
-        ));
-    }
-    if junit_tool(w).is_none() {
-        return Some(format!(
-            "workload {} does not run through Maven or Gradle (command: {}), so there is no build tool to resolve the test class path",
-            w.id, w.command
-        ));
-    }
-    let Ok(text) = fs::read_to_string(project.join(&w.file)) else {
-        return Some(format!("{} cannot be read", w.file));
-    };
-    // `kotlin.test` runs on JUnit 5 when the project uses the kotlin-test-junit5 backend; the
-    // build step checks that a junit-platform-engine is on the class path.
-    if text.contains("org.junit.jupiter")
-        || (text.contains("kotlin.test") && !text.contains("org.junit.Test"))
-    {
-        return None;
-    }
-    if text.contains("org.junit.Test") || text.contains("org.testng") {
-        Some(format!(
-            "{} uses JUnit 4 or TestNG, which the Jupiter launcher runs only with the vintage engine (junit-vintage-engine) or not at all",
-            w.file
-        ))
-    } else {
-        Some(format!(
-            "{} imports neither org.junit.jupiter nor kotlin.test, so it is not a JUnit 5 test",
-            w.file
-        ))
-    }
+    dla_core::testloop::junit_problem(project, w)
 }
 
 /// `--junit` without `--workload`: the JUnit 5 test workload that holds the first `--tests`
@@ -644,21 +603,7 @@ fn launcher_of(j: &JunitPick, work: &Path) -> String {
 /// The wrapper script `name` in the workload's directory or the nearest parent, as a path
 /// relative to the project root.
 fn find_wrapper(project: &Path, cwd: &str, name: &str) -> Option<String> {
-    let mut dir: Vec<&str> = cwd
-        .split('/')
-        .filter(|c| !c.is_empty() && *c != ".")
-        .collect();
-    loop {
-        let rel = if dir.is_empty() {
-            name.to_owned()
-        } else {
-            format!("{}/{name}", dir.join("/"))
-        };
-        if project.join(&rel).is_file() {
-            return Some(rel);
-        }
-        dir.pop()?;
-    }
+    dla_core::testloop::find_wrapper(project, cwd, name)
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1488,6 +1433,12 @@ struct FocusFacts {
 fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, Refusal> {
     use dla_core::harness::{MAX_TARGETS, MAX_TARGETS_WITH_SIBLINGS};
     let rt = opts.lang;
+    // A hookless test-loop harness declares more: nothing is written per target.
+    let limit = if opts.junit {
+        dla_core::testloop::MAX_TARGETS
+    } else {
+        MAX_TARGETS
+    };
     let mut ids: Vec<FindingId> = Vec::new();
     for f in &opts.probe_findings {
         if !ids.contains(f) {
@@ -1592,21 +1543,131 @@ fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, 
             note = Some(text);
         }
     }
-    if ids.len() - siblings.len() > MAX_TARGETS {
+    if ids.len() - siblings.len() > limit {
         return Err(refuse(
             codes::TOO_MANY_TARGETS,
             format!(
-                "{} targets were asked for with --probe; one harness declares at most {MAX_TARGETS}",
+                "{} targets were asked for with --probe; one harness declares at most {limit}",
                 ids.len() - siblings.len()
             ),
-            format!("at most {MAX_TARGETS} targets per harness"),
+            format!("at most {limit} targets per harness"),
             format!(
-                "dla harness gen --lang {} --driver --probe <F> ...   (at most {MAX_TARGETS}), then again for the rest",
-                rt.as_str()
+                "dla harness gen --lang {} --{} --probe <F> ...   (at most {limit}), then again for the rest",
+                rt.as_str(),
+                if opts.junit { "junit" } else { "driver" }
             ),
         ));
     }
     Ok((ids, note, siblings, go_package, focus))
+}
+
+/// What a hook driver's output says about the project's own tests: the test loop, with the
+/// queue's count when it has batches left.
+fn junit_hint_text(ctx: &ToolCtx) -> String {
+    let sentence = dla_core::RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())
+        .ok()
+        .and_then(|view| {
+            dla_core::queue::queues(&view, ctx.worker.as_deref())
+                .into_iter()
+                .find(|q| q.runtime == "jvm")
+        })
+        .map(|q| q.test_loop.sentence())
+        .filter(|s| !s.is_empty());
+    match sentence {
+        Some(s) => format!(
+            "this project has JUnit 5 tests: {s}: dla harness gen --lang jvm --junit --next runs them in a loop with nothing to fill"
+        ),
+        None => "this project has JUnit 5 tests: dla harness gen --lang jvm --junit runs them in a loop with nothing to fill".to_owned(),
+    }
+}
+
+/// What the next test-loop batch chose, for the summary of `dla harness gen --junit --next`.
+#[derive(Debug)]
+struct TestLoopFacts {
+    /// The test classes, in the order they run: fully qualified name, file, tests, and the
+    /// candidates each was taken for.
+    classes: Vec<(
+        String,
+        String,
+        usize,
+        Vec<(FindingId, dla_core::testloop::Via)>,
+    )>,
+    /// What the queue says about the rest.
+    sentence: String,
+    /// Targets the batch had that `--next N` left for the next one.
+    left: usize,
+}
+
+/// `--junit --next`: the targets and the tests of the queue's next test-loop batch, as the
+/// options of a plain `--junit --probe ... --tests ...` generation. The batch is what the queue
+/// planned ([`dla_core::testloop`]); `--next N` takes the first N candidates of it and the
+/// classes they need.
+fn test_loop_options(
+    ctx: &ToolCtx,
+    opts: &GenOptions,
+) -> Result<(GenOptions, TestLoopFacts), Refusal> {
+    use dla_core::testloop;
+    junit_lang_check(opts)?;
+    if !opts.probe_findings.is_empty() {
+        return Err(refuse(
+            codes::INVALID_VALUE,
+            "--next with --junit chooses the targets and the tests itself; a --probe finding would be a target no chosen test is known to reach",
+            "--next alone, or --probe with --tests",
+            "dla harness gen --lang jvm --junit --next   or   dla harness gen --lang jvm --junit --probe F1 --tests pkg.FooTest",
+        ));
+    }
+    let view = dla_core::RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())
+        .map_err(|e| e.to_refusal())?;
+    let queue = dla_core::queue::queues(&view, ctx.worker.as_deref())
+        .into_iter()
+        .find(|q| q.runtime == "jvm");
+    let Some((q, batch)) = queue
+        .as_ref()
+        .and_then(|q| Some((q, q.test_loop.batches.first()?)))
+    else {
+        return Err(refuse(
+            DRIVER_UNAVAILABLE,
+            "no pending jvm candidate has a test class the test loop can run (a JUnit 5 test of a Maven or Gradle project whose build tool is installed, whose name or source uses the candidate's owner class), or the queue is closed",
+            "a pending candidate with a JUnit 5 test class",
+            "dla harness gen --lang jvm --driver --next   (hooks to fill; the driver runs your own code)",
+        ));
+    };
+    let n = opts
+        .next
+        .unwrap_or(testloop::MAX_TARGETS)
+        .clamp(1, testloop::MAX_TARGETS);
+    let ids: Vec<FindingId> = batch.ids.iter().take(n).cloned().collect();
+    let mut classes = Vec::new();
+    let mut tests = Vec::new();
+    for c in &batch.classes {
+        let for_ids: Vec<(FindingId, testloop::Via)> = c
+            .for_ids
+            .iter()
+            .filter(|(f, _)| ids.contains(f))
+            .cloned()
+            .collect();
+        if for_ids.is_empty() {
+            continue;
+        }
+        let text = fs::read_to_string(ctx.project.join(&c.file)).unwrap_or_default();
+        let fqcn = crate::jvm::fqcn_of(&c.file, &text);
+        tests.push(fqcn.clone());
+        classes.push((fqcn, c.file.clone(), c.tests, for_ids));
+    }
+    let facts = TestLoopFacts {
+        classes,
+        sentence: q.test_loop.sentence(),
+        left: batch.ids.len() - ids.len(),
+    };
+    Ok((
+        GenOptions {
+            probe_findings: ids,
+            next: None,
+            tests,
+            ..opts.clone()
+        },
+        facts,
+    ))
 }
 
 /// A reason a Go package directory cannot hold the driver, or `None` when it can (or when
@@ -1855,6 +1916,17 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
     } else {
         opts
     };
+    // `--junit --next`: the queue's next test-loop batch chooses the targets and the tests.
+    let test_loop_opts;
+    let mut test_loop_facts: Option<TestLoopFacts> = None;
+    let opts = if opts.junit && opts.next.is_some() && opts.tests.is_empty() {
+        let (o, facts) = test_loop_options(ctx, opts)?;
+        test_loop_opts = o;
+        test_loop_facts = Some(facts);
+        &test_loop_opts
+    } else {
+        opts
+    };
     let rt = opts.lang;
     let lang = rt.as_str();
     // `--entry`: its findings and options are checked before anything else is read.
@@ -1926,9 +1998,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
                 .iter()
                 .any(|w| w.runtime == rt && junit_problem(&ctx.project, w).is_none())
         }))
-    .then_some(
-        "this project has JUnit 5 tests: dla harness gen --lang jvm --junit runs them in a loop with nothing to fill",
-    );
+    .then(|| junit_hint_text(ctx));
     let iter_arg = opts
         .iter_arg
         .clone()
@@ -2043,6 +2113,26 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         gaps.push("no allocator shim on Windows: only OS-level columns are measured".to_owned());
     }
     gaps.extend(det.notes.iter().cloned());
+    if let Some(f) = &test_loop_facts {
+        gaps.push(format!(
+            "test loop (--junit --next): {} test class(es) with {} tests, chosen for {} target(s): {}",
+            f.classes.len(),
+            f.classes.iter().map(|c| c.2).sum::<usize>(),
+            opts.probe_findings.len(),
+            f.classes
+                .iter()
+                .map(|(class, _, _, for_ids)| format!(
+                    "{class} for {}",
+                    for_ids
+                        .iter()
+                        .map(|(id, via)| format!("{id} by {}", via.as_str()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
+    }
 
     let cwd_owned = workload.as_ref().map_or(".".to_owned(), |w| w.cwd.clone());
     let cwd = cwd_owned.as_str();
@@ -2257,7 +2347,9 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         detectors: det.on.clone(),
         tools,
         gaps: gaps.clone(),
-        timeout_secs: if junit.is_some() {
+        timeout_secs: if junit.is_some() && test_loop_facts.is_some() {
+            TEST_LOOP_TIMEOUT_SECS
+        } else if junit.is_some() {
             JUNIT_TIMEOUT_SECS
         } else {
             TIMEOUT_SECS
@@ -2496,6 +2588,77 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             artifacts.push(driver_file);
             m.insert("hooks".into(), json!(info.hooks));
             m.insert("junit".into(), json!(true));
+            if let Some(f) = &test_loop_facts {
+                // The output is bounded (2 KB): the tests and why, one line each; the rest is in
+                // `tests.json`.
+                let simple = |class: &str| class.rsplit('.').next().unwrap_or(class).to_owned();
+                m.insert(
+                    "tests_chosen".into(),
+                    json!(
+                        f.classes
+                            .iter()
+                            .map(|(class, _, tests, for_ids)| format!(
+                                "{} ({tests} tests) for {} by {}",
+                                simple(class),
+                                for_ids
+                                    .iter()
+                                    .map(|(id, _)| id.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(","),
+                                if for_ids
+                                    .iter()
+                                    .all(|(_, v)| *v == dla_core::testloop::Via::Name)
+                                {
+                                    "name"
+                                } else if for_ids
+                                    .iter()
+                                    .all(|(_, v)| *v == dla_core::testloop::Via::Mention)
+                                {
+                                    "mention"
+                                } else {
+                                    "name or mention"
+                                }
+                            ))
+                            .collect::<Vec<_>>()
+                    ),
+                );
+                m.insert(
+                    "test_loop".into(),
+                    json!({
+                        "queue": f.sentence,
+                        "targets": opts.probe_findings.len(),
+                        "tests": f.classes.iter().map(|c| c.2).sum::<usize>(),
+                        "left_for_the_next_batch": f.left,
+                    }),
+                );
+                let doc = json!({
+                    "rule": dla_core::testloop::rule(),
+                    "queue": f.sentence,
+                    "bounds": {
+                        "targets": dla_core::testloop::MAX_TARGETS,
+                        "classes": dla_core::testloop::MAX_CLASSES,
+                        "tests": dla_core::testloop::MAX_TESTS,
+                        "time_limit_secs": TEST_LOOP_TIMEOUT_SECS,
+                    },
+                    "targets": opts.probe_findings,
+                    "left_for_the_next_batch": f.left,
+                    "classes": f.classes.iter().map(|(class, file, tests, for_ids)| json!({
+                        "class": class,
+                        "file": file,
+                        "tests": tests,
+                        "for": for_ids.iter().map(|(id, via)| json!({"finding": id, "by": via.as_str()})).collect::<Vec<_>>(),
+                    })).collect::<Vec<_>>(),
+                    "if_it_fails": "the run prints the driver command for the same targets; they are not counted as measured",
+                });
+                write(
+                    &hdir.join("tests.json"),
+                    &(serde_json::to_string_pretty(&doc).unwrap_or_default() + "\n"),
+                )?;
+                m.insert(
+                    "tests_full".into(),
+                    json!(ctx.pointer(&format!("harness/{id}/tests.json"))),
+                );
+            }
             m.insert(
                 "instructions".into(),
                 json!("nothing to fill: the driver runs the project's own JUnit 5 tests in a loop; run it"),
@@ -2542,6 +2705,36 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
                 format!("dla harness run {id}")
             }),
         );
+    }
+    // A test-loop batch has up to 16 targets and the output is bounded (2 KB): the ids, the tests
+    // chosen and why, the count of what is left; the per-target blocks are in `targets.json` and
+    // `tests.json`.
+    if test_loop_facts.is_some()
+        && let Value::Object(m) = &mut summary
+    {
+        for k in [
+            "agent",
+            "build",
+            "detectors",
+            "files",
+            "gaps",
+            "hooks",
+            "instructions",
+            "junit",
+            "probes",
+            "run",
+            "tools",
+            "workload",
+        ] {
+            m.remove(k);
+        }
+        let ids: Vec<Value> = opts
+            .probe_findings
+            .iter()
+            .map(|f| json!(f.to_string()))
+            .collect();
+        m.insert("targets".into(), Value::Array(ids));
+        artifacts.retain(|a| !a.ends_with(PROBES) && !a.ends_with(".java"));
     }
     Ok(StageOutcome {
         evidence: vec![ev.to_string()],

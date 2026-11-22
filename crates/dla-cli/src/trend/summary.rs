@@ -41,6 +41,13 @@ fn bound_to_something(c: &ColumnTrend) -> bool {
     c.finding.is_some() || c.site.is_some() || !c.candidates.is_empty()
 }
 
+/// Moves the columns tied to a finding the harness declared as a target to the front, keeping
+/// the order of the rest: a series can hold other growing columns (another cache the same
+/// tests touch), and the steps `dla trend` prints name the first column's finding.
+pub fn declared_first(passed: &mut [&ColumnTrend], declared: &[dla_core::FindingId]) {
+    passed.sort_by_key(|c| !c.candidates.iter().any(|f| declared.contains(f)));
+}
+
 /// The passing columns of `columns`, most important first: bound to a finding or a
 /// site, then by p-value (columns without a p last), then by name. A column in seconds
 /// (`jvm.jit_seconds`, the compile time so far) counts runtime activity, not memory: it
@@ -307,5 +314,33 @@ mod tests {
         let g = GrowthSummary::from_result(&summarize("T1", &s, &refs, &[], &sig())).unwrap();
         assert_eq!(g.gate, Some(GateVerdict::Fail));
         assert_eq!(g.failed_beyond_process, Some(0));
+    }
+    #[test]
+    fn the_column_of_a_declared_target_leads_the_passed_columns() {
+        let cols = vec![
+            Col::counter("probe:A.first", &rising(10.0, 5.0)),
+            Col::counter("probe:B.declared", &rising(10.0, 5.0)),
+            Col::counter("probe:C.third", &rising(10.0, 5.0)),
+        ];
+        let s = series("S1", 1, cols);
+        let mut t = analyze_series(&s, &[0, 1, 2], &GateThresholds::default());
+        t[0].candidates = vec![FindingId::new(1)];
+        t[1].candidates = vec![FindingId::new(2), FindingId::new(5)];
+        t[2].candidates = vec![FindingId::new(3)];
+        let refs: Vec<&ColumnTrend> = t.iter().collect();
+        let mut passed = passing(&refs);
+        let names = |p: &[&ColumnTrend]| p.iter().map(|c| c.name.clone()).collect::<Vec<_>>();
+        // Nothing declared: the order is the gate's.
+        let before = names(&passed);
+        declared_first(&mut passed, &[]);
+        assert_eq!(names(&passed), before);
+        declared_first(&mut passed, &[FindingId::new(2)]);
+        assert_eq!(names(&passed)[0], "probe:B.declared");
+        // The others keep their order.
+        let rest: Vec<String> = before
+            .into_iter()
+            .filter(|n| n != "probe:B.declared")
+            .collect();
+        assert_eq!(names(&passed)[1..], rest[..]);
     }
 }
