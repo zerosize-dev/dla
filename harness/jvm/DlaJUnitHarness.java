@@ -111,6 +111,13 @@ public final class DlaJUnitLoop {
         }
         if (code == 2) {
             System.err.println("DLA-JUNIT every unit failed: " + firstFailure);
+            if (firstFailure != null && firstFailure.contains("self-attach")) {
+                System.err.println("DLA-JUNIT the mocking library could not attach to the running JVM (a hardened"
+                        + " container or sandbox refuses it). Load it when the JVM starts: -javaagent:<the"
+                        + " mockito-core jar, or the byte-buddy-agent jar when mockito-core has no Premain-Class>"
+                        + " in the run arguments (dla-junit-build.sh adds it by itself when such a jar is on the"
+                        + " test class path), or run where the attach is allowed");
+            }
         }
         System.err.println("DLA-JUNIT summary: units=" + done + " tests_run=" + testsRun
                 + " aborted=" + abortedTests

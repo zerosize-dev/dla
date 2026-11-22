@@ -707,3 +707,23 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
   `<sp>/u63/report.md`.
 - Still waiting: CI on main at cc003a0 (waiter b8991t70t, logs `<sp>/u62/ci`); then the
   release workflow for 0.9.0-preview.3.
+
+## State 2026-11-22 04:10 UTC
+
+- Brief S result (report `<sp>/u63/report.md`): the JUnit repeat now adds the mocking
+  stack's start-up agent (`harness/jvm/dla-junit-build.sh`, `startup-agents.txt`, summary
+  key `startup_agent`, manifest tool `startup-agent:<jar>`). With it a JUnit repeat over
+  four test classes of spring-data-commons (792 tests a run, about 90 s) reads the
+  documented cache F160 `grew` and the printed commands confirm it. The builder could only
+  reproduce the attach failure with `-XX:+DisableAttachMechanism` (its shell is not the
+  plugin sandbox). The `key:` explanation is printed once per driver file.
+- My edits on top: manifest read by `jar` when `unzip` is missing; jar name matched after
+  `/` or `\`; test and its helpers `#[cfg(unix)]`. Checked: test passes, mutation MUT_J1
+  failed it, hand check on a PATH without unzip added the agent.
+- Running: `<sp>/u61/verify.sh` -> `<sp>/u61/status2`, `test-all2.log` (whole suite on the
+  tree with briefs Q and S). When clean: freeze a snapshot WITH CI, then send brief T
+  (`wip-notes/test-loop-first-brief.md`: the hookless test loop as the first pass of a JVM
+  queue) to builder a349aef413818803c.
+- The tool today barely offers the test loop: one clipped `junit_hint`; status, trend and
+  the queue name only `--driver --next`. 305 of 387 ranked candidates of the spring ledger
+  have a test class named after their owner.

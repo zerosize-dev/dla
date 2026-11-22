@@ -502,6 +502,10 @@ pub const GENERAL: &str = "use the project's public API the way a caller would; 
 /// creates and uses.
 pub const LIFE: &str = "a unit covers the life of the objects it touches: create, derive (also from derived objects), use, cancel or close, drop or release, and not always in the same order (vary it by key)";
 
+/// What a target line says when its key comes from the caller: the explanation itself is
+/// printed once at the top of the block.
+const KEY_POINTER: &str = "the key comes from the caller (a parameter of the writer): see \"Key objects\" above the targets";
+
 /// The line of a target whose key comes from the caller (the census says the key of an insert
 /// at the holder derives from a parameter): the holder grows only when each unit passes a key
 /// it has not seen. A key compared by value is built from the unit's key; one compared by
@@ -781,8 +785,9 @@ impl Target {
         if let Some(g) = &self.feature_gate {
             out.push(format!("  {}", g.text()));
         }
-        if let Some(k) = &self.key_note {
-            out.push(format!("  key: {k}"));
+        if self.key_note.is_some() {
+            // The explanation is printed once above the targets of the block.
+            out.push(format!("  key: {KEY_POINTER}"));
         }
         out.push(match &self.probe {
             Some(p) => format!("  probe reads: {p}"),
@@ -924,6 +929,12 @@ pub fn block_with(
         )
     }];
     lines.extend(notes.iter().cloned());
+    // The long explanation of a key the caller passes, once, not once per target.
+    if let Some(k) = targets.iter().find_map(|t| t.key_note.as_deref()) {
+        lines.push(format!(
+            "Key objects (the targets marked `key:` below): {k}"
+        ));
+    }
     for t in targets {
         lines.extend(t.lines());
     }
@@ -1387,5 +1398,26 @@ mod open;
             "{lines:?}"
         );
         assert!(target().lines().iter().all(|l| !l.starts_with("  key:")));
+        // The long explanation is in the block once, however many targets have the line.
+        let mut three = vec![t.clone(), t.clone(), t];
+        three[1].id = "F9".parse().unwrap();
+        three[2].id = "F10".parse().unwrap();
+        let b = block("H1", &three, Some("//"));
+        assert_eq!(b.matches("A key compared by identity").count(), 1, "{b}");
+        assert_eq!(
+            b.matches("  key: the key comes from the caller").count(),
+            3,
+            "{b}"
+        );
+        assert!(
+            b.contains(
+                "Key objects (the targets marked `key:` below): the key comes from the caller"
+            ),
+            "{b}"
+        );
+        assert!(
+            !b.contains("LambdaMetafactory") || b.matches("LambdaMetafactory").count() == 1,
+            "{b}"
+        );
     }
 }

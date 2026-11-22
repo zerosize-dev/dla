@@ -1358,3 +1358,130 @@ fn the_online_retry_of_the_build_step_says_what_it_downloads_and_the_tier_table_
         "the tier table row of `dla harness run` lost the online retry"
     );
 }
+
+/// Runs the build step with a stand-in Maven whose class path is `entries` (after the project's
+/// own two directories) and returns `(run.args, startup-agents.txt, stderr)`.
+#[cfg(unix)]
+fn build_with_class_path(entries: &[std::path::PathBuf]) -> (String, Option<String>, String) {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    let proj = root.join("proj");
+    let driver = root.join("driver");
+    fs::create_dir_all(&proj).unwrap();
+    fs::create_dir_all(&driver).unwrap();
+    fs::write(driver.join("DlaJUnitLoop.java"), "class DlaJUnitLoop {}\n").unwrap();
+    // The launcher jar need not exist: its name on the class path is all the script reads.
+    let launcher = "/repo/junit-platform-launcher-1.10.2.jar";
+    let mut cp: Vec<String> = entries.iter().map(|e| e.display().to_string()).collect();
+    cp.push(launcher.to_owned());
+    let mvn = root.join("mvn");
+    fs::write(
+        &mvn,
+        format!(
+            "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in -Dmdep.outputFile=*) printf '%s' '{}' > \"${{a#-Dmdep.outputFile=}}\";; esac; done\n",
+            cp.join(":")
+        ),
+    )
+    .unwrap();
+    let script = root.join("dla-junit-build.sh");
+    fs::write(&script, dla_workload::harness::templates::JVM_JUNIT_BUILD).unwrap();
+    let out = Command::new("sh")
+        .arg(&script)
+        .args(["maven"])
+        .arg(&mvn)
+        .arg(&driver)
+        .arg(root.join("agent.jar"))
+        .arg(":")
+        .current_dir(&proj)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "{stderr}");
+    (
+        fs::read_to_string(driver.join("run.args")).unwrap(),
+        fs::read_to_string(driver.join("startup-agents.txt")).ok(),
+        stderr,
+    )
+}
+
+/// A jar with `manifest` lines in `dir`.
+#[cfg(unix)]
+fn jar_with_manifest(dir: &std::path::Path, name: &str, manifest: &str) -> std::path::PathBuf {
+    let m = dir.join(format!("{name}.mf"));
+    fs::write(&m, format!("{manifest}\n")).unwrap();
+    fs::write(dir.join("keep.txt"), "x").unwrap();
+    let jar = dir.join(name);
+    let st = Command::new("jar")
+        .args(["cfm"])
+        .arg(&jar)
+        .arg(&m)
+        .arg("-C")
+        .arg(dir)
+        .arg("keep.txt")
+        .output()
+        .unwrap();
+    assert!(
+        st.status.success(),
+        "{}",
+        String::from_utf8_lossy(&st.stderr)
+    );
+    jar
+}
+
+// The stand-in Maven of this test is a `#!/bin/sh` script and its class path uses `:`.
+#[cfg(unix)]
+#[test]
+fn a_mocking_jar_with_a_start_up_agent_entry_is_added_to_the_loops_jvm_and_none_otherwise() {
+    if !have_jdk() {
+        eprintln!("skipped: no JDK");
+        return;
+    }
+    let tmp = TempDir::new().unwrap();
+    let d = tmp.path();
+    let mk = |sub: &str| {
+        let p = d.join(sub);
+        fs::create_dir_all(&p).unwrap();
+        p
+    };
+    // mockito-core with a Premain-Class: it is the agent.
+    let mockito = jar_with_manifest(
+        &mk("m1"),
+        "mockito-core-5.23.0.jar",
+        "Premain-Class: org.mockito.internal.PremainAttach",
+    );
+    let bb = jar_with_manifest(
+        &mk("b1"),
+        "byte-buddy-agent-1.17.7.jar",
+        "Premain-Class: net.bytebuddy.agent.Installer",
+    );
+    let (args, file, stderr) = build_with_class_path(&[mockito.clone(), bb.clone()]);
+    assert!(
+        args.contains(&format!("\"-javaagent:{}\"", mockito.display())),
+        "{args}"
+    );
+    assert_eq!(
+        args.matches("-javaagent:").count(),
+        1,
+        "one agent only: {args}"
+    );
+    assert_eq!(file.unwrap().trim(), mockito.display().to_string());
+    assert!(stderr.contains("DLA-BUILD start-up agent:"), "{stderr}");
+    // mockito-core without the entry (an older version): the byte-buddy-agent jar is.
+    let old = jar_with_manifest(&mk("m2"), "mockito-core-4.11.0.jar", "Created-By: x");
+    let (args, file, _) = build_with_class_path(&[old.clone(), bb.clone()]);
+    assert!(
+        args.contains(&format!("\"-javaagent:{}\"", bb.display())),
+        "{args}"
+    );
+    assert_eq!(file.unwrap().trim(), bb.display().to_string());
+    // Neither carries one, or neither is on the class path: nothing is added.
+    let (args, file, stderr) = build_with_class_path(&[old]);
+    assert!(!args.contains("-javaagent"), "{args}");
+    assert!(
+        file.is_none() && !stderr.contains("start-up agent"),
+        "{stderr}"
+    );
+    let (args, file, _) = build_with_class_path(&[]);
+    assert!(!args.contains("-javaagent") && file.is_none(), "{args}");
+}
