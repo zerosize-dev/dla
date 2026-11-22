@@ -485,6 +485,75 @@ fn the_stacks_of_a_summary_whose_finding_an_alloc_test_decided_need_nothing() {
     assert!(items_of_t2(&r).is_empty(), "{:?}", items_of_t2(&r));
 }
 
+/// The summary trend of `a_capture_summary` shaped like a goroutine capture: the total
+/// `metric:goroutine/total` and two non-flat groups with the one evidence, the first tied to F2
+/// by `candidates`, the second to nothing.
+fn a_summary_with_a_total_and_two_groups(r: &R) -> String {
+    let e = a_capture_summary(r, 0, false);
+    let col = |name: &str, candidates: Vec<dla_core::FindingId>| ColumnTrend {
+        name: name.into(),
+        unit: Unit::Count,
+        kind: ColumnKind::Gauge,
+        region: dla_core::series::SeriesRegion::Heap,
+        site: None,
+        finding: None,
+        candidates,
+        n: 8,
+        mk: None,
+        sen: None,
+        halves: None,
+        every_delta: None,
+        noise: 0.0,
+        rise: 10.0,
+        shape: TrendShape::Steady,
+        gate: GateVerdict::Fail,
+        gate_failed: vec![],
+    };
+    TrendReport {
+        schema_version: 1,
+        id: "T2".into(),
+        series: "S2".into(),
+        thresholds: GateThresholds::default(),
+        columns: vec![
+            col("metric:goroutine/total", vec![]),
+            col("group:a", vec![dla_core::FindingId::new(2)]),
+            col("group:b", vec![]),
+        ],
+        targets: vec![],
+    }
+    .save(&r.run_dir)
+    .unwrap();
+    // F2 was decided by an alloc-test and is dispositioned.
+    let mut l = Ledger::load(&r.run_dir).unwrap();
+    l.add_evidence(evidence(
+        EvidenceKind::Discriminator,
+        json!({"test": "plateau+purge", "favors": "leak", "supports": ["leak"],
+            "finding": "F2", "harness": "H1"}),
+    ))
+    .unwrap();
+    l.transition(
+        &dla_core::FindingId::new(2),
+        dla_core::FindingState::Unresolved,
+        Some(dla_core::UnresolvedReason::Inconclusive),
+        Some("x".into()),
+        vec![],
+        "t",
+    )
+    .unwrap();
+    e
+}
+
+#[test]
+fn the_total_of_a_summary_follows_the_capture_rule_for_its_groups() {
+    let (r, _, _) = run_with_a_passed_column("3h");
+    let e = a_summary_with_a_total_and_two_groups(&r);
+    // group:a is tied to the alloc-tested F2; group:b has the same evidence and is context of
+    // it. Nothing waits for group:b, so the total is accounted for.
+    let items = items_of_t2(&r);
+    assert!(items.is_empty(), "{items:?}");
+    let _ = e;
+}
+
 #[test]
 fn a_workload_blocker_is_accepted_when_no_harness_ran() {
     let dir = tempfile::tempdir().unwrap();

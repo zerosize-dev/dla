@@ -595,3 +595,28 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - REAL-PROJECT SCORE (real plugin runs, model claude-sonnet-5-5, current code): aiohttp 3.10.10 found; grpc-go v1.84.0 found (twice); axios 1.15.1 found; tokio-util 0.7.1 found; spring-data-commons 4.1.1 not found (needs a Kotlin caller; holder reached and read flat); Pillow and Jetty not run (environment).
 - Waiting: CI on the fourth snapshot 56aa221 (waiter b11o93v59). Then: commit-message-4.txt, commit to main, push both branches.
 - THEN RELEASE 0.9.0-preview.3 (pre-authorized previews; the hold condition "real runs find the other projects' leaks" is met for 4 of 5): bump Cargo.toml workspace version and the nine path deps, cargo update -w --offline, .claude-plugin/plugin.json, .claude-plugin/marketplace.json; CI green on main; dispatch release.yml on main with publish=true; check the assets; tell the owner.
+
+## State 2026-11-22 00:20 UTC
+
+- `main` = d297716: CI green on main (run 44955952991) and on the dev branch (44955954569),
+  all 15 jobs.
+- Fourth frozen snapshot 56aa221 (second-look skeleton + pass 11): CI RED in two jobs
+  (run 44958016880, logs `<sp>/u55/ci`). Not on main.
+  1. dynamic acceptance 62/64: go-subscription-workers, final gate keeps
+     `trend_column T6:metric:goroutine/total` with a fix that is no command. My reading:
+     pass 11.2 removed the own items of untied group columns of a capture summary
+     (`capture_item`: `decided` or `stands_for` -> no item) but `group_columns_state` still
+     asks each non-flat group to be tied. Flaky by whether a second goroutine group reads
+     non-flat. Brief `wip-notes/pass12-brief.md` -> gate builder a8249474e4d24c8ca
+     (report: `<sp>/u49/report.md`, "Pass 12").
+  2. macOS (image macos-26-arm64, same image as the green runs on main): test
+     `frozen_garbage_is_tied_to_the_freeze_site_by_a_count_column_and_reads_growth` failed
+     once: trend had 15 columns, no `py.gc_frozen` group, target `not_loaded`, while
+     `py.traced` rose as designed. Linux reference: 41 columns (`<sp>/u56/trend-linux.json`,
+     project copy `<sp>/u56/frozen`). Brief `wip-notes/macos-frozen-brief.md` -> builder
+     a61db0f8f10fd6ebb (report `<sp>/u58/report.md`).
+- Next: verify both reports myself (rerun tests, marker mutations), new frozen snapshot
+  with CI, commit the tree to main with `commit-message-4.txt` (add the two fixes), push
+  main and main:dev/wonderful-mccarthy-algc5s, then 0.9.0-preview.3.
+- The artifact host of GitHub Actions is blocked by the proxy here (403): CI artifacts
+  cannot be downloaded; job logs can be read.
