@@ -957,3 +957,21 @@ flat test-loop readings get only 9 second looks.
   u70/tree-sha-ci; waiter writes u70/ci-wait.out; local whole suite u70/verify.out. When green:
   commit 7 = tree of b3b5ff4 (commit-message-7.txt), commit 8 = tree of the ninth snapshot
   (commit-message-8.txt), push main and dev branch, then version 0.9.0-preview.4 and the release.
+
+## 2026-11-22, about 12:50 UTC
+- CI on the ninth frozen snapshot 93a84ba: green (run 45016510664, all 15 jobs; the
+  `jvm-pool-warmup` failure of b3b5ff4 did not repeat).
+- main: `37ed3af` (commit 7, tree of b3b5ff4), `ef9fbd2` (commit 8, tree of 93a84ba),
+  `29cb6f6` "Version 0.9.0-preview.4". Pushed to main and dev/wonderful-mccarthy-algc5s.
+  CI on 29cb6f6 on main: waiter writes u71/ci-wait.out. When green: dispatch release.yml
+  (run_workflow, ref main, inputs {"publish": true}), check the release assets, task 74 done.
+- Task 73 closed. Task 75: Pillow 10.1.0 real run.
+  - Source: /root/dla-real/src/pillow (tag 10.1.0, da59ad0). `apt-get install libjpeg-dev` done
+    on this container (system-wide). Scratch build u72/pillow/.venv (python3.12, `pip install -e .`).
+  - Ground truth by hand (u72/truth.py, 20000 `draw.text` calls after 2000 warm-up): 2.0 blocks
+    per call, tracemalloc: `src/PIL/ImageFont.py:580` (`self.font.render(`) +20004 objects of
+    28 B. The C cause: `PyObject_GetAttrString(image, "id")` in `font_render`
+    (src/_imagingft.c) is never decremented. No census candidate can name it (no holder).
+  - Run pillow-1 started 12:47 UTC: frozen plugin and binary = main at 29cb6f6
+    (`dla 0.9.0-preview.4`), model claude-sonnet-5-5, timeout 9000 s, 600 turns.
+    Driver log /root/dla-real/pillow-1.driver.log.
