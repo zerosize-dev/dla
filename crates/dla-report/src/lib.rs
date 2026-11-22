@@ -1057,6 +1057,49 @@ fn ruled_out_by(view: &RunView, f: &Finding) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("; "))
 }
 
+/// The untied growing columns of the capture summary whose evidence a growth-series finding
+/// stands for: the finding is one obligation for all of them, so the report lists them (a
+/// count and the three largest) instead of hiding them.
+fn also_growing_line(view: &RunView, f: &Finding) -> Option<String> {
+    if f.origin.as_str() != "growth-series" {
+        return None;
+    }
+    for e in f
+        .supports
+        .iter()
+        .filter_map(|e| view.ledger.evidence_by_id(e))
+    {
+        let Some(tid) = e.result.get("trend").and_then(|t| t.as_str()) else {
+            continue;
+        };
+        let Some(t) = view.trends.iter().find(|t| t.id == tid) else {
+            continue;
+        };
+        if !view.summary_series.contains(&t.series) {
+            continue;
+        }
+        let mut cols: Vec<&dla_core::trend::ColumnTrend> = t
+            .columns
+            .iter()
+            .filter(|c| dla_core::gate::non_flat(c) && !dla_core::gate::is_whole_process(&c.name))
+            .filter(|c| c.finding.is_none() && c.candidates.is_empty())
+            .collect();
+        if cols.is_empty() {
+            continue;
+        }
+        cols.sort_by(|a, b| b.rise.abs().total_cmp(&a.rise.abs()));
+        let names: Vec<String> = cols.iter().take(3).map(|c| code(&c.name)).collect();
+        return Some(format!(
+            "{} column(s) of {} tied to no finding; the largest: {}{}",
+            cols.len(),
+            t.id,
+            names.join(", "),
+            if cols.len() > 3 { ", ..." } else { "" }
+        ));
+    }
+    None
+}
+
 fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
     match (&f.parent, &f.hypothesis) {
         (Some(_), Some(h)) => {
@@ -1083,6 +1126,9 @@ fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
     }
     if let Some(g) = growth_line(view, f) {
         let _ = writeln!(out, "- Growth: {g}");
+    }
+    if let Some(g) = also_growing_line(view, f) {
+        let _ = writeln!(out, "- Also growing in the same capture: {g}");
     }
     if let Some(t) = TRIGGERS.with(|t| {
         t.borrow()

@@ -418,6 +418,41 @@ fn refusals_name_the_missing_item_and_the_fixing_command() {
 
 /// A batch worker that freezes the collector's heap after every batch, written for this test
 /// (the bench fixtures are not touched).
+/// What a failed run needs to explain itself: the run summary's `_attention`, the series'
+/// limitations, the names of its columns, and the agent's own record of one point (it names
+/// the interpreter and carries the sections as the agent wrote them).
+fn run_context(run: &Value, run_dir: &Path, series: &str) -> String {
+    let file = fs::read_to_string(run_dir.join("series").join(format!("{series}.json")))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .unwrap_or(Value::Null);
+    let names: Vec<&str> = file["columns"]
+        .as_array()
+        .map(|c| c.iter().filter_map(|c| c["name"].as_str()).collect())
+        .unwrap_or_default();
+    let record = fs::read_dir(run_dir.join("harness/H1/out"))
+        .ok()
+        .and_then(|d| {
+            let mut points: Vec<_> = d.filter_map(Result::ok).map(|e| e.path()).collect();
+            points.sort();
+            points.pop()
+        })
+        .and_then(|p| fs::read_to_string(p.join("dump.jsonl")).ok())
+        .and_then(|t| {
+            t.lines()
+                .last()
+                .map(|l| l.chars().take(3000).collect::<String>())
+        })
+        .unwrap_or_else(|| "none".to_owned());
+    format!(
+        "_attention: {}\nseries limitations: {}\nseries columns ({}): {}\nagent record of one point: {record}",
+        run["_attention"],
+        file["limitations"],
+        names.len(),
+        names.join(", ")
+    )
+}
+
 fn frozen_project(dir: &Path) {
     fs::create_dir_all(dir.join("batcher")).unwrap();
     fs::create_dir_all(dir.join("tests")).unwrap();
@@ -521,7 +556,12 @@ fn frozen_garbage_is_tied_to_the_freeze_site_by_a_count_column_and_reads_growth(
         .unwrap()
         .iter()
         .find(|c| c["column"] == column)
-        .unwrap_or_else(|| panic!("{column} did not pass the gate: {t}"));
+        .unwrap_or_else(|| {
+            panic!(
+                "{column} did not pass the gate: {t}\n{}",
+                run_context(&run, &run_dir, "S1")
+            )
+        });
     assert_eq!(tied["candidates"], serde_json::json!([f]), "{t}");
 
     ok(

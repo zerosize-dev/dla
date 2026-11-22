@@ -370,6 +370,259 @@ fn growth_at_another_site_of_a_measured_leak_may_be_recorded_as_part_of_it() {
     );
 }
 
+/// Adds a capture summary to the run of `run_with_a_passed_column`: series S2 (source kind
+/// `dump`), its growth evidence and its trend T2 with `n` growing stack columns, the first
+/// `tied` to F2. Returns the evidence id.
+fn a_capture_summary(r: &R, n: usize, tied: bool) -> String {
+    fs::write(
+        r.run_dir.join("series/S2.json"),
+        json!({"id": "S2", "source": {"kind": "dump"},
+            "axis": "n", "columns": [], "points": []})
+        .to_string(),
+    )
+    .unwrap();
+    let mut l = Ledger::load(&r.run_dir).unwrap();
+    l.add_evidence(evidence(
+        EvidenceKind::GrowthSeries,
+        json!({"trend": "T2", "series": "S2", "n": 8, "passed": [], "failed": 0, "gate": "pass"}),
+    ))
+    .unwrap();
+    let e = l.evidence().last().unwrap().evidence_id.to_string();
+    drop(l);
+    let columns: Vec<ColumnTrend> = (0..n)
+        .map(|i| ColumnTrend {
+            name: format!("stack:pkg/transport.(*http2Server).handle{i}"),
+            unit: Unit::Bytes,
+            kind: ColumnKind::Gauge,
+            region: dla_core::series::SeriesRegion::Heap,
+            site: None,
+            finding: (tied && i == 0).then(|| dla_core::FindingId::new(2)),
+            candidates: vec![],
+            n: 8,
+            mk: None,
+            sen: None,
+            halves: None,
+            every_delta: None,
+            noise: 0.0,
+            rise: 100.0 + i as f64,
+            shape: TrendShape::Steady,
+            gate: GateVerdict::Fail,
+            gate_failed: vec![],
+        })
+        .collect();
+    TrendReport {
+        schema_version: 1,
+        id: "T2".into(),
+        series: "S2".into(),
+        thresholds: GateThresholds::default(),
+        columns,
+        targets: vec![],
+    }
+    .save(&r.run_dir)
+    .unwrap();
+    e
+}
+
+fn items_of_t2(r: &R) -> Vec<Value> {
+    r.final_gate()
+        .into_iter()
+        .filter(|m| m["id"].as_str().is_some_and(|i| i.starts_with("T2:")))
+        .collect()
+}
+
+#[test]
+fn untied_stack_columns_of_one_capture_summary_are_one_action() {
+    let (r, _, _) = run_with_a_passed_column("3h");
+    let e = a_capture_summary(&r, 30, false);
+    let items = items_of_t2(&r);
+    assert_eq!(items.len(), 1, "{items:?}");
+    let d = items[0]["description"].as_str().unwrap();
+    assert!(
+        d.contains("30 growing column(s) of the capture summary T2"),
+        "{d}"
+    );
+    // The largest one leads (the rise grows with the index).
+    assert!(d.contains("handle29"), "{d}");
+    assert!(
+        items[0]["fix"].as_str().unwrap().starts_with(&format!(
+            "dla ledger add --origin growth-series --evidence {e}"
+        )),
+        "{items:?}"
+    );
+    // One add accounts for all of them; the finding is the one obligation left.
+    r.ok(&[
+        "ledger",
+        "add",
+        "--origin",
+        "growth-series",
+        "--evidence",
+        &e,
+    ]);
+    assert!(items_of_t2(&r).is_empty(), "{:?}", items_of_t2(&r));
+    let md =
+        String::from_utf8(command(r.dir.path()).arg("report").output().unwrap().stdout).unwrap();
+    assert!(
+        md.contains("Also growing in the same capture: 30 column(s) of T2 tied to no finding"),
+        "{md}"
+    );
+}
+
+#[test]
+fn the_stacks_of_a_summary_whose_finding_an_alloc_test_decided_need_nothing() {
+    let (r, _, _) = run_with_a_passed_column("3h");
+    a_capture_summary(&r, 12, true);
+    // F2 is tied to one column; the 11 untied ones wait for the evidence's one action.
+    assert_eq!(items_of_t2(&r).len(), 1, "{:?}", items_of_t2(&r));
+    let mut l = Ledger::load(&r.run_dir).unwrap();
+    l.add_evidence(evidence(
+        EvidenceKind::Discriminator,
+        json!({"test": "plateau+purge", "favors": "leak", "supports": ["leak"],
+            "finding": "F2", "harness": "H1"}),
+    ))
+    .unwrap();
+    drop(l);
+    // The alloc-test decided F2: the other stacks of that capture are context of it.
+    assert!(items_of_t2(&r).is_empty(), "{:?}", items_of_t2(&r));
+}
+
+/// The summary trend of `a_capture_summary` shaped like a goroutine capture: the total
+/// `metric:goroutine/total` and two non-flat groups with the one evidence, the first tied to F2
+/// by `candidates`, the second to nothing.
+fn a_summary_with_a_total_and_two_groups(r: &R, alloc_tested: bool) -> String {
+    let e = a_capture_summary(r, 0, false);
+    let col = |name: &str, candidates: Vec<dla_core::FindingId>| ColumnTrend {
+        name: name.into(),
+        unit: Unit::Count,
+        kind: ColumnKind::Gauge,
+        region: dla_core::series::SeriesRegion::Heap,
+        site: None,
+        finding: None,
+        candidates,
+        n: 8,
+        mk: None,
+        sen: None,
+        halves: None,
+        every_delta: None,
+        noise: 0.0,
+        rise: 10.0,
+        shape: TrendShape::Steady,
+        gate: GateVerdict::Fail,
+        gate_failed: vec![],
+    };
+    TrendReport {
+        schema_version: 1,
+        id: "T2".into(),
+        series: "S2".into(),
+        thresholds: GateThresholds::default(),
+        columns: vec![
+            col("metric:goroutine/total", vec![]),
+            col("group:a", vec![dla_core::FindingId::new(2)]),
+            col("group:b", vec![]),
+        ],
+        targets: vec![],
+    }
+    .save(&r.run_dir)
+    .unwrap();
+    // F2 was decided by an alloc-test and is dispositioned.
+    let mut l = Ledger::load(&r.run_dir).unwrap();
+    if alloc_tested {
+        l.add_evidence(evidence(
+            EvidenceKind::Discriminator,
+            json!({"test": "plateau+purge", "favors": "leak", "supports": ["leak"],
+                "finding": "F2", "harness": "H1"}),
+        ))
+        .unwrap();
+    }
+    l.transition(
+        &dla_core::FindingId::new(2),
+        dla_core::FindingState::Unresolved,
+        Some(if alloc_tested {
+            dla_core::UnresolvedReason::Inconclusive
+        } else {
+            dla_core::UnresolvedReason::NotExercised
+        }),
+        Some("x".into()),
+        vec![],
+        "t",
+    )
+    .unwrap();
+    e
+}
+
+#[test]
+fn the_total_of_a_summary_follows_the_capture_rule_for_its_groups() {
+    let (r, _, _) = run_with_a_passed_column("3h");
+    let e = a_summary_with_a_total_and_two_groups(&r, true);
+    // group:a is tied to the alloc-tested F2; group:b has the same evidence and is context of
+    // it. Nothing waits for group:b, so the total is accounted for.
+    let items = items_of_t2(&r);
+    assert!(items.is_empty(), "{items:?}");
+    let _ = e;
+}
+
+#[test]
+fn the_total_of_a_summary_is_listed_with_a_command_when_its_capture_is_not_accounted_for() {
+    let (r, _, _) = run_with_a_passed_column("3h");
+    // F2 is dispositioned but no alloc-test decided it: group:b is not context of anything.
+    let e = a_summary_with_a_total_and_two_groups(&r, false);
+    let items = items_of_t2(&r);
+    let total = items
+        .iter()
+        .find(|m| m["id"] == "T2:metric:goroutine/total")
+        .unwrap_or_else(|| panic!("{items:?}"));
+    let fix = total["fix"].as_str().unwrap();
+    assert!(
+        fix.starts_with(&format!(
+            "dla ledger add --origin growth-series --evidence {e}"
+        )),
+        "{fix}"
+    );
+    assert!(!fix.contains("their own trend_column items"), "{fix}");
+    // The capture's own item names the same command, so one run clears both.
+    assert!(
+        items.iter().any(|m| m["id"] == "T2:group:b"
+            && m["fix"].as_str().unwrap().starts_with(&format!(
+                "dla ledger add --origin growth-series --evidence {e}"
+            ))),
+        "{items:?}"
+    );
+    // The total and the capture's item name one command: they are one action.
+    let full: Value =
+        serde_json::from_str(&fs::read_to_string(r.run_dir.join("gate/final.json")).unwrap())
+            .unwrap();
+    let actions = full["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["id"].as_str().is_some_and(|i| i.starts_with("T2:")))
+        .count();
+    assert_eq!(actions, 1, "{full}");
+    let added = r.ok(&[
+        "ledger",
+        "add",
+        "--origin",
+        "growth-series",
+        "--evidence",
+        &e,
+    ]);
+    // What is left waits for the disposition of the finding it made. It names the finding and
+    // a re-check, never a closing command: the finding's own item gives its route.
+    let f = added["id"].as_str().unwrap();
+    let items = items_of_t2(&r);
+    assert_eq!(items.len(), 1, "{items:?}");
+    let fix = items[0]["fix"].as_str().unwrap();
+    assert!(
+        fix.starts_with("dla gate check --final") && fix.contains(&format!("after {f} has")),
+        "{items:?}"
+    );
+    assert!(!fix.contains("ledger resolve"), "{fix}");
+    let all = r.final_gate();
+    assert!(
+        all.iter().any(|m| m["kind"] == "finding" && m["id"] == f),
+        "the finding the total waits for has its own item: {all:?}"
+    );
+}
+
 #[test]
 fn a_workload_blocker_is_accepted_when_no_harness_ran() {
     let dir = tempfile::tempdir().unwrap();

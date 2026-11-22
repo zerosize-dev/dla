@@ -41,6 +41,10 @@ pub struct RunView {
     /// split of another series). They are the residual accounting itself, so the gates do
     /// not ask for their trend or for a disposition of their columns.
     pub gap_series: std::collections::BTreeSet<String>,
+    /// The series `dla summarize` wrote from a capture (source kind `dump`: stack, type and
+    /// histogram diffs, heap graphs). Their growing columns that tie to no finding are one
+    /// obligation per trend, not one each.
+    pub summary_series: std::collections::BTreeSet<String>,
     /// The harnesses (`H1`) that some series names as its source (`source.harness`),
     /// built in the same pass over the series files as `gap_series`.
     pub harness_series: std::collections::BTreeSet<String>,
@@ -69,6 +73,7 @@ impl RunView {
             trends: Vec::new(),
             series_ids: Vec::new(),
             gap_series: std::collections::BTreeSet::new(),
+            summary_series: std::collections::BTreeSet::new(),
             harness_series: std::collections::BTreeSet::new(),
             series_harness: std::collections::BTreeMap::new(),
             tamper: Vec::new(),
@@ -117,6 +122,7 @@ impl RunView {
         self.trends = TrendReport::load_all(run_dir);
         self.series_ids = crate::series::list_ids(run_dir);
         self.gap_series.clear();
+        self.summary_series.clear();
         self.harness_series.clear();
         self.series_harness.clear();
         for id in &self.series_ids {
@@ -125,6 +131,9 @@ impl RunView {
             };
             if f.source.kind == crate::series::SeriesSourceKind::Gap {
                 self.gap_series.insert(id.clone());
+            }
+            if f.source.kind == crate::series::SeriesSourceKind::Dump {
+                self.summary_series.insert(id.clone());
             }
             if let Some(h) = f.source.harness {
                 self.series_harness.insert(id.clone(), h.clone());

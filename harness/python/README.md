@@ -40,6 +40,19 @@ and cover only files under `DLA_PROJECT`.
   called. Whenever the freeze count is above zero (whoever froze), a limitation line says that
   `py.gc_objects` and the type counts exclude those objects: the permanent generation is not in
   `gc.get_objects()`. An interpreter without `gc.freeze` or `gc.get_freeze_count` (before 3.7) is left alone.
+
+### Reduced records
+
+A full exit or checkpoint record always has `values_pre_gc`, `types`, `probes` and `limitations`.
+`dla harness run` reads each point's record with a typed reader that, when a section cannot be read
+(a value of the wrong type), drops the sections one by one until the record parses and keeps its
+values; it remembers which it dropped, and a Python record that has `values_pre_gc` but lacks
+`types`, `probes` or `limitations` counts as cut short the same way. Either gives the series a limitation
+`reduced record: the record of point N lost ...`, the run output an `_attention` line
+`REDUCED RECORD: ...`, and a target whose probe has no column reads `unknown` in `dla trend` (with the
+command that measures again) instead of `not_loaded`. The agent also says `reduced record: ...` itself when
+`gc.freeze` was called and `py.gc_frozen` could not be written (a failed site lookup keeps the group under
+`<non-project>`; any other failure of that section is a limitation line).
 - `probes`:
   - `PyModule`: every module-level name that is a container (list, dict, set, deque, mutable
     mapping/sequence/set), an `lru_cache`/`cache` wrapper (`size` = `cache_info().currsize`), or an

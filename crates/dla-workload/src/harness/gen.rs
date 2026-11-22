@@ -1712,6 +1712,22 @@ fn go_batch(
     Ok(Default::default())
 }
 
+/// Writes the second-look unit skeleton (see [`dla_core::harness::unit_skeleton`]) above the
+/// line of `file` that says the unit hook is not filled in.
+fn insert_unit_skeleton(file: &Path, rt: Runtime) -> std::io::Result<()> {
+    let text = fs::read_to_string(file)?;
+    let mut out = String::with_capacity(text.len() + 1200);
+    let mut done = false;
+    for line in text.split_inclusive('\n') {
+        if !done && line.contains("DLA-HOOK unit has not been filled in") {
+            out.push_str(&dla_core::harness::unit_skeleton(rt));
+            done = true;
+        }
+        out.push_str(line);
+    }
+    fs::write(file, out)
+}
+
 /// The findings of `--entry`: refused before anything is created unless the harness is a hook
 /// driver, no `--probe` or `--next` is given, there are at most [`MAX_TARGETS`] findings and each
 /// is a leak-side finding that grew in some harness (the trigger of a holder that never grew is
@@ -2307,6 +2323,10 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         if let Some(info) = driver_info.as_ref().filter(|i| !i.edit.is_empty()) {
             let file = hdir.join(&info.edit);
             let mut notes = info.block_notes.clone();
+            if manifest.is_second_look() {
+                // The unit hook is a skeleton: one variable per choice, to be used.
+                insert_unit_skeleton(&file, rt).map_err(|e| io_refusal(&file, e))?;
+            }
             if manifest.is_second_look() {
                 notes.extend(targets::second_look_notes(
                     &focus.missed,

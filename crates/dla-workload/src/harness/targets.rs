@@ -832,15 +832,6 @@ const SECOND_LOOK_TODOS: [&str; 5] = [
     "  - one long-lived object reused across units next to a fresh one per unit",
 ];
 
-/// The recipe of the choices of a second look, general to any project.
-const SECOND_LOOK_RECIPE: [&str; 5] = [
-    "  - slot 0, depth: how deep to derive when objects of the type are made from objects of the same type (1 to 3; a child of a child needs 3)",
-    "  - slot 1, ending: which object of the chain gets the ending call (cancel, close, abort, shutdown, remove, unsubscribe): none, the first, a middle one, the last",
-    "  - slot 2, release of the intermediates: at once (a temporary), before the ending call, after it",
-    "  - slot 3, the order of the remaining releases (forward or reversed)",
-    "  - slot 4, success or failure where the API has one (complete or fail half-way)",
-];
-
 /// The lines of a second-look harness's block, above its targets.
 pub fn second_look_notes(
     missed: &std::collections::BTreeMap<FindingId, dla_core::queue::Miss>,
@@ -853,9 +844,10 @@ pub fn second_look_notes(
     ];
     out.extend(SECOND_LOOK_TODOS.iter().map(|l| (*l).to_owned()));
     out.push(format!(
-        "Write the unit as CHOICES, not as one fixed sequence: a fixed sequence runs one case for every unit, and a leak that needs another order never shows. The driver has {helper}(key, slot, n): choice number slot of n options, from the digits of the key in mixed radix (every combination of the slots occurs within n0*n1*... units). Take at least two choices with it ({helper} is checked by dla harness run), for the owner type of each target:"
+        "Write the unit as CHOICES, not as one fixed sequence: a fixed sequence runs one case for every unit, and a leak that needs another order never shows. The unit hook below starts with five slot variables taken from the key with {helper}(key, slot, n) (depth, ending, when, order, outcome; each line says its options). Every slot variable must be used by the unit: a slot left out is a whole dimension of sequences never tried, and dla harness run refuses the harness. A slot that truly does not apply to the API of the targets is given up only by replacing its line with a comment `slot <name>: not applicable: <reason>` (at most {} of the {})",
+        dla_core::harness::SLOTS_GIVEN_UP_MAX,
+        dla_core::harness::SECOND_LOOK_SLOTS.len()
     ));
-    out.extend(SECOND_LOOK_RECIPE.iter().map(|l| (*l).to_owned()));
     for a in asked {
         if let Some(m) = missed.get(&a.id) {
             out.push(format!(

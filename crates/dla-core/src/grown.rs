@@ -110,7 +110,7 @@ pub fn commands(
 }
 
 /// True when an alloc-test evidence is bound to the family of `root`.
-fn alloc_tested(view: &RunView, root: &FindingId) -> bool {
+pub(crate) fn alloc_tested(view: &RunView, root: &FindingId) -> bool {
     let family: Vec<FindingId> = view
         .ledger
         .findings()

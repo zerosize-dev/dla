@@ -992,6 +992,54 @@ pub fn is_group_total(name: &str) -> bool {
     base.starts_with("metric:") && base.ends_with("/total")
 }
 
+/// What the total of a summary waits for, as something to run: the capture's own
+/// `ledger add` for the evidence of an untied group, or a re-check after the findings the
+/// other open groups are tied to have their disposition (their own items name the command).
+fn total_fix(view: &RunView, t: &TrendReport, open: &[&str]) -> String {
+    let mut adds: Vec<String> = Vec::new();
+    let mut findings: Vec<String> = Vec::new();
+    for name in open {
+        let Some(g) = t.columns.iter().find(|c| c.name == *name) else {
+            continue;
+        };
+        let tied = tied_findings(view, t, g);
+        if tied.is_empty() {
+            if let Some(e) = evidence_for_column(view, t, g) {
+                let untied = untied_of_evidence(view, t, Some(e.as_str()));
+                let names: Vec<String> = untied
+                    .iter()
+                    .take(3)
+                    .map(|c| readable_column(&c.name))
+                    .collect();
+                let cmd = capture_fix(t, Some(e.as_str()), untied.len(), &names);
+                if !adds.contains(&cmd) {
+                    adds.push(cmd);
+                }
+            }
+        } else {
+            for f in tied.iter().filter(|f| !f.state.is_dispositioned()) {
+                if !findings.contains(&f.id.to_string()) {
+                    findings.push(f.id.to_string());
+                }
+            }
+        }
+    }
+    let mut parts: Vec<String> = adds;
+    if !findings.is_empty() {
+        // Never a closing command here: the finding's own item names its route.
+        parts.push(format!(
+            "dla gate check --final   # after {} has a disposition (its own item in this list names the command): it holds a group column of {}",
+            findings.join(", "),
+            t.id
+        ));
+    }
+    if parts.is_empty() {
+        format!("dla trend {}", t.series)
+    } else {
+        parts.join("   then   ")
+    }
+}
+
 /// The group columns of a trend that are not flat, and those of them that are not yet
 /// tied to a finding (a dispositioned one for the final gate).
 fn group_columns_state<'a>(
@@ -1013,7 +1061,12 @@ fn group_columns_state<'a>(
         } else {
             !tied.is_empty()
         };
-        if !(ok || superseded(view, t, g) || covered_by_open_item(view, t, g)) {
+        // An untied group of a capture summary is accounted for by its capture (the capture's
+        // own item lists what is missing, never the group).
+        let by_capture = tied.is_empty()
+            && view.summary_series.contains(&t.series)
+            && capture_accounted(view, t, evidence_for_column(view, t, g).as_deref());
+        if !(ok || by_capture || superseded(view, t, g) || covered_by_open_item(view, t, g)) {
             open.push(g.name.as_str());
         }
     }
@@ -1049,6 +1102,8 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
     }
     // (c) every non-flat column is tied to a finding (dispositioned for the final gate) or
     // covered by a resolved open item.
+    let mut captured: BTreeMap<(String, String), Vec<(&TrendReport, &ColumnTrend)>> =
+        BTreeMap::new();
     for t in &view.trends {
         // The trend of a series `dla gap` derived measures the accounting, not the target:
         // its gap.unexplained growth is governed by the residual rows of the source series.
@@ -1088,10 +1143,7 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
                                 "is never tied to a finding; it is the sum of its group columns, which account for it once each non-flat one is tied to a dispositioned finding (not yet: {})",
                                 open.join(", ")
                             ),
-                            format!(
-                                "tie the group columns of {} first (their own trend_column items): dla ledger add --origin growth-series --evidence <growth evidence of the group column>, then dla ledger resolve <F>",
-                                t.id
-                            ),
+                            total_fix(view, t, &open),
                         )
                     };
                     out.add(
@@ -1145,6 +1197,22 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
                 );
                 continue;
             }
+            // A column of a capture summary (a stack, type or histogram diff): all the growing
+            // columns of one summary that tie to no finding are one obligation, listed once
+            // after the loop. One tied only to findings without a disposition waits on
+            // those findings' own items.
+            if view.summary_series.contains(&t.series) {
+                if tied.is_empty() {
+                    // One action per evidence: a trend has one for its gauge columns and one
+                    // for its counters.
+                    let key = (
+                        t.id.clone(),
+                        evidence_for_column(view, t, c).unwrap_or_default(),
+                    );
+                    captured.entry(key).or_default().push((t, c));
+                }
+                continue;
+            }
             let fix = match evidence_for_column(view, t, c) {
                 Some(e) => format!(
                     "dla ledger add --origin growth-series --evidence {e}   # column {}",
@@ -1170,6 +1238,106 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
             );
         }
     }
+    for (_, cols) in captured {
+        capture_item(view, &cols, out);
+    }
+}
+
+/// Whether the untied growing columns of the capture summary evidence `evidence` of trend `t`
+/// are accounted for by their capture: a finding the evidence ties to (canonical when merged)
+/// was decided by an alloc-test and the stacks are its context, or a not-merged growth-series
+/// finding supports the evidence and stands for it. One predicate for the capture's own item
+/// and for the total of the summary, so they cannot drift.
+fn capture_accounted(view: &RunView, t: &TrendReport, evidence: Option<&str>) -> bool {
+    let decided = t
+        .columns
+        .iter()
+        .filter(|c| evidence_for_column(view, t, c).as_deref() == evidence)
+        .any(|c| {
+            tied_findings(view, t, c).iter().any(|f| {
+                let canonical = view
+                    .ledger
+                    .merged_into(&f.id)
+                    .cloned()
+                    .unwrap_or(f.root_id());
+                crate::grown::alloc_tested(view, &canonical)
+            })
+        });
+    let stands_for = evidence
+        .and_then(|e| e.parse::<crate::ids::EvidenceId>().ok())
+        .is_some_and(|eid| {
+            view.ledger.findings().any(|f| {
+                f.origin.as_str() == "growth-series"
+                    && f.supports.contains(&eid)
+                    && view.ledger.merged_into(&f.id).is_none()
+            })
+        });
+    decided || stands_for
+}
+
+/// The fix of a capture summary's one item: `ledger add` for its evidence. The total of the
+/// summary names the same line, so the two are one action.
+fn capture_fix(t: &TrendReport, evidence: Option<&str>, n: usize, names: &[String]) -> String {
+    match evidence {
+        Some(e) => format!(
+            "dla ledger add --origin growth-series --evidence {e}   # one finding for the capture summary {}: it stands for its {n} untied growing columns, the largest {}",
+            t.id,
+            names.first().cloned().unwrap_or_default()
+        ),
+        None => format!("dla trend {}", t.series),
+    }
+}
+
+/// The untied growing columns of a capture summary that have `evidence`, largest first: the
+/// columns the capture's one item stands for.
+fn untied_of_evidence<'a>(
+    view: &RunView,
+    t: &'a TrendReport,
+    evidence: Option<&str>,
+) -> Vec<&'a ColumnTrend> {
+    let mut cols: Vec<&ColumnTrend> = t
+        .columns
+        .iter()
+        .filter(|c| non_flat(c) && !is_whole_process(&c.name) && !is_type_count(&c.name))
+        .filter(|c| evidence_for_column(view, t, c).as_deref() == evidence)
+        .filter(|c| tied_findings(view, t, c).is_empty())
+        .collect();
+    cols.sort_by(|a, b| b.rise.abs().total_cmp(&a.rise.abs()));
+    cols
+}
+
+/// The one item of a capture summary's untied growing columns. They are accounted for together
+/// by a finding the evidence ties to that an alloc-test decided (the stacks are context of it),
+/// or by one `dla ledger add --origin growth-series --evidence E`: the finding it makes
+/// stands for the evidence, and its other columns are listed under it in the report.
+fn capture_item(view: &RunView, cols: &[(&TrendReport, &ColumnTrend)], out: &mut Out) {
+    let Some(&(t, first)) = cols.first() else {
+        return;
+    };
+    let evidence = evidence_for_column(view, t, first);
+    if capture_accounted(view, t, evidence.as_deref()) {
+        return;
+    }
+    let mut sorted: Vec<&ColumnTrend> = cols.iter().map(|(_, c)| *c).collect();
+    sorted.sort_by(|a, b| b.rise.abs().total_cmp(&a.rise.abs()));
+    let names: Vec<String> = sorted
+        .iter()
+        .take(3)
+        .map(|c| readable_column(&c.name))
+        .collect();
+    let fix = capture_fix(t, evidence.as_deref(), sorted.len(), &names);
+    out.add(
+        "trend_column",
+        format!("{}:{}", t.id, sorted[0].name),
+        format!(
+            "{} growing column(s) of the capture summary {} ({}) are tied to no finding; the largest: {}",
+            sorted.len(),
+            t.id,
+            sorted[0].shape_name(),
+            names.join(", ")
+        ),
+        fix,
+    );
 }
 
 trait ShapeName {

@@ -457,6 +457,19 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
     if let Some(line) = dla_core::series::choices_line(&main.series) {
         out.insert("choices".into(), json!(line));
     }
+    if let Some(h) = main.series.source.harness.as_deref()
+        && let Ok(m) = dla_core::HarnessManifest::load(&ctx.run_dir, h)
+        && m.is_second_look()
+    {
+        let given = dla_core::harness::slots_given_up_lines(&dla_core::harness::slot_report(
+            &ctx.run_dir,
+            h,
+            m.runtime,
+        ));
+        if !given.is_empty() {
+            out.insert("slots_given_up".into(), json!(given));
+        }
+    }
     Ok(Value::Object(out))
 }
 

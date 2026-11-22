@@ -227,9 +227,7 @@ fn one_flat_run_gets_a_second_look_with_a_different_driver_while_budget_lasts() 
         "cancel or close the parent before the child",
         "overlapping lifetimes",
         "Write the unit as CHOICES, not as one fixed sequence: a fixed sequence runs one case for every unit",
-        "slot 0, depth: how deep to derive",
-        "slot 1, ending: which object of the chain gets the ending call",
-        "slot 2, release of the intermediates: at once (a temporary), before the ending call, after it",
+        "Every slot variable must be used by the unit",
         "was read flat in H1: read the unit of that harness",
     ] {
         assert!(block.contains(needle), "{needle}\n{block}");
@@ -249,15 +247,42 @@ fn one_flat_run_gets_a_second_look_with_a_different_driver_while_budget_lasts() 
         "{}",
         o.text
     );
-    // A different unit that takes no choice from the key is refused, with the recipe.
+    // A different unit that uses no slot variable of the skeleton is refused, naming the slots.
     let p = r.driver("H2");
-    let text = fs::read_to_string(&p).unwrap().replace(
+    let skeleton = fs::read_to_string(&p).unwrap();
+    assert!(
+        skeleton.contains("    depth = dla_choice(key, 0, 3) # slot depth: how deep to derive"),
+        "{skeleton}"
+    );
+    let unit = skeleton.replace(
         "    # first\n    pass",
         "    # second look\n    _state['m1'].put_1(key)\n    pass",
     );
-    fs::write(&p, text).unwrap();
+    fs::write(&p, &unit).unwrap();
     let o = r.run(&["harness", "run", "H2", "--mode", "both"]);
     assert_eq!(o.json["error"]["code"], "invalid-value", "{}", o.text);
+    let msg = o.json["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("does not use slot variable(s): depth (how deep to derive")
+            && msg.contains("outcome (the success or the failure path"),
+        "{msg}"
+    );
+    assert!(
+        o.json["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("# slot <slot>: not applicable: <reason>"),
+        "{}",
+        o.text
+    );
+    // Without the skeleton lines the unit takes no choice from the key at all: refused first.
+    let bare: String = unit
+        .lines()
+        .filter(|l| !l.contains("(every slot variable must be used by the unit)"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    fs::write(&p, &bare).unwrap();
+    let o = r.run(&["harness", "run", "H2", "--mode", "both"]);
     assert!(
         o.json["error"]["message"]
             .as_str()
@@ -266,30 +291,77 @@ fn one_flat_run_gets_a_second_look_with_a_different_driver_while_budget_lasts() 
         "{}",
         o.text
     );
+    // Giving up three slots is refused; two are accepted and listed.
+    let give_up = |text: &str, name: &str, why: &str| -> String {
+        text.lines()
+            .map(|l| {
+                if l.contains(&format!("# slot {name}: ")) && l.contains("(every slot variable") {
+                    format!("    # slot {name}: not applicable: {why}\n")
+                } else {
+                    format!("{l}\n")
+                }
+            })
+            .collect()
+    };
+    let uses = |text: &str, vars: &str| -> String {
+        text.replace(
+            "    # second look\n",
+            &format!("    # second look\n    _ = ({vars})\n"),
+        )
+    };
+    let three = uses(
+        &give_up(
+            &give_up(
+                &give_up(&unit, "order", "no release order in this API"),
+                "outcome",
+                "no failure path",
+            ),
+            "when",
+            "nothing is released early",
+        ),
+        "depth, ending",
+    );
+    fs::write(&p, &three).unwrap();
+    let o = r.run(&["harness", "run", "H2", "--mode", "both"]);
     assert!(
-        o.json["error"]["fix"]
+        o.json["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("dla_choice(key, 1, 4) for which object gets the ending call"),
+            .contains("gives up 3 slots"),
         "{}",
         o.text
     );
-    // With two choices it runs; flat again: its three are settled for good, and the run says
-    // how many combinations the units took.
-    let text = fs::read_to_string(&p).unwrap().replace(
-        "    # second look\n",
-        "    # second look\n    a = dla_choice(key, 0, 3)\n    b = dla_choice(key, 1, 4)\n    _ = (a, b)\n",
+    let two = uses(
+        &give_up(
+            &give_up(&unit, "order", "no release order in this API"),
+            "outcome",
+            "no failure path",
+        ),
+        "depth, ending, when",
     );
-    fs::write(&p, text).unwrap();
+    fs::write(&p, &two).unwrap();
     let ran = r.ok(&["harness", "run", "H2", "--mode", "both"]);
     assert_eq!(
-        ran["summary"]["choices"], "the units took 12 combinations of 2 choices",
+        ran["summary"]["choices"], "the units took 36 combinations of 3 choices",
+        "{ran}"
+    );
+    assert_eq!(
+        ran["summary"]["slots_given_up"],
+        serde_json::json!([
+            "slot order: not applicable: no release order in this API",
+            "slot outcome: not applicable: no failure path"
+        ]),
         "{ran}"
     );
     let s2 = ran["summary"]["series"][0].as_str().unwrap().to_owned();
     let trend = r.ok(&["trend", &s2]);
     assert_eq!(
-        trend["choices"], "the units took 12 combinations of 2 choices",
+        trend["choices"], "the units took 36 combinations of 3 choices",
+        "{trend}"
+    );
+    assert_eq!(
+        trend["slots_given_up"].as_array().unwrap().len(),
+        2,
         "{trend}"
     );
     set_verdicts(&r, trend["trend"].as_str().unwrap(), "executed");
@@ -315,7 +387,7 @@ fn one_flat_run_gets_a_second_look_with_a_different_driver_while_budget_lasts() 
     let p3 = r.driver("H3");
     let text = fs::read_to_string(&p3).unwrap().replace(
         "    # third\n",
-        "    # third\n    dla_choice(key, 0, 2)\n    dla_choice(key, 1, 3)\n",
+        "    # third\n    _ = (depth, ending, when, order, outcome)\n",
     );
     fs::write(&p3, text).unwrap();
     varies(&r, "H3", "a: x\nb: y\nc: z\n");

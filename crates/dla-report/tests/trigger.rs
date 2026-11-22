@@ -34,6 +34,11 @@ fn ledger_text() -> String {
     for (i, body) in extra.iter().enumerate() {
         text.push_str(&format!("{{{ts},\"seq\":{},{body}}}\n", 22 + i));
     }
+    // The census facts on F1's writer (`Bus.add`): a start-up registration.
+    text.push_str(&format!(
+        "{{{ts},\"seq\":{},\"type\":\"finding_annotated\",\"finding\":\"F1\",\"writers\":[\"src/bus.go:12\"],\"removers\":[],\"writer_sites\":[{{\"site\":\"src/bus.go:12\",\"kind\":\"insert\",\"depth\":0,\"function\":\"add\",\"startup\":true,\"const\":true}}]}}\n",
+        22 + extra.len()
+    ));
     text
 }
 

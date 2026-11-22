@@ -1142,7 +1142,10 @@ def _install_gc_freeze():
                 after = _freeze_count()
                 _freeze["called"] = True
                 if before is not None and after is not None:
-                    site = _creation_site(2) or "<non-project>"
+                    try:
+                        site = _creation_site(2) or "<non-project>"
+                    except BaseException:
+                        site = "<non-project>"  # the group is kept, only its site is lost
                     sites = _freeze["sites"]
                     sites[site] = sites.get(site, 0) + max(after - before, 0)
         except BaseException:
@@ -1176,6 +1179,10 @@ def _freeze_record(rec, limitations):
             shares = _split_freeze(count)
         if shares:
             rec.setdefault("groups", {})["py.gc_frozen"] = shares
+        elif count:
+            limitations.append(
+                "reduced record: gc.freeze was called but py.gc_frozen has no site to group by, so the column is missing"
+            )
     if count:
         limitations.append(
             f"gc.freeze moved {count} objects into the permanent generation: py.gc_objects and the type counts exclude them"
@@ -1261,8 +1268,8 @@ def _build(phase, x, last):
                 limitations.append("function coverage unavailable (sys.monitoring needs Python 3.12+)")
     try:
         _freeze_record(rec, limitations)
-    except BaseException:
-        pass
+    except BaseException as exc:
+        limitations.append(f"reduced record: py.gc_frozen could not be read: {exc!r}")
     if _chain_error:
         limitations.append(_chain_error)
     limitations.extend(_cap_notes)
