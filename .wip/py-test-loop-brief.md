@@ -66,9 +66,11 @@ plan) is NOT part of this brief; Python candidate batches stay hook drivers.
    - The harness interpreter is the one Python harnesses use today (`python3` from PATH; see
      crates/dla-workload/src/harness/commands.rs). If pytest does not import in it
      (`python3 -c "import pytest"`), refuse: say which interpreter, that pytest does not import in
-     it, the command that installs it (`python3 -m pip install pytest`), and the driver command as
-     the other way on. The refusal is recorded as a failed attempt of the test loop (see 3), so
-     the queue moves on.
+     it, the command that installs it (`python3 -m pip install pytest`), that an interpreter which
+     already has pytest and the project (a virtual environment) can be used by putting its `bin`
+     directory first on PATH for the `dla` commands, and the driver command as the other way on.
+     The refusal is recorded as a failed attempt of the test loop (see 3), so the queue moves on;
+     a later successful generation is still possible and then counts.
    - Hookless: nothing to fill. Output and `instructions` in the style of the JUnit loop ("nothing
      to fill: the driver runs the project's own tests in a loop; run it"), `next` =
      `dla harness run <H>`.
@@ -139,7 +141,21 @@ plan) is NOT part of this brief; Python candidate batches stay hook drivers.
    only), the bundle's `test-loop/` file (list the test files that ran; no per-file figures), and
    `agents/verifier.md` only if its test-loop paragraph says something false for Python (do not
    touch the archetypes block).
-5. Texts: skills/detect-leak-anywhere/references/python.md (the test loop: what it runs, that it
+5. The scratch copy and built extension modules (crates/dla-workload/src/harness/scratch.rs).
+   The copy a harness runs in holds the project's tracked files; object files and untracked
+   libraries are left out with the gap line "... not copied (they are rebuilt in the copy)". A
+   Python harness has no build step, so nothing rebuilds them: a package whose extension modules
+   were built in place (`python3 setup.py build_ext --inplace`, or an editable install) imports
+   from the copy without them and every test fails at import. In the real run the agent copied
+   the `.so` files into the copy by hand inside its driver hook. For a Python harness (hook driver
+   and test loop alike), the copy keeps built extension modules: untracked files named `*.so`,
+   `*.pyd` or `*.dylib` that lie in a directory holding Python sources of the project. Say so in
+   a gap line (how many were kept). Other runtimes: unchanged. Check `copy_project_scoped` and its
+   callers for how the runtime is known there; if a harness of another runtime shares the copy,
+   say how you kept it apart. Test: a project with an untracked `pkg/_native.so` next to
+   `pkg/__init__.py` and an untracked `build/tmp.o`: a Python harness's copy has the first and
+   not the second; a native harness's copy has neither.
+6. Texts: skills/detect-leak-anywhere/references/python.md (the test loop: what it runs, that it
    needs pytest in the harness interpreter and the project importable in place, what the columns
    mean, that candidates still need their drivers), one sentence each in references/stages.md and
    SKILL.md where the JVM test loop is described as the first pass, harness/python/README.md.

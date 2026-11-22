@@ -1,0 +1,29 @@
+A workload blocker closes the queue of one runtime only
+
+A run on a Python library with C extension modules ended after four
+minutes with a complete report and 329 of 346 ranked candidates untested.
+It had two queues: python, where two harnesses had run and written series,
+and native, for the C sources. The agent saw that a C loop driver cannot
+call extension modules and recorded `build_fails` on `intake.workload`.
+The tool's text said that closes the queue of the runtime. The code closed
+every queue, and `dla ledger close-rest` then closed 567 findings.
+
+`dla ledger resolve intake.workload --status unresolved` takes
+`--runtime <rt>`, stored in the answer. A blocker reason needs it when
+more than one runtime has ranked candidates and implies it when one has.
+The answer acts on that runtime only: its queue, its second look and test
+loop, the gate rules that a blocker lifts, the trigger line of its
+findings and the report's "Blocked" line. An answer without a runtime (an
+older ledger, or a run with no ranked candidate) still acts on every
+runtime.
+
+The refusal `workload-ran` is per runtime too: a blocker for a runtime
+whose harness wrote a series is refused and names the harness and the
+series, whatever the other runtimes did. Before, it fired only when every
+runtime with candidates had a series, so one runtime without a harness let
+the blocker through for all.
+
+With one runtime blocked, `dla ledger close-rest` closes that runtime's
+candidates, leaves the others pending and prints the open queue's command.
+Every text that offers the blocker now carries `--runtime <rt>` and says
+that it closes that queue only.

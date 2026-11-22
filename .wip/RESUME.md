@@ -1013,3 +1013,31 @@ flat test-loop readings get only 9 second looks.
 - 14:17 UTC: v0.9.0-preview.4 PUBLISHED (pre-release, target 29cb6f6, release run 45031474805
   green, 5 platform archives + checksums + SHA256SUMS). CI on 29cb6f6: run 45023802129 green,
   all 15 jobs. Task 74 done.
+
+## 2026-11-22, about 14:50 UTC
+- W1 (blocker per runtime) REPORTED and checked by me: 7 new tests in
+  crates/dla-cli/tests/workload_runtime.rs pass; three core mutations of the builder's script
+  (u75/mut.py: W20 queue ignores the runtime, W1 workload_ran ignores it, W3 answer_covers always
+  true) each fail 2 to 3 of them; real tree (u72/pillow, run 20261122-143517-3e52, python 186 and
+  native 160 candidates, H1 = direct draw.text unit, S1/S2): blocker without --runtime refused and
+  lists both; `--runtime python` refused `workload-ran` naming H1 and S1; `--runtime native`
+  accepted; status native closed blocked, python open 186 pending; close-rest closed 384 and left
+  the python ones. I removed one sentence the builder added to references/recovery.md beyond the
+  brief (it told the agent to drive C extension candidates through Python, which the tool has no
+  route for). Builder's whole suite: 3204 passed, 1 failed (a golden text, fixed after); the whole
+  suite is NOT rerun yet on the final W1 tree: run it on the combined tree at the end.
+  Snapshot 8253583 on wip/progress = W1 checked.
+- X (py site columns) STARTED: agent a10fa59fbfcdce816 (background), scratch u76.
+- Then Y (py test loop), brief ready. Then: whole suite, CI on a frozen snapshot, commits to main
+  (one per brief, messages to write), frozen plugin + binary refresh, real run pillow-2.
+- Prepared for pillow-2: /root/dla-real/run.py has `--py-venv <python>` (copy in
+  wip-notes/run.py): before the model starts it makes <work>/venv, installs pytest and the project
+  editable there (builds the extension in place in the project copy), puts venv/bin first on PATH.
+  Command to use: `python3 /root/dla-real/run.py pillow-2 /root/dla-real/src/pillow
+  /root/dla-real/prompt-generic.txt --timeout 9000 --max-turns 600 --py-venv python3.12`.
+  Say in the report that this stands for a developer's machine where the project already builds.
+- Found while preparing: the harness scratch copy holds tracked files only and leaves out untracked
+  libraries ("they are rebuilt in the copy"), but a Python harness has no build step, so a package
+  with extension modules built in place cannot import from the copy (pillow-1: the agent copied the
+  .so files by hand in its hook). Added to brief Y as item 5.
+- W1 commit message written: wip-notes/commit-message-9.txt.
