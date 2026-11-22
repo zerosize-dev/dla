@@ -662,7 +662,7 @@ mod tests {
     }
 
     #[test]
-    fn the_classes_of_one_pick_are_of_one_module_and_fit_one_harness() {
+    fn the_classes_of_one_pick_are_of_one_module() {
         // The closest name is in module m1; the other name match is in m2 and is left out.
         let mut a = class("m1/src/test/java/a/LazyTests.java", 5, &[]);
         a.cwd = "m1".into();
@@ -675,7 +675,10 @@ mod tests {
         let plan = plan(&ix, &order);
         assert_eq!(plan.batches.len(), 1);
         assert!(plan.batches[0].classes.iter().all(|c| c.cwd == "m1"));
+    }
 
+    #[test]
+    fn the_classes_of_one_pick_fit_one_harness_together() {
         // Two name matches that hold more tests together than one harness runs: the closest
         // alone, and the candidate is in a batch, not sent to a driver.
         let ix = index(vec![
