@@ -107,6 +107,9 @@ pub struct ChecklistAnswer {
     /// Required with `unresolved`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remedy: Option<String>,
+    /// The runtime an `intake.workload` answer is about. Absent: every runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<String>,
 }
 
 /// A checklist item with its latest answer.

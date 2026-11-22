@@ -370,7 +370,7 @@ under the run directory and need tier 1.
   `dla alloc-test`, `dla intervene`) sets the unset ones from the last run and prints `env_reused`; a variable you set wins. Give a
   harness run or alloc-test Bash call a timeout of 600000 ms. A harness that `gen` wrote must be run, or the
   blocker recorded on `intake.workload` (`--status unresolved --reason env_unavailable|tool_missing|build_fails|privilege_declined
-  --remedy "<what blocks it>"`; it closes the runtime's queue), before any finding of its runtime is closed `no_harness`, `not_exercised` or `time_budget`; `dla ledger resolve` refuses with
+  --remedy "<what blocks it>" --runtime <rt>`; it closes the queue of that runtime only, and is refused for a runtime whose harness wrote a series), before any finding of its runtime is closed `no_harness`, `not_exercised` or `time_budget`; `dla ledger resolve` refuses with
   `harness-not-run` while budget remains, and with `target-pending` while a pending candidate of an open queue is closed that way. Once its manifest loads, `harness run` leaves `harness/H<n>/attempt.json`.
   A runtime whose entry points were discovered (`dla workload discover`) needs a harness before
   those closes too: with none generated and budget left, `dla ledger resolve` refuses
@@ -625,7 +625,7 @@ verification, then this stage. A harness that was generated, never run (a run yo
 
 Two more final items keep a run from ending with the budget unspent. Each has a fix and an escape
 recorded on `intake.workload` (`dla ledger resolve intake.workload --status unresolved --reason <r>
---remedy "<text>"`), so an unattended run always has a way out. The escapes differ in the reason:
+--remedy "<text>" --runtime <rt>`), so an unattended run always has a way out. The escapes differ in the reason:
 `coverage_contradiction` accepts any reason with a remedy (`time_budget` only once the time left is
 at or under the floor), `budget_left_unrevisited` only a blocker reason (`env_unavailable`, `tool_missing`, `build_fails`, `privilege_declined`).
 
@@ -650,7 +650,7 @@ at or under the floor), `budget_left_unrevisited` only a blocker reason (`env_un
   refused with nothing smaller that fits since they were added (put one back under test with `dla ledger test F --evidence E`), or findings
   are closed without exercise in a runtime with discovered entry points and no harness
   (`dla harness gen --lang <rt>`, or its `--driver` step when gen would refuse for lack of a workload; entry points that discovery marked `no_harness` count, since a
-  harness is what reaches them). A blocker reason on `intake.workload` clears both.
+  harness is what reaches them). A blocker reason on `intake.workload` for the runtime clears both for that runtime.
 
 ## 9. Report and revisit
 

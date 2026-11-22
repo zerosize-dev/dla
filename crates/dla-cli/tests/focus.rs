@@ -268,7 +268,8 @@ fn a_missed_target_gets_a_focus_harness_and_is_given_up_only_by_the_rule() {
     let fix = o.json["error"]["fix"].as_str().unwrap();
     assert!(
         fix.contains("dla harness gen --lang python --driver --next")
-            && fix.contains("focus batch"),
+            && fix.contains("focus batch")
+            && fix.contains("--runtime python (that closes the queue of python only)"),
         "{fix}"
     );
     // A reason that says what it needs is still accepted (the refusal does not change).

@@ -367,6 +367,13 @@
             "null"
           ]
         },
+        "runtime": {
+          "description": "The runtime an `intake.workload` answer is about. Absent: every runtime.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "status": {
           "description": "Answer status.",
           "$ref": "#/$defs/AnswerStatus"

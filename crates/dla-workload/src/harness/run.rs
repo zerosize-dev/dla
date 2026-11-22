@@ -250,6 +250,7 @@ fn failed(why: impl Into<String>, missing: impl Into<String>, fix: impl Into<Str
 /// loop, so the text names the log tail and the usual cause, a service the tests need.
 fn harness_failed_fix(manifest: &HarnessManifest, logs: &str) -> String {
     let id = &manifest.id;
+    let rt = manifest.runtime.as_str();
     if manifest
         .tools
         .iter()
@@ -261,7 +262,7 @@ fn harness_failed_fix(manifest: &HarnessManifest, logs: &str) -> String {
             String::new()
         };
         format!(
-            "read the tail of the logs ({logs}); a JUnit repeat harness has no hooks to fill. If the tests need a service that is not running (a database, a broker, a cache), start it and dla harness run {id}; if it cannot be started, record dla ledger resolve intake.workload --status unresolved --reason env_unavailable --remedy \"<the service {id} needs>\"{fallback}"
+            "read the tail of the logs ({logs}); a JUnit repeat harness has no hooks to fill. If the tests need a service that is not running (a database, a broker, a cache), start it and dla harness run {id}; if it cannot be started, record dla ledger resolve intake.workload --status unresolved --reason env_unavailable --remedy \"<the service {id} needs>\" --runtime {rt} (that closes the queue of {rt} only){fallback}"
         )
     } else {
         format!("read the logs, fix the harness or its hooks, then dla harness run {id}")

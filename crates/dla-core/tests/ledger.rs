@@ -397,6 +397,7 @@ fn checklist_answers() {
         note: None,
         reason,
         remedy: remedy.map(String::from),
+        runtime: None,
     };
     for status in [AnswerStatus::Answered, AnswerStatus::Partial] {
         let Error::Refused(r) = l

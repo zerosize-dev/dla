@@ -408,6 +408,7 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
             status: None,
             evidence: Vec::new(),
             note: None,
+            runtime: None,
         };
         match resolve_finding(ctx, &mut ledger, f.id.clone(), args, Some(&loaded)) {
             Ok(_) => {
@@ -512,6 +513,16 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
         .find_map(|q| q.test_loop_line())
     {
         out["next"] = json!(line);
+    }
+    if out.get("next").is_none()
+        && let Some(q) = queues.iter().find(|q| q.open() && !q.pending.is_empty())
+    {
+        out["next"] = json!(format!(
+            "{} candidate(s) stay pending in the open {} queue: {}",
+            q.pending.len(),
+            q.runtime,
+            q.command
+        ));
     }
     if left.len() > 8 {
         out["left_more"] = json!(left.len() - 8);

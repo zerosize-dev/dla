@@ -931,7 +931,6 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
         by_rt.entry(rt.clone()).or_default().push(r);
     }
     let budget = gate::budget_over_floor(&view.state, worker);
-    let blocked = gate::workload_unresolved(view, true);
     let tindex = by_rt
         .contains_key("jvm")
         .then(|| crate::testloop::TestIndex::of(view, worker))
@@ -939,6 +938,9 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
     by_rt
         .into_iter()
         .map(|(runtime, list)| {
+            // A blocker recorded on `intake.workload` closes the queue of the runtime it names
+            // (every queue when it names none).
+            let blocked = gate::workload_unresolved(view, true, &runtime);
             // Only a finding still in `candidate` is waiting for a disposition.
             let open_ones: Vec<&&Ranked> = list
                 .iter()
@@ -1148,8 +1150,8 @@ pub fn steps(q: &RuntimeQueue, run_id: &str) -> String {
         format!(" {} read `unknown`: {NO_COVERAGE}.", ids.join(", "))
     };
     let resolve = format!(
-        "If no driver can be built or run for {}, record why: dla ledger resolve intake.workload --status unresolved --reason <env_unavailable|tool_missing|build_fails|privilege_declined> --remedy \"<text>\" (that closes the queue of the runtime).{unknown}{focus}",
-        q.runtime
+        "If no driver can be built or run for {rt}, record why: dla ledger resolve intake.workload --status unresolved --reason <env_unavailable|tool_missing|build_fails|privilege_declined> --remedy \"<text>\" --runtime {rt} (that closes the queue of {rt} only; the queues of other runtimes stay open).{unknown}{focus}",
+        rt = q.runtime
     );
     if q.in_flight_test_loop {
         return format!(

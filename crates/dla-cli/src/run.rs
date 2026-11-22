@@ -640,7 +640,10 @@ fn trigger_json(view: &RunView) -> serde_json::Map<String, Value> {
             Trigger::Unchecked => json!({"trigger": trig.name()}),
         };
         if let Some(why) = (trig == Trigger::Unchecked)
-            .then(|| dla_core::trigger::unchecked_because(view))
+            .then(|| {
+                let rt = dla_core::gate::finding_runtime(view, f);
+                dla_core::trigger::unchecked_because(view, rt.as_deref())
+            })
             .flatten()
         {
             v["not_checked"] = json!(why);
