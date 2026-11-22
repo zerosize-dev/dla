@@ -679,3 +679,18 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
   factory form) for the finding at TypedPropertyPaths.java:53? Whole suite on that tree:
   3134 passed, 0 failed (`<sp>/u61/test-all.log`).
 - CI on ecbbe4e still running at 02:53 (waiter buvegduus, logs `<sp>/u59/ci`).
+
+## State 2026-11-22 03:10 UTC
+
+- CI on frozen snapshot ecbbe4e: green, all 15 jobs (run 44973926575).
+- `main` = cc003a0 "Version 0.9.0-preview.3" on top of a56ee38 "Second-look skeleton,
+  trigger reading by census facts, one gate action per capture" (tree of ecbbe4e). Both
+  pushed to main and dev/wonderful-mccarthy-algc5s. No trailers.
+- Waiting: CI on main at cc003a0 (waiter b8991t70t, logs `<sp>/u62/ci`). When green:
+  dispatch `release.yml` on `main` with `publish=true`, check the release
+  `v0.9.0-preview.3` and its assets, tell the owner.
+- The working tree = main + the key-line change (brief Q, checked, not committed) + the
+  version bump. Real run spring-6 is running on the build with the key-line change.
+- After spring-6: evidence to `<sp>/u36/spring-6`, delete the run dir, note
+  `wip-notes/real-run-plugin-spring-6.md`; then freeze a snapshot with CI for the key-line
+  change and commit it (message to write).
