@@ -1,0 +1,41 @@
+Size the automatic budget in a run with workers
+
+A real unattended run on a project with two runtimes found the documented
+leak and showed three more defects. This commit corrects them.
+
+The automatic budget stayed at one hour. The run dispatched two workers
+and one of them had 186 ranked candidates, so the formula gives the cap,
+180 minutes. A worker sized the budget only when its gate check passed,
+which does not happen while its queue is open. The core sized it from its
+own ledger as soon as sweep and census had run; in a dispatched run that
+ledger holds no candidate, so the estimate was 0 runtimes and 0 candidates,
+and the sizing was final. Each worker had 25 minutes and 175 findings were
+closed for lack of time.
+
+In a run with registered workers the core no longer sizes the budget. Each
+worker sizes it with its first command after the sweep and census of its
+own runtime, whatever the command is and whether a gate check passes or
+not, from the main ledger and every worker's slice. It can only raise the
+budget, once per worker, and the budget is final when every registered
+worker has sized it. The delta moves the run deadline and every unfinished
+worker's deadline, as before. A run without workers is unchanged.
+
+Gate items named the driver batch while the Python test loop was still the
+queue's first step, and the worker of that run followed them. While the
+loop is pending, the fix of a Python finding that waits for a harness to
+be generated is the queue item's fix: the loop first, then the driver
+batch. A harness that is already generated keeps its own run command.
+
+The report of that run opened with "exercised 0 of 739 entry points", which
+was false. The library was installed in editable mode, so the drivers
+imported it from the source tree, and the Python agent recorded only
+functions of files under the scratch copy. The agent now records functions
+of files under the source root too, by their path relative to it, as the
+allocation-site columns already do. On the real library a hook driver that
+draws text now marks 8 entry points as exercised; before it marked none.
+
+One existing test pinned the core sizing a dispatched run and now sizes
+through a worker. One pinned the driver batch as the fix of a pending
+candidate while the loop is first and now expects the loop first.
+
+Not seen yet: an unattended run with these changes.

@@ -797,7 +797,10 @@ fn coverage_lists_functions_of_the_source_root_outside_the_scratch_copy() {
     );
     assert!(with.iter().all(|i| !i.contains("secret")), "{with:?}");
     let without = items(false);
-    assert!(without.iter().all(|i| !i.contains("lib.tool")), "{without:?}");
+    assert!(
+        without.iter().all(|i| !i.contains("lib.tool")),
+        "{without:?}"
+    );
 }
 
 /// Runs `script` as `<project>/<name>` under the agent and returns every record it wrote. A
