@@ -794,3 +794,11 @@ route to `confirmed`; the time for all batches; item 7 (bench fixtures that woul
 a test-loop batch); the report file. Its own open points: `ledger list` and schema outputs
 for the new fields; the second look is capped at 9 candidates a runtime, so hundreds of
 flat test-loop readings get only 9 second looks.
+- 05:00 UTC: the first builder stopped for good (out of room). Its last word: the full
+  `harness_junit` run ended 37 passed, 1 failed:
+  `the_loop_fits_its_runs_into_the_time_limit_by_lowering_the_step_and_dropping_the_slowest_class`
+  (not investigated). A FRESH Sonnet builder (agent af9e65679252b2b82) has the finish
+  brief `wip-notes/test-loop-finish-brief.md`: fix that test's cause, fmt/clippy/schema/whole
+  suite, the missing marker mutations, the six real-tree batches with the printed route for
+  the documented finding, the report-only points (bench fixtures, second-look cap, ledger
+  list and schemas), docs. Report `<sp>/u65/report.md`. After it: my own check.
