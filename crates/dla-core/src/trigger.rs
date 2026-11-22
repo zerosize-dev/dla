@@ -745,7 +745,7 @@ pub fn line(view: &RunView, t: &Triggers, f: &Finding) -> String {
         }
         Trigger::Unchecked => {
             let rt = gate::finding_runtime(view, f);
-            let why = unchecked_because(view, rt.as_deref()).map_or_else(
+            let why = unchecked_because(view, rt.as_deref()).unwrap_or_else(
                 || {
                     let none = t.entry_runs_without_growth(&f.id);
                     if let Some((h, _, v)) = none
@@ -767,7 +767,6 @@ pub fn line(view: &RunView, t: &Triggers, f: &Finding) -> String {
                         "no harness series that grew is tied to it".to_owned()
                     }
                 },
-                |w| w,
             );
             format!("not checked ({why})")
         }

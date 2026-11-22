@@ -386,6 +386,7 @@ fn entry_points_and_no_harness_refuse_the_closes_that_say_nothing_ran() {
     assert!(
         fix.contains("dla harness gen --lang jvm")
             && fix.contains("intake.workload")
+            && fix.contains("--runtime jvm (that closes the queue of jvm only)")
             && fix.contains("ask the user"),
         "{fix}"
     );
@@ -512,7 +513,8 @@ fn zero_exercised_after_iterations_is_a_gate_item_with_an_escape() {
         fix.contains("fill the DLA-HOOK bodies of H1")
             && fix.contains("dla harness run H1")
             && !fix.contains("harness gen")
-            && fix.contains("intake.workload --status unresolved --reason not_exercised --remedy"),
+            && fix.contains("intake.workload --status unresolved --reason not_exercised --remedy")
+            && fix.contains("--runtime jvm (that closes the queue of jvm only)"),
         "{fix}"
     );
     // H1 is a command harness (no hooks): the step makes a driver and names the one it
@@ -621,7 +623,8 @@ fn time_budget_closes_with_time_left_are_listed_until_reclosed() {
     );
     assert!(
         fix.contains("dla ledger test F1 --evidence")
-            && fix.contains("intake.workload --status unresolved"),
+            && fix.contains("intake.workload --status unresolved")
+            && fix.contains("--runtime <runtime of the finding> (that closes the queue of"),
         "{fix}"
     );
     // The escape: the workload item records that nothing can be measured.
@@ -901,6 +904,32 @@ fn a_recorded_workload_blocker_replaces_the_step_in_the_warning() {
 }
 
 #[test]
+fn a_blocker_that_names_the_runtime_is_named_in_the_warning() {
+    let r = scene();
+    coverage(&r, 10, 0, None, 0);
+    r.ok(&[
+        "ledger",
+        "resolve",
+        "intake.workload",
+        "--status",
+        "unresolved",
+        "--reason",
+        "env_unavailable",
+        "--remedy",
+        "the service needs a database.",
+        "--runtime",
+        "jvm",
+    ]);
+    let w = warning(&r);
+    assert!(
+        w.contains(
+            "Blocked: intake.workload records env_unavailable for jvm: the service needs a database."
+        ) && !w.contains("To measure"),
+        "{w}"
+    );
+}
+
+#[test]
 fn a_harness_whose_build_failed_is_not_answered_with_another_driver() {
     let r = scene();
     r.close("F1", "not_exercised");
@@ -1022,7 +1051,11 @@ fn an_older_hook_driver_that_never_built_does_not_hide_a_newer_one_that_ran() {
     ran_attempt(&j, "H2");
     let fix = j.items("coverage_contradiction")[0].2.clone();
     assert!(
-        fix.contains("harness H1 did not build") && !fix.contains("fill the DLA-HOOK bodies"),
+        fix.contains("harness H1 did not build")
+            && fix.contains(
+                "--reason build_fails --remedy \"<what breaks the build>\" --runtime jvm"
+            )
+            && !fix.contains("fill the DLA-HOOK bodies"),
         "{fix}"
     );
 }
@@ -1315,6 +1348,9 @@ fn a_harness_that_never_built_refuses_the_closes_and_names_the_build_step() {
                 && text.contains("fix the build error that `dla harness run H1` prints")
                 && text.contains(
                     "--reason <env_unavailable|tool_missing|build_fails|privilege_declined>"
+                )
+                && text.contains(
+                    "--runtime jvm (that closes the queue of jvm only; it is refused when a harness of jvm wrote a series)"
                 ),
             "{reason}: {text}"
         );

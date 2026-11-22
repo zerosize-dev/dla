@@ -386,6 +386,7 @@ fn the_references_state_the_loop_the_final_items_and_the_closing_message() {
                 "`budget_left_unrevisited`",
                 "`next_command`",
                 "reads as non-leak:",
+                "--runtime <rt>`; it closes the queue of that runtime only",
             ],
         ),
         (
@@ -406,6 +407,8 @@ fn the_references_state_the_loop_the_final_items_and_the_closing_message() {
                 "## Tempting moves",
                 "should I continue?",
                 "`budget_left_unrevisited`",
+                "The blocker names one runtime and closes the queue of that runtime only",
+                "`workload-ran`",
             ],
         ),
         (
@@ -423,6 +426,7 @@ fn the_references_state_the_loop_the_final_items_and_the_closing_message() {
             &worker,
             vec![
                 "Measure before you close",
+                "(with `--runtime <runtime>`, your runtime)",
                 "`harness-not-generated`",
                 "each stage section as you reach it",
             ],
@@ -530,5 +534,33 @@ fn the_measurement_queue_loop_is_in_the_checklist_and_the_rules_and_nothing_clos
         "`not_loaded`",
     ] {
         assert!(worker.contains(want), "worker.md lacks {want:?}");
+    }
+}
+
+#[test]
+fn every_text_that_offers_the_workload_blocker_names_the_runtime() {
+    // The blocker closes the queue of one runtime; the agent must say which.
+    let read = |p: &str| fs::read_to_string(root().join(p)).unwrap();
+    for (name, text) in [
+        ("SKILL.md", skill()),
+        (
+            "references/stages.md",
+            read("skills/detect-leak-anywhere/references/stages.md"),
+        ),
+        (
+            "references/recovery.md",
+            read("skills/detect-leak-anywhere/references/recovery.md"),
+        ),
+        ("agents/worker.md", read("agents/worker.md")),
+    ] {
+        assert!(
+            text.contains("intake.workload") && text.contains("--runtime <"),
+            "{name} offers the blocker without --runtime"
+        );
+        assert!(
+            !text.contains("closes the runtime's queue")
+                && !text.contains("closes the queue of the runtime"),
+            "{name} says the blocker closes every queue of the runtime"
+        );
     }
 }

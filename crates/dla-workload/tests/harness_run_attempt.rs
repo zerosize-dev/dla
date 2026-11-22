@@ -269,6 +269,14 @@ fn a_failing_junit_repeat_harness_does_not_send_the_caller_to_hooks() {
     assert!(err.fix.contains("tail of the logs"), "{}", err.fix);
     assert!(err.fix.contains("env_unavailable"), "{}", err.fix);
     assert!(err.fix.contains("intake.workload"), "{}", err.fix);
+    assert!(
+        err.fix.contains(&format!(
+            "--runtime {} (that closes the queue of",
+            m.runtime.as_str()
+        )),
+        "{}",
+        err.fix
+    );
 
     // A harness that is not a JUnit repeat keeps the hooks wording.
     let dir = tempfile::tempdir().unwrap();

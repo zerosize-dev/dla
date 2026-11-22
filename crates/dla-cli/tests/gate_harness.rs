@@ -295,11 +295,19 @@ fn an_unrun_harness_refuses_the_covered_reasons_and_the_final_gate_lists_it() {
             && msg.contains("budget minutes remain"),
         "{msg}"
     );
+    assert!(
+        e["missing"]
+            .as_str()
+            .unwrap()
+            .contains("blocker recorded on intake.workload with --runtime jvm"),
+        "{e}"
+    );
     let fix = e["fix"].as_str().unwrap();
     assert!(
         fix.contains("dla harness run H1")
             && fix.contains("--junit")
             && fix.contains("intake.workload")
+            && fix.contains("--runtime jvm (that closes the queue of jvm only")
             && fix.contains("ask the user"),
         "{fix}"
     );
@@ -483,6 +491,43 @@ fn a_blocker_on_intake_workload_after_generation_clears_the_rule() {
         assert_eq!(r.close(None, "no_harness"), None, "{reason}");
         assert!(r.not_run(None).is_empty(), "{reason}");
     }
+}
+
+/// Writes the blocker straight into the ledger, for `runtime` (no CLI check of the name).
+fn write_blocker(r: &Run, runtime: Option<&str>) {
+    let mut l = Ledger::load(&r.run_dir()).unwrap();
+    l.answer_checklist(dla_core::ChecklistAnswer {
+        item: "intake.workload".into(),
+        status: dla_core::AnswerStatus::Unresolved,
+        evidence: vec![],
+        note: None,
+        reason: Some(dla_core::UnresolvedReason::EnvUnavailable),
+        remedy: Some("H1 needs a running Arango".into()),
+        runtime: runtime.map(String::from),
+    })
+    .unwrap();
+}
+
+#[test]
+fn a_blocker_that_names_another_runtime_does_not_clear_the_rule() {
+    let r = scene(Runtime::Jvm, None);
+    write_blocker(&r, Some("native"));
+    assert_eq!(
+        r.close(None, "no_harness").as_deref(),
+        Some("harness-not-run")
+    );
+    // The same answer for the runtime of the harness clears it.
+    write_blocker(&r, Some("jvm"));
+    assert_eq!(r.close(None, "no_harness"), None);
+    assert!(r.not_run(None).is_empty());
+}
+
+#[test]
+fn a_blocker_that_names_no_runtime_clears_the_rule_for_every_runtime() {
+    let r = scene(Runtime::Jvm, None);
+    write_blocker(&r, None);
+    assert_eq!(r.close(None, "no_harness"), None);
+    assert!(r.not_run(None).is_empty());
 }
 
 #[test]

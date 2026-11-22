@@ -215,6 +215,29 @@ fn a_blocker_for_a_runtime_with_a_series_is_refused_and_one_for_the_other_is_acc
     ]);
     assert_eq!(v["ok"], true);
     let st = r.ok(&["run", "status"]);
+    // The refusal to close a pending python candidate says the blocker is per runtime.
+    let f = st["queue"]["python"]["next"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (code, v) = r.run(&[
+        "ledger",
+        "resolve",
+        &f,
+        "--as",
+        "unresolved",
+        "--reason",
+        "not_exercised",
+        "--remedy",
+        "x",
+    ]);
+    assert_ne!(code, 0, "{v}");
+    assert_eq!(v["error"]["code"], "target-pending", "{v}");
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(
+        fix.contains("--remedy \"<text>\" --runtime python (that closes the queue of python only; the queues of other runtimes stay open)"),
+        "{fix}"
+    );
     assert_eq!(st["queue"]["native"]["closed"], "blocked", "{st}");
     assert_eq!(st["queue"]["native"]["open"], false, "{st}");
     assert_eq!(st["queue"]["python"]["open"], true, "{st}");

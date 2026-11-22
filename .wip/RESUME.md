@@ -1010,3 +1010,6 @@ flat test-loop readings get only 9 second looks.
 - CI on main 29cb6f6: 14 of 15 jobs green at 13:34, dynamic acceptance still running; waiter
   writes u71/ci-wait.out. Release 0.9.0-preview.4 not dispatched yet.
 - Disk: deleted /root/dla-real/pillow-1 (evidence kept in u36/pillow-1) and u70/bin.
+- 14:17 UTC: v0.9.0-preview.4 PUBLISHED (pre-release, target 29cb6f6, release run 45031474805
+  green, 5 platform archives + checksums + SHA256SUMS). CI on 29cb6f6: run 45023802129 green,
+  all 15 jobs. Task 74 done.
