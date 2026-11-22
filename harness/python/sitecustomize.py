@@ -153,7 +153,12 @@ def _start_coverage():
             rel = decided.get(filename)
             if rel is None:
                 real = os.path.realpath(filename) if not filename.startswith("<") else ""
-                rel = os.path.relpath(real, root) if real.startswith(prefix) else ""
+                if real.startswith(prefix):
+                    rel = os.path.relpath(real, root)
+                else:
+                    # A package installed in editable mode runs from the source tree.
+                    rel = _source_rel(filename) or ""
+                    rel = rel.replace("/", os.sep)
                 decided[filename] = rel
             if rel:
                 module = rel[:-3] if rel.endswith(".py") else rel

@@ -21,7 +21,7 @@ The agent chain-imports the next `sitecustomize` found on `sys.path` (the projec
 system's), skips `pip`/`venv`/`ensurepip`/`build` runs, starts tracemalloc (`DLA_TRACEMALLOC_FRAMES` frames: 10 when `--capture alloc` or `nonheap` is asked for, else 1, in command and driver mode alike: see "Allocation sites" for the depth) and, on
 3.12+, a `sys.monitoring` `PY_START` collector (each code object disables itself after its first
 event). Coverage items look like `reports.builder:ReportBuilder.render@reports/builder.py:18`
-and cover only files under `DLA_PROJECT`.
+and cover only files under `DLA_PROJECT`, plus files under `DLA_SOURCE_ROOT` (a package installed in editable mode runs from there), named by their path relative to it.
 
 ## What the dump records
 
