@@ -137,6 +137,8 @@ struct Run {
     fresh: bool,
     verdicts: BTreeMap<FindingId, Verdict>,
     declared: BTreeSet<FindingId>,
+    /// The harness is a test loop (the project's own JUnit tests in a loop).
+    test_loop: bool,
     /// The simple names of the test classes a test-loop harness chose, by finding.
     tests: BTreeMap<FindingId, Vec<String>>,
 }
@@ -239,6 +241,7 @@ impl Triggers {
                     })
                     .unwrap_or_default(),
                 declared: m.targets.iter().cloned().collect(),
+                test_loop: m.is_test_loop(),
                 tests: if m.is_test_loop() {
                     m.targets
                         .iter()
@@ -347,6 +350,20 @@ impl Triggers {
             .collect();
         v.sort_by_key(|r| r.verdict != Some(Verdict::Grew));
         v
+    }
+
+    /// The test-loop harnesses that targeted `id` and in whose read trend it grew, each once,
+    /// in series order.
+    pub fn test_loop_harnesses(&self, id: &FindingId) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for r in self.runs.iter().filter(|r| {
+            r.test_loop && r.declared.contains(id) && r.verdicts.get(id) == Some(&Verdict::Grew)
+        }) {
+            if !out.contains(&r.harness) {
+                out.push(r.harness.clone());
+            }
+        }
+        out
     }
 
     /// The first writer function an entry-path harness named for `id`.

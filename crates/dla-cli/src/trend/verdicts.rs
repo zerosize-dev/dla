@@ -275,7 +275,22 @@ fn one(inp: &Inputs<'_>, m: &HarnessManifest, f: &FindingId) -> TargetVerdict {
             dla_core::harness::ProbeTarget::JvmStatic { class, field } => {
                 format!("{class}.{field}")
             }
-            dla_core::harness::ProbeTarget::JvmClass { class } => class.clone(),
+            dla_core::harness::ProbeTarget::JvmClass { class } => {
+                // The agent says `class not loaded: <class>` (the class as the probe spells it)
+                // for a class that is not loaded, and nothing for a class that is loaded but has
+                // no static field of reference type: an instance-field holder. No such limitation
+                // means the class loaded, so the code ran or did not by coverage, not by this probe.
+                let said = format!("class not loaded: {class}");
+                if !inp.series.limitations.iter().any(|l| l.ends_with(&said)) {
+                    let mut v = coverage_verdict(inp, f);
+                    v.detail = format!(
+                        "the probe read no static field of {class}: the holder is not a static field, so its size is not measured; {}",
+                        v.detail
+                    );
+                    return v;
+                }
+                class.clone()
+            }
             dla_core::harness::ProbeTarget::GoVar { package_dir, name } => {
                 format!("{package_dir}.{name}")
             }
@@ -652,11 +667,23 @@ mod tests {
         s: &Scene,
         m: &HarnessManifest,
         cols: Vec<Col>,
-        mut matcher_fill: impl FnMut(&mut Vec<ColumnTrend>),
+        matcher_fill: impl FnMut(&mut Vec<ColumnTrend>),
         too_short: Option<(usize, usize)>,
     ) -> Vec<TargetVerdict> {
+        verdicts_lim(s, m, cols, matcher_fill, too_short, &[])
+    }
+
+    fn verdicts_lim(
+        s: &Scene,
+        m: &HarnessManifest,
+        cols: Vec<Col>,
+        mut matcher_fill: impl FnMut(&mut Vec<ColumnTrend>),
+        too_short: Option<(usize, usize)>,
+        limitations: &[&str],
+    ) -> Vec<TargetVerdict> {
         m.save(s.dir.path()).unwrap();
-        let file = series("S1", 1, cols);
+        let mut file = series("S1", 1, cols);
+        file.limitations = limitations.iter().map(|l| (*l).to_owned()).collect();
         let mut analysed = analyze_series(
             &file,
             &(0..file.columns.len()).collect::<Vec<_>>(),
@@ -993,5 +1020,85 @@ mod tests {
         );
         let v = verdicts(&s2, &m, vec![Col::gauge("os.rss", &[5.0; 9])], |_| {});
         assert_eq!(v[0].verdict, Verdict::Executed, "{v:?}");
+    }
+
+    /// A JVM scene: finding F3 at `Cart.java` (package `shop`), a `jvm-class` probe for
+    /// `shop.Cart`, and the coverage record of the run.
+    fn jvm_scene(classes: serde_json::Value) -> (Scene, HarnessManifest) {
+        let s = scene();
+        fs::write(
+            s.dir.path().join("Cart.java"),
+            "package shop;\nclass Cart {}\n",
+        )
+        .unwrap();
+        let mut l = s.ledger.clone();
+        let mut nf = NewFinding::new(Origin::parse("census").unwrap(), vec![EvidenceId::new(1)]);
+        nf.site = Some("Cart.java:2".into());
+        l.add_finding(nf).unwrap();
+        let s2 = Scene {
+            dir: s.dir,
+            ledger: l,
+        };
+        write_run(
+            &s2,
+            json!({"kind": "classes", "classes": classes, "sources": []}),
+        );
+        let m = manifest(
+            json!([{"id": "P1", "finding": "F3", "site": "Cart.java:2",
+                    "target": {"kind": "jvm-class", "class": "shop.Cart"}}]),
+            &["F3"],
+        );
+        (s2, m)
+    }
+
+    #[test]
+    fn a_jvm_class_probe_with_no_column_and_no_unloaded_limitation_gives_the_coverage_verdict() {
+        let cols = || vec![Col::gauge("os.rss", &[5.0; 9])];
+        // The class loaded (the coverage lists it) and the probe had no static field to read.
+        let (s, m) = jvm_scene(json!(["shop.Cart"]));
+        let v = verdicts_lim(&s, &m, cols(), |_| {}, None, &[]);
+        assert_eq!(v[0].verdict, Verdict::Executed, "{v:?}");
+        assert!(
+            v[0].detail.starts_with(
+                "the probe read no static field of shop.Cart: the holder is not a static field, so its size is not measured; "
+            ),
+            "{}",
+            v[0].detail
+        );
+        assert!(
+            v[0].detail.contains("class shop.Cart was loaded"),
+            "{}",
+            v[0].detail
+        );
+        // Another limitation, about another class, does not say this one is not loaded.
+        let other = "probe shop.Cartel: class not loaded: shop.Cartel";
+        let v = verdicts_lim(&s, &m, cols(), |_| {}, None, &[other]);
+        assert_eq!(v[0].verdict, Verdict::Executed, "{v:?}");
+        // The class did not load by coverage either: not_executed, still not not_loaded.
+        let (s, m) = jvm_scene(json!(["shop.Other"]));
+        let v = verdicts_lim(&s, &m, cols(), |_| {}, None, &[]);
+        assert_eq!(v[0].verdict, Verdict::NotExecuted, "{v:?}");
+        assert!(
+            v[0].detail
+                .starts_with("the probe read no static field of shop.Cart"),
+            "{}",
+            v[0].detail
+        );
+    }
+
+    #[test]
+    fn a_jvm_class_probe_whose_class_the_agent_says_is_not_loaded_stays_not_loaded() {
+        let (s, m) = jvm_scene(json!(["shop.Cart"]));
+        let said = "probe shop.Cart: class not loaded: shop.Cart";
+        let v = verdicts_lim(
+            &s,
+            &m,
+            vec![Col::gauge("os.rss", &[5.0; 9])],
+            |_| {},
+            None,
+            &[said],
+        );
+        assert_eq!(v[0].verdict, Verdict::NotLoaded, "{v:?}");
+        assert!(v[0].detail.contains("shop.Cart"), "{}", v[0].detail);
     }
 }

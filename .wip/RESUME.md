@@ -874,3 +874,7 @@ flat test-loop readings get only 9 second looks.
   verifier on the replayed evidence <sp>/u67/proj (bundle F160 and, as a control, F436), 3 runs each.
 - CI on 55f31eb (run 44993841579): 14 of 15 green at 07:43, dynamic acceptance still running
   (waiter writes u66/ci-wait.out). When green: commit-snapshot-tree.sh 55f31eb... commit-message-6.txt.
+- CI on 55f31eb green, all 15 jobs (run 44993841579). Committed its tree to main as b4b9a42
+  ("The project's own tests are the first pass of a JVM queue"), pushed main and
+  main:dev/wonderful-mccarthy-algc5s; no trailers, no .wip. The working tree now holds only the
+  brief-U builder's edits (unverified).

@@ -611,3 +611,93 @@ fn with_the_queue_off_the_trigger_is_not_asked_and_the_report_says_so() {
         "harness", "gen", "--lang", "python", "--driver", "--entry", &cache,
     ]);
 }
+
+/// The manifest of `h` turned into a test loop (the tool a JUnit repeat lists), with the
+/// `tests.json` that names a class for `cache` and another for `table`, and one for both.
+fn make_test_loop(r: &Run, h: &str, cache: &str, table: &str) {
+    let dir = r.run_dir.join("harness").join(h);
+    let p = dir.join("harness.json");
+    let mut m: Value = serde_json::from_str(&fs::read_to_string(&p).unwrap()).unwrap();
+    m["tools"] = json!(["junit-platform-launcher"]);
+    fs::write(&p, m.to_string()).unwrap();
+    let doc = json!({"classes": [
+        {"class": "org.acme.other.OtherUnitTests", "file": "src/test/java/org/acme/other/OtherUnitTests.java",
+         "tests": 3, "for": [{"by": "name", "finding": table}]},
+        {"class": "org.acme.router.RouterUnitTests", "file": "src/test/java/org/acme/router/RouterUnitTests.java",
+         "tests": 7, "for": [{"by": "name", "finding": cache}]},
+        {"class": "org.acme.router.KRouterUnitTests", "file": "src/test/kotlin/org/acme/router/KRouterUnitTests.kt",
+         "tests": 4, "for": [{"by": "mention", "finding": cache}, {"by": "name", "finding": table}]},
+    ]});
+    fs::write(dir.join("tests.json"), doc.to_string()).unwrap();
+}
+
+#[test]
+fn the_bundle_and_the_trigger_of_a_test_loop_finding_name_the_tests_chosen_for_it() {
+    let r = Run::new(&["--budget", "3h", "--queue", "off"]);
+    let (cache, table) = (r.id_at("app/router.py:11"), r.id_at("app/sessions.py:1"));
+    let g = r.ok(&[
+        "harness", "gen", "--lang", "python", "--driver", "--probe", &cache, "--probe", &table,
+    ]);
+    let workload = g["evidence"][0].as_str().unwrap().to_owned();
+    r.fill("H1", CACHE_SETUP, DIRECT_UNIT);
+    r.ok(&["harness", "run", "H1", "--mode", "both"]);
+    let t = r.ok(&["trend", "S1"]);
+    let growth = t["evidence"].as_array().unwrap().clone();
+    r.confirm(&cache, &workload, &growth);
+    // Before the harness is a test loop, the bundle has no `test-loop/`.
+    let b = r.ok(&["bundle", &cache]);
+    let dir = r.dir.path().join(b["dir"].as_str().unwrap());
+    assert!(!dir.join("test-loop").exists());
+    let index: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("index.json")).unwrap()).unwrap();
+    assert!(index.get("test_loop").is_none(), "{index}");
+
+    make_test_loop(&r, "H1", &cache, &table);
+    let b = r.ok(&["bundle", &cache]);
+    let dir = r.dir.path().join(b["dir"].as_str().unwrap());
+    let doc: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("test-loop/H1/tests.json")).unwrap())
+            .unwrap();
+    assert_eq!(doc["harness"], "H1", "{doc}");
+    let classes: Vec<(&str, &str)> = doc["classes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| (c["class"].as_str().unwrap(), c["by"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        classes,
+        [
+            ("org.acme.router.RouterUnitTests", "name"),
+            ("org.acme.router.KRouterUnitTests", "mention")
+        ],
+        "{doc}"
+    );
+    assert_eq!(doc["classes"][0]["tests"], 7, "{doc}");
+    assert_eq!(
+        doc["classes"][0]["file"],
+        "src/test/java/org/acme/router/RouterUnitTests.java"
+    );
+    assert!(doc["note"].as_str().unwrap().contains("own tests"), "{doc}");
+    let text = fs::read_to_string(dir.join("test-loop/H1/tests.json")).unwrap();
+    assert!(!text.contains("OtherUnitTests"), "{text}");
+    let index: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("index.json")).unwrap()).unwrap();
+    assert_eq!(index["test_loop"][0]["harness"], "H1", "{index}");
+    assert_eq!(
+        index["test_loop"][0]["files"][0], "test-loop/H1/tests.json",
+        "{index}"
+    );
+    // The file is part of the manifest.
+    let manifest = fs::read_to_string(dir.join("manifest.json")).unwrap();
+    assert!(manifest.contains("test-loop/H1/tests.json"), "{manifest}");
+
+    // The trigger names the classes chosen for the finding, not the workload.
+    let md = r.report();
+    assert!(
+        md.contains(
+            "reproduced through the public API in H1 (varies: the project's own tests RouterUnitTests, KRouterUnitTests)"
+        ),
+        "{md}"
+    );
+}

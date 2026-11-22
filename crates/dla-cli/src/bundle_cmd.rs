@@ -719,6 +719,49 @@ fn entry_path_files(
     Ok(out)
 }
 
+/// At most this many test-loop harnesses go into a bundle.
+const MAX_TEST_LOOP_HARNESSES: usize = 2;
+
+/// `test-loop/<H>/tests.json` for each test-loop harness that targeted the finding and in whose
+/// trend it grew: the test classes chosen for this finding only (never the other classes of the
+/// batch), so the verifier can read the project's own tests as callers. A finding with no such
+/// harness gets nothing.
+fn test_loop_files(
+    tc: &ToolCtx,
+    id: &FindingId,
+    needles: &Needles,
+    write: &dyn Fn(&str, &[u8]) -> Written,
+) -> Result<Vec<Value>, Failure> {
+    let Ok(view) = dla_core::RunView::load(&tc.run_dir) else {
+        return Ok(Vec::new());
+    };
+    let triggers = dla_core::trigger::Triggers::of(&view);
+    let mut out = Vec::new();
+    for h in triggers
+        .test_loop_harnesses(id)
+        .into_iter()
+        .take(MAX_TEST_LOOP_HARNESSES)
+    {
+        let chosen = dla_core::testloop::chosen_for(&tc.run_dir, &h, id);
+        if chosen.is_empty() {
+            continue;
+        }
+        let mut doc = json!({
+            "harness": h,
+            "classes": chosen
+                .iter()
+                .map(|c| json!({"class": c.class, "file": c.file, "tests": c.tests, "by": c.by}))
+                .collect::<Vec<_>>(),
+            "note": "the project's own tests that ran in a loop while the holder grew",
+        });
+        scrub_ties(&mut doc, needles, false);
+        let name = format!("test-loop/{h}/tests.json");
+        write(&name, to_pretty_json(&doc).as_bytes())?;
+        out.push(json!({"harness": h, "files": [name]}));
+    }
+    Ok(out)
+}
+
 fn build(
     tc: &ToolCtx,
     ledger: &dla_core::Ledger,
@@ -822,6 +865,10 @@ fn build(
     let entry = entry_path_files(tc, id, &needles, &write)?;
     if !entry.is_empty() {
         index["entry_path"] = Value::Array(entry);
+    }
+    let tests = test_loop_files(tc, id, &needles, &write)?;
+    if !tests.is_empty() {
+        index["test_loop"] = Value::Array(tests);
     }
     if let Some(o) = owner {
         index["owner"] = json!(o);

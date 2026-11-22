@@ -22,6 +22,8 @@ enum Kind {
     Entry,
     /// The project's own workload: a fixed command.
     Command,
+    /// The project's own JUnit tests in a loop (no hooks).
+    TestLoop,
 }
 
 fn evidence() -> NewEvidence {
@@ -77,6 +79,10 @@ impl Run {
         });
         if matches!(kind, Kind::Entry) {
             text["purpose"] = json!("entry-path");
+        }
+        if matches!(kind, Kind::TestLoop) {
+            text["tools"] = json!(["junit-platform-launcher"]);
+            text["workload"] = json!("W2");
         }
         if matches!(kind, Kind::Command) {
             text["workload"] = json!("W2");
@@ -180,6 +186,82 @@ fn a_harness_that_runs_the_projects_own_workload_reproduces_it() {
             varies: "the project's workload W2".into()
         }
     );
+}
+
+/// Writes `harness/<h>/tests.json` with one class per `(class, findings)`.
+fn tests_json(run: &Run, h: &str, classes: &[(&str, &[u32])]) {
+    let doc = json!({"classes": classes.iter().map(|(c, ids)| json!({
+        "class": c, "file": "src/test/X.java", "tests": 3,
+        "for": ids.iter().map(|n| json!({"by": "name", "finding": format!("F{n}")})).collect::<Vec<_>>(),
+    })).collect::<Vec<_>>()});
+    std::fs::write(
+        run.dir.path().join("harness").join(h).join("tests.json"),
+        doc.to_string(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_test_loop_trigger_names_the_test_classes_chosen_for_the_finding() {
+    let run = Run::new(3);
+    run.harness("H1", Kind::TestLoop, &[1, 2, 3]);
+    tests_json(
+        &run,
+        "H1",
+        &[
+            ("org.acme.a.FooUnitTests", &[1, 2]),
+            ("org.acme.b.BarUnitTests", &[2]),
+            ("org.acme.c.BazUnitTests", &[3]),
+        ],
+    );
+    run.run(
+        "S1",
+        "H1",
+        "aa",
+        None,
+        Some(&[(1, Verdict::Grew), (2, Verdict::Grew), (3, Verdict::Grew)]),
+    );
+    let t = run.triggers();
+    let varies = |n| match t.trigger(&f(n)) {
+        Trigger::Reproduced { varies, .. } => varies,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(varies(1), "the project's own tests FooUnitTests");
+    assert_eq!(
+        varies(2),
+        "the project's own tests FooUnitTests, BarUnitTests"
+    );
+    assert_eq!(varies(3), "the project's own tests BazUnitTests");
+    assert_eq!(t.test_loop_harnesses(&f(1)), ["H1"]);
+    // A finding that did not grow there, or a harness that is not a test loop, is not listed.
+    run.harness("H2", Kind::TestLoop, &[1]);
+    run.run("S2", "H2", "bb", None, Some(&[(1, Verdict::Constant)]));
+    run.harness("H3", Kind::Command, &[1]);
+    run.run("S3", "H3", "cc", None, Some(&[(1, Verdict::Grew)]));
+    assert_eq!(run.triggers().test_loop_harnesses(&f(1)), ["H1"]);
+}
+
+#[test]
+fn a_test_loop_trigger_without_a_class_for_the_finding_keeps_the_workload_text() {
+    let run = Run::new(2);
+    run.harness("H1", Kind::TestLoop, &[1, 2]);
+    // No tests.json for F1; one that names only F1 for F2.
+    run.run(
+        "S1",
+        "H1",
+        "aa",
+        None,
+        Some(&[(1, Verdict::Grew), (2, Verdict::Grew)]),
+    );
+    let w = |t: &Triggers, n| match t.trigger(&f(n)) {
+        Trigger::Reproduced { varies, .. } => varies,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(w(&run.triggers(), 1), "the project's workload W2");
+    tests_json(&run, "H1", &[("org.acme.a.FooUnitTests", &[1])]);
+    let t = run.triggers();
+    assert_eq!(w(&t, 1), "the project's own tests FooUnitTests");
+    assert_eq!(w(&t, 2), "the project's workload W2");
 }
 
 #[test]

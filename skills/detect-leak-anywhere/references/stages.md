@@ -556,7 +556,9 @@ Verification is not limited to runs with workers. Once the leak-side findings ar
 `dla ledger merge` when there are workers), for each confirmed finding `F3`: `dla bundle F3`, then one
 `dla:verifier` subagent given only the bundle directory, the run id, `F3` and the manifest sha256. The
 bundle holds raw evidence and up to four code excerpts around frames that the evidence names; it does not
-hold the site, the hypothesis, the label or the explanation. The verifier states a site, holder and
+hold the site, the hypothesis, the label or the explanation. The bundle of a finding that grew in the test loop
+also carries `test-loop/<H>/tests.json`: the test classes chosen for that finding, which the verifier reads as
+callers. The verifier states a site, holder and
 mechanism in words, decides from them whether the owner would call this a defect, picks an ID or
 UNCLASSIFIED and runs `dla ledger verify`. A verifier that reads the finding as bounded, intended or
 proportional to load records the matching `N-*` ID; the ledger accepts it, the label disagrees and the open

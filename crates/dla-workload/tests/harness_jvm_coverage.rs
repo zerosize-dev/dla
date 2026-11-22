@@ -534,3 +534,33 @@ fn a_probe_never_loads_a_class_into_the_coverage() {
     let text = last["probes"].to_string();
     assert!(text.contains("class not loaded: zz.shop.Never"), "{text}");
 }
+
+#[test]
+fn a_class_probe_of_a_loaded_class_without_a_static_field_says_nothing_about_loading() {
+    if !have_jdk() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    let probes = dir.path().join("probes.json");
+    // `Other` is loaded and has no static field of reference type (its holder, if any, is an
+    // instance field); `Never` is not loaded. `dla trend` reads the absence of the unloaded
+    // limitation as "the class loaded".
+    fs::write(
+        &probes,
+        r#"{"probes":[{"id":"P1","target":{"kind":"jvm-class","class":"zz.shop.Other"}},{"id":"P2","target":{"kind":"jvm-class","class":"zz.shop.Never"}}]}"#,
+    )
+    .unwrap();
+    let recs = run_driver_cut(dir.path(), &root, None, false, Some(&probes));
+    let last = &recs[3].1;
+    let items: Vec<&str> = last["coverage"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(items.contains(&"zz.shop.Other"), "{items:?}");
+    let text = last["probes"].to_string();
+    assert!(text.contains("class not loaded: zz.shop.Never"), "{text}");
+    assert!(!text.contains("zz.shop.Other"), "{text}");
+}

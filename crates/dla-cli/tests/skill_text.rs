@@ -381,6 +381,7 @@ fn the_references_state_the_loop_the_final_items_and_the_closing_message() {
                 "no fixed number of rounds",
                 "`harness-not-generated`",
                 "`coverage_contradiction`",
+                "`test-loop/<H>/tests.json`",
                 "`budget_left_unrevisited`",
                 "`next_command`",
                 "reads as non-leak:",
@@ -431,6 +432,8 @@ fn the_references_state_the_loop_the_final_items_and_the_closing_message() {
                 "whether the owner would call this a defect",
                 "reads as non-leak:",
                 "DISAGREES: reads as non-leak",
+                "`test-loop/` directory",
+                "compared by identity",
             ],
         ),
     ] {
