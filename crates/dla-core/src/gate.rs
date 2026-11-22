@@ -1098,6 +1098,21 @@ fn covered_by_open_item(view: &RunView, t: &TrendReport, c: &ColumnTrend) -> boo
     })
 }
 
+/// The columns with the allocation-site columns put in order of their Sen slope, the larger
+/// first, in the places the site columns already hold: the items for the lines that grow most
+/// come first, and the other columns keep their order and their place.
+fn site_columns_largest_first(mut cols: Vec<&ColumnTrend>) -> Vec<&ColumnTrend> {
+    let slots: Vec<usize> = (0..cols.len())
+        .filter(|&i| crate::grown::is_alloc_site_column(&cols[i].name))
+        .collect();
+    let mut sites: Vec<&ColumnTrend> = slots.iter().map(|&i| cols[i]).collect();
+    sites.sort_by(|a, b| a.larger_slope_first(b));
+    for (slot, c) in slots.into_iter().zip(sites) {
+        cols[slot] = c;
+    }
+    cols
+}
+
 fn classify(view: &RunView, is_final: bool, out: &mut Out) {
     if !probes_and_sweeps(view) {
         return;
@@ -1126,7 +1141,7 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
         if view.gap_series.contains(&t.series) {
             continue;
         }
-        for c in t.columns.iter().filter(|c| non_flat(c)) {
+        for c in site_columns_largest_first(t.columns.iter().filter(|c| non_flat(c)).collect()) {
             if is_whole_process(&c.name) {
                 // Never tied to a finding. The classify stage leaves it to the final gate,
                 // which takes the residual accounting, an open item, or, for the total of

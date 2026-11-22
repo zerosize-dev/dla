@@ -49,7 +49,7 @@ pub fn declared_first(passed: &mut [&ColumnTrend], declared: &[dla_core::Finding
 }
 
 /// The passing columns of `columns`, most important first: bound to a finding or a
-/// site, then by p-value (columns without a p last), then by name. A column in seconds
+/// site, then by p-value (columns without a p last), then by name; allocation-site columns that tie on those keys come with a finding at the line first, then largest Sen slope first. A column in seconds
 /// (`jvm.jit_seconds`, the compile time so far) counts runtime activity, not memory: it
 /// is cumulative, so it rises on every run, and never passes as growth.
 pub fn passing<'a>(columns: &[&'a ColumnTrend]) -> Vec<&'a ColumnTrend> {
@@ -70,7 +70,44 @@ pub fn passing<'a>(columns: &[&'a ColumnTrend]) -> Vec<&'a ColumnTrend> {
             .then(ka.1.total_cmp(&kb.1))
             .then_with(|| a.name.cmp(&b.name))
     });
+    larger_growth_first(&mut v);
     v
+}
+
+/// Within each run of columns that are equal on the keys before the name, puts the allocation-site
+/// columns in order (a column a finding is at first, then by Sen slope, the larger first) in the places the site columns already
+/// hold. The name keeps deciding between equal slopes, and the other columns do not move: slopes
+/// of different units are never compared.
+fn larger_growth_first(v: &mut [&ColumnTrend]) {
+    let key = |c: &ColumnTrend| {
+        (
+            !bound_to_something(c),
+            c.mk.map_or(f64::INFINITY, |m| m.p_increasing),
+        )
+    };
+    let mut start = 0;
+    while start < v.len() {
+        let k = key(v[start]);
+        let mut end = start + 1;
+        while end < v.len() && key(v[end]).0 == k.0 && key(v[end]).1.total_cmp(&k.1).is_eq() {
+            end += 1;
+        }
+        let slots: Vec<usize> = (start..end)
+            .filter(|&i| dla_core::grown::is_alloc_site_column(&v[i].name))
+            .collect();
+        let mut sites: Vec<&ColumnTrend> = slots.iter().map(|&i| v[i]).collect();
+        sites.sort_by(|a, b| {
+            a.candidates
+                .is_empty()
+                .cmp(&b.candidates.is_empty())
+                .then_with(|| a.larger_slope_first(b))
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        for (slot, c) in slots.into_iter().zip(sites) {
+            v[slot] = c;
+        }
+        start = end;
+    }
 }
 
 /// The declared targets of `verdicts` as the evidence carries them, the ones that measured
@@ -258,6 +295,42 @@ mod tests {
         assert_eq!(g.passed[0].column, "jvm.heap_used");
         assert_eq!(g.passed[0].site.as_deref(), Some("a.java:3"));
         assert!(g.truncated.is_none());
+    }
+
+    #[test]
+    fn site_columns_come_with_a_finding_first_then_largest_slope_first() {
+        // Five site columns with the same p value whose name order is the reverse of their slope
+        // order; the one at `c.py` (a middle slope) has a finding at its line. Two other
+        // columns pass and keep the places their names give them.
+        let mut cols = vec![Col::gauge("aa.heap", &rising(1e7, 1e6)).site("x.java:1")];
+        for (i, n) in ["a", "b", "c", "d", "e"].iter().enumerate() {
+            cols.push(
+                Col::counter(&format!("py.blocks@{n}.py:1"), &rising(10.0, 1.0 + i as f64))
+                    .site(&format!("{n}.py:1")),
+            );
+        }
+        cols.push(Col::gauge("zz.heap", &rising(1e7, 1e6)).site("x.java:2"));
+        let s = series("S1", 1, cols);
+        let mut t = analyze_series(&s, &[0, 1, 2, 3, 4, 5, 6], &GateThresholds::default());
+        for c in &mut t {
+            if c.name == "py.blocks@c.py:1" {
+                c.candidates = vec![FindingId::new(1)];
+            }
+        }
+        let refs: Vec<&ColumnTrend> = t.iter().collect();
+        let names: Vec<&str> = passing(&refs).iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "aa.heap",
+                "py.blocks@c.py:1",
+                "py.blocks@e.py:1",
+                "py.blocks@d.py:1",
+                "py.blocks@b.py:1",
+                "py.blocks@a.py:1",
+                "zz.heap",
+            ]
+        );
     }
 
     #[test]
