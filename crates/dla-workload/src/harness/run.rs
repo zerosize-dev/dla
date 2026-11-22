@@ -3330,6 +3330,26 @@ fn run_loaded(
         }
     }
     let out = run_points(ctx, &manifest, opts)?;
+    // A start-up agent the build step added to the loop's JVM (a mocking library that would
+    // otherwise attach to the running JVM): said once in the run output and in the manifest.
+    let startup_agent = fs::read_to_string(
+        harness_dir(&ctx.run_dir, &manifest.id)
+            .join(DRIVER)
+            .join("startup-agents.txt"),
+    )
+    .ok()
+    .and_then(|t| t.lines().next().map(str::trim).map(str::to_owned))
+    .filter(|l| !l.is_empty());
+    if let Some(agent) = &startup_agent {
+        let name = Path::new(agent)
+            .file_name()
+            .map_or_else(|| agent.clone(), |n| n.to_string_lossy().into_owned());
+        let tool = format!("startup-agent:{name}");
+        if !manifest.tools.contains(&tool) {
+            manifest.tools.push(tool);
+            manifest.save(&ctx.run_dir).map_err(|e| e.to_refusal())?;
+        }
+    }
     let partial = !out.partial.is_empty();
     let captured = !opts.capture.is_empty() || opts.tool.is_some();
     let mut commands = capture::summarize_commands(&out.captures, &|p| ctx.pointer(p), false);
@@ -3532,6 +3552,11 @@ fn run_loaded(
     {
         m.remove("points");
         m.remove("series");
+    }
+    if let Some(agent) = &startup_agent {
+        summary["startup_agent"] = json!(format!(
+            "{agent} is loaded as a start-up agent next to DLA's own, so the mocking library does not attach to the running JVM"
+        ));
     }
     // A driver whose units took choices from the key says how many combinations they took.
     if let Some(line) = out

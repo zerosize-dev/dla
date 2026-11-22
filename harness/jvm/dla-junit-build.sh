@@ -88,8 +88,44 @@ else
     printf '%s' "$cp" > "$d/cp.txt"
 fi
 
+# A mocking library that instruments classes attaches itself to the running JVM when it is not
+# loaded at start-up, which a hardened container or a sandbox refuses ("Could not self-attach to
+# current VM"). When the test class path holds a jar whose manifest names a Premain-Class
+# (mockito-core 5 and newer; else the byte-buddy-agent jar it is built on), that jar is added as a
+# start-up agent of the loop's JVM, next to DLA's own agent, and nothing has to attach.
+# The manifest of a jar: by unzip when it is installed, else by the JDK's own jar tool (it
+# extracts into a directory of the driver, which is removed again).
+manifest_of() {
+    if command -v unzip > /dev/null 2>&1; then
+        unzip -p "$1" META-INF/MANIFEST.MF 2> /dev/null || true
+    elif command -v jar > /dev/null 2>&1; then
+        mkdir -p "$d/manifest.tmp"
+        (cd "$d/manifest.tmp" && jar xf "$1" META-INF/MANIFEST.MF 2> /dev/null && cat META-INF/MANIFEST.MF) || true
+        rm -f "$d/manifest.tmp/META-INF/MANIFEST.MF"
+        rmdir "$d/manifest.tmp/META-INF" "$d/manifest.tmp" 2> /dev/null || true
+    fi
+}
+agent=""
+if [ "$mode" = test ]; then
+    for pat in 'mockito-core-[0-9]' 'byte-buddy-agent-[0-9]'; do
+        # The jar's file name after either kind of path separator (a Windows class path has `\`).
+        cand=$(printf '%s' "$cp" | tr "$sep" '\n' | grep -E "(^|[/\\\\])$pat[^/\\\\]*\.jar\$" | grep -v -e '-sources' -e '-javadoc' | head -n 1 || true)
+        if [ -n "$cand" ] && [ -f "$cand" ] && manifest_of "$cand" | tr -d '\r' | grep -q '^Premain-Class:'; then
+            agent=$cand
+            break
+        fi
+    done
+fi
+rm -f "$d/startup-agents.txt"
+
 mkdir -p "$d/classes"
 javac -proc:none -nowarn -cp "$cp$sep$jar" -d "$d/classes" "$src"
 full="$cp$sep$jar$sep$d/classes"
 escaped=$(printf '%s' "$full" | sed 's/\\/\\\\/g; s/"/\\"/g')
 printf -- '-cp\n"%s"\n' "$escaped" > "$d/run.args"
+if [ -n "$agent" ]; then
+    escaped_agent=$(printf '%s' "$agent" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    printf -- '"-javaagent:%s"\n' "$escaped_agent" >> "$d/run.args"
+    printf '%s\n' "$agent" > "$d/startup-agents.txt"
+    echo "DLA-BUILD start-up agent: $agent is loaded when the JVM starts, so the mocking library does not have to attach to the running JVM" >&2
+fi

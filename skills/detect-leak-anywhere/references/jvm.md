@@ -26,7 +26,13 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   one JVM (one unit = one run of the selection; defaults warm-up 1, rounds 8, step 2, timeout 1800 s),
   so a service whose tests take no iteration count is still measured. Run it with `dla harness run H<n>`;
   the first build resolves the test class path through Gradle or Maven (offline first, then online).
-  JUnit 4 and TestNG tests are refused. When the project's own tests start the application
+  JUnit 4 and TestNG tests are refused. A mocking library that instruments classes attaches itself to the
+  running JVM unless it is loaded at start-up, which a hardened container or sandbox refuses (`Could not
+  self-attach to current VM`, every unit fails): when the test class path holds `mockito-core` with a
+  `Premain-Class` entry (version 5 and newer), else `byte-buddy-agent`, the build step adds it as a
+  `-javaagent` of the loop's JVM next to DLA's own agent; the run output says so (`startup_agent`) and
+  the manifest lists it in `tools` (`startup-agent:<jar>`). Pick the test classes that exercise the
+  target by name and by import (`--tests`), with `--probe F` for the finding. When the project's own tests start the application
   (`@SpringBootTest`), use `--junit` with such an integration test: it is one JVM and the Spring test
   context cache keeps the context across repetitions, so growth comes from the code under test;
   `@DirtiesContext` rebuilds the context every repetition. If the services the test needs (database,

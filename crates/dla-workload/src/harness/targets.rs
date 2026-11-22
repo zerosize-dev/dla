@@ -69,6 +69,9 @@ pub struct Target {
     pub probe: Option<String>,
     /// One line of instruction by holder kind.
     pub instruction: String,
+    /// One line when the key of the holder is the object a caller passes: what makes a
+    /// fresh one in the driver's language (`None` when the census does not say so).
+    pub key_note: Option<String>,
     /// `--next` added this target because it holds state of the same owner as this earlier
     /// target.
     pub sibling_of: Option<FindingId>,
@@ -499,6 +502,42 @@ pub const GENERAL: &str = "use the project's public API the way a caller would; 
 /// creates and uses.
 pub const LIFE: &str = "a unit covers the life of the objects it touches: create, derive (also from derived objects), use, cancel or close, drop or release, and not always in the same order (vary it by key)";
 
+/// What a target line says when its key comes from the caller: the explanation itself is
+/// printed once at the top of the block.
+const KEY_POINTER: &str = "the key comes from the caller (a parameter of the writer): see \"Key objects\" above the targets";
+
+/// The line of a target whose key comes from the caller (the census says the key of an insert
+/// at the holder derives from a parameter): the holder grows only when each unit passes a key
+/// it has not seen. A key compared by value is built from the unit's key; one compared by
+/// identity must be a fresh object, and the line says what makes one in the driver's language.
+pub fn key_note(
+    rt: dla_core::runtime::Runtime,
+    facts: &dla_core::census::HolderFacts,
+) -> Option<String> {
+    use dla_core::runtime::Runtime;
+    if !facts.key_from_caller() {
+        return None;
+    }
+    let fresh = match rt {
+        Runtime::Jvm => {
+            "`new`, or a lambda that captures a local of the unit; a method reference or a lambda that captures nothing is ONE object per call site for the whole run. If the library rejects those (it reads the structure of the object), make one with the platform's own factory, for example a serializable lambda created per unit with `LambdaMetafactory.altMetafactory`"
+        }
+        Runtime::Node | Runtime::Python => {
+            "a function or object literal evaluated inside the unit is new each time; a module-level function or object is ONE object for the whole run"
+        }
+        Runtime::Go => {
+            "a new pointer, or a value built from the key; a package-level func value is ONE object for the whole run"
+        }
+        Runtime::Rust => {
+            "a new allocation per unit when the key is a pointer or an id taken from one; a `static` is ONE for the whole run"
+        }
+        Runtime::Native => "a new object allocated per unit, not one shared object",
+    };
+    Some(format!(
+        "the key comes from the caller (a parameter of the writer): the holder grows only when each unit passes a key it has not seen. A key compared by value (a string, a number, a value type): build it from the unit's key. A key compared by identity (a function, a lambda, a listener, a class, an object without its own equality) must be a fresh object per unit: {fresh}"
+    ))
+}
+
 /// Describes every declared target of a harness.
 pub fn describe(
     ctx: &ToolCtx,
@@ -506,6 +545,7 @@ pub fn describe(
     asked: &[Asked],
     probes: &[ProbeSpec],
     siblings: &std::collections::BTreeMap<FindingId, FindingId>,
+    rt: dla_core::runtime::Runtime,
 ) -> Vec<Target> {
     asked
         .iter()
@@ -531,6 +571,7 @@ pub fn describe(
                 writers: sites(&ctx.project, &writers),
                 removers: sites(&ctx.project, &removers),
                 probe: probe_text(&ctx.project, a, probes),
+                key_note: ann.and_then(|a| key_note(rt, &a.facts)),
                 instruction: {
                     let mut text = instruction(&a.kind, &holder, &owner, &a.site);
                     if holder == "registration-table"
@@ -744,6 +785,10 @@ impl Target {
         if let Some(g) = &self.feature_gate {
             out.push(format!("  {}", g.text()));
         }
+        if self.key_note.is_some() {
+            // The explanation is printed once above the targets of the block.
+            out.push(format!("  key: {KEY_POINTER}"));
+        }
         out.push(match &self.probe {
             Some(p) => format!("  probe reads: {p}"),
             None => "  no probe: tied by allocation stacks or type counts".to_owned(),
@@ -884,6 +929,12 @@ pub fn block_with(
         )
     }];
     lines.extend(notes.iter().cloned());
+    // The long explanation of a key the caller passes, once, not once per target.
+    if let Some(k) = targets.iter().find_map(|t| t.key_note.as_deref()) {
+        lines.push(format!(
+            "Key objects (the targets marked `key:` below): {k}"
+        ));
+    }
     for t in targets {
         lines.extend(t.lines());
     }
@@ -974,6 +1025,7 @@ mod tests {
             sibling_of: None,
             entry: None,
             feature_gate: None,
+            key_note: None,
         }
     }
 
@@ -1069,6 +1121,7 @@ mod tests {
             sibling_of: None,
             entry: None,
             feature_gate: None,
+            key_note: None,
         }
     }
 
@@ -1273,5 +1326,98 @@ mod open;
         let mut list = [py];
         add_feature_gates(dir.path(), &mut list, &[]);
         assert!(list[0].feature_gate.is_none());
+    }
+    fn facts(
+        param: bool,
+        constant: bool,
+        startup: bool,
+        depth: u8,
+    ) -> dla_core::census::HolderFacts {
+        use dla_core::census::{HolderFacts, SiteFact, SiteKind};
+        HolderFacts {
+            writer_sites: vec![SiteFact {
+                site: "a:1".into(),
+                kind: SiteKind::Insert,
+                depth,
+                function: Some("of".into()),
+                init: false,
+                startup,
+                param,
+                constant,
+                exported: false,
+            }],
+            ..HolderFacts::default()
+        }
+    }
+
+    #[test]
+    fn a_key_the_caller_passes_gets_one_line_per_runtime_and_nothing_else_does() {
+        use dla_core::runtime::Runtime;
+        let f = facts(true, false, false, 0);
+        for (rt, want) in [
+            (Runtime::Jvm, "a lambda that captures a local of the unit"),
+            (Runtime::Jvm, "LambdaMetafactory.altMetafactory"),
+            (
+                Runtime::Node,
+                "a function or object literal evaluated inside the unit",
+            ),
+            (
+                Runtime::Python,
+                "a module-level function or object is ONE object",
+            ),
+            (Runtime::Go, "a package-level func value is ONE object"),
+            (Runtime::Rust, "a new allocation per unit"),
+        ] {
+            let n = key_note(rt, &f).unwrap_or_default();
+            assert!(n.contains(want), "{rt:?}: {n}");
+            assert!(n.contains("the key comes from the caller"), "{n}");
+            assert!(
+                n.contains("A key compared by value") && n.contains("compared by identity"),
+                "{n}"
+            );
+        }
+        // The census does not say the key is a parameter, or it is a constant, or it is set
+        // at start-up, or the insert is on an element: no line.
+        for no in [
+            facts(false, false, false, 0),
+            facts(true, true, false, 0),
+            facts(true, false, true, 0),
+            facts(true, false, false, 1),
+            dla_core::census::HolderFacts::default(),
+        ] {
+            assert!(key_note(Runtime::Jvm, &no).is_none(), "{no:?}");
+        }
+        // It is a line of the target block.
+        let mut t = target();
+        t.key_note = key_note(Runtime::Jvm, &f);
+        let lines = t.lines();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("  key: the key comes from the caller")),
+            "{lines:?}"
+        );
+        assert!(target().lines().iter().all(|l| !l.starts_with("  key:")));
+        // The long explanation is in the block once, however many targets have the line.
+        let mut three = vec![t.clone(), t.clone(), t];
+        three[1].id = "F9".parse().unwrap();
+        three[2].id = "F10".parse().unwrap();
+        let b = block("H1", &three, Some("//"));
+        assert_eq!(b.matches("A key compared by identity").count(), 1, "{b}");
+        assert_eq!(
+            b.matches("  key: the key comes from the caller").count(),
+            3,
+            "{b}"
+        );
+        assert!(
+            b.contains(
+                "Key objects (the targets marked `key:` below): the key comes from the caller"
+            ),
+            "{b}"
+        );
+        assert!(
+            !b.contains("LambdaMetafactory") || b.matches("LambdaMetafactory").count() == 1,
+            "{b}"
+        );
     }
 }

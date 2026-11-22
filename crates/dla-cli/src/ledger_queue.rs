@@ -218,6 +218,7 @@ fn default_remedy(
     r: Option<&queue::Ranked>,
     ix: &Index,
     runtime: Option<&str>,
+    key_from_caller: bool,
 ) -> String {
     let place = f
         .owner
@@ -268,7 +269,14 @@ fn default_remedy(
         Some(Verdict::Grew) => "its holder grew".to_owned(),
         None => "no run of it was read with dla trend".to_owned(),
     };
-    format!("targeted in {list}, {outcome}: write a unit that adds a new key to {place}")
+    // A holder whose key comes from the caller: the unit must pass a key it has not passed
+    // before (a fresh object when the key is compared by identity).
+    let key = if key_from_caller {
+        " (the key comes from the caller: pass a key the holder has not seen; a key compared by identity needs a fresh object per unit)"
+    } else {
+        ""
+    };
+    format!("targeted in {list}, {outcome}: write a unit that adds a new key to {place}{key}")
 }
 
 /// What `close-rest` did with one finding.
@@ -374,7 +382,17 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
             UnresolvedReason::NotExercised
         };
         let remedy = a.remedy.clone().unwrap_or_else(|| {
-            default_remedy(f, by_id.get(&f.id).copied(), &ix, runtime.as_deref())
+            let key_from_caller = view
+                .ledger
+                .annotation(&f.id)
+                .is_some_and(|a| a.facts.key_from_caller());
+            default_remedy(
+                f,
+                by_id.get(&f.id).copied(),
+                &ix,
+                runtime.as_deref(),
+                key_from_caller,
+            )
         });
         let args = ResolveArgs {
             target: f.id.to_string(),
