@@ -2043,6 +2043,7 @@ pub fn open_finding_step(
     reason: UnresolvedReason,
     cache: &mut BTreeMap<String, Option<String>>,
     only: &mut Option<Option<String>>,
+    loops: &BTreeMap<String, String>,
 ) -> Option<String> {
     if !closes_without_exercise(reason) || view.run_dir.is_none() {
         return None;
@@ -2060,7 +2061,10 @@ pub fn open_finding_step(
         .or_insert_with(|| {
             harness_not_run(view, &rt, None)
                 .map(|u| u.fix(&view.state.run_id))
-                .or_else(|| harness_not_generated(view, &rt, None).map(|n| n.fix()))
+                .or_else(|| {
+                    harness_not_generated(view, &rt, None)
+                        .map(|n| n.fix_with(loops.get(&rt).map(String::as_str)))
+                })
         })
         .clone()
 }
@@ -2170,8 +2174,18 @@ impl NoHarness {
     /// The command that clears the rule, for a refusal or a missing item: the same step
     /// the report's coverage warning gives for a run with no harness.
     pub fn fix(&self) -> String {
+        self.fix_with(None)
+    }
+
+    /// [`NoHarness::fix`] with the step that makes the harness replaced by `loop_first`
+    /// while the Python test loop is the queue's first step: the text of the queue item,
+    /// which starts with the loop and then names the driver batch. The sentence about
+    /// recording the blocker stays.
+    pub fn fix_with(&self, loop_first: Option<&str>) -> String {
         let rt = &self.runtime;
-        let make = if self.needs_driver {
+        let make = if let Some(first) = loop_first {
+            first.to_owned()
+        } else if self.needs_driver {
             make_driver_step(rt)
         } else {
             format!("dla harness gen --lang {rt}, then dla harness run <H>")
@@ -2723,7 +2737,7 @@ fn worker_missing(view: &RunView, target: GateTarget, w: &str) -> Vec<Missing> {
             out.0.push(from_blocking(crate::view::queue_item(q)));
         }
     }
-    for b in status(view).blocking {
+    for b in crate::view::status_for(view, Some(w)).blocking {
         let keep = match b.kind {
             BlockingKind::Finding | BlockingKind::OpenItem => mine(&b.id),
             BlockingKind::Trigger => target == GateTarget::Final && mine(&b.id),
@@ -2902,5 +2916,32 @@ mod in_run_column_tests {
         assert!(!non_flat(&col("go.released", "bytes")));
         assert!(!non_flat(&col("go.released.pre_gc", "bytes")));
         assert!(!non_flat(&col("jvm.jit_seconds", "seconds")));
+    }
+
+    #[test]
+    fn the_make_a_driver_step_gives_way_to_the_loop_text_and_keeps_the_blocker_sentence() {
+        let n = NoHarness {
+            runtime: "python".into(),
+            entry_points: 3,
+            minutes_left: 50,
+            minutes_total: 60,
+            needs_driver: true,
+        };
+        let plain = n.fix();
+        assert_eq!(plain, n.fix_with(None));
+        assert!(
+            plain.starts_with("dla harness gen --lang python --driver, fill the DLA-HOOK"),
+            "{plain}"
+        );
+        let first = "dla harness gen --lang python --pytest, dla harness run <H>, dla trend S<n>";
+        let with = n.fix_with(Some(first));
+        assert!(
+            with.starts_with(&format!("{first}. If no harness can be made, ")),
+            "{with}"
+        );
+        assert!(!with.contains("--driver, fill"), "{with}");
+        // Everything after the step is the same text.
+        let tail = |t: &str| t.split_once(". If no harness").unwrap().1.to_owned();
+        assert_eq!(tail(&plain), tail(&with));
     }
 }

@@ -272,9 +272,11 @@ fn a_candidate_cannot_be_closed_unmeasured_and_the_gate_and_status_lead_with_the
     );
     assert!(missing[0]["fix"].as_str().unwrap().starts_with(LOOP));
     assert!(missing[0]["fix"].as_str().unwrap().contains(BATCH));
-    // The item of a pending candidate carries the same batch command, never the close.
+    // The item of a pending candidate carries the queue's own fix while the loop is the first
+    // step: the loop, then the batch command, never the close.
     let item = missing.iter().find(|m| m["kind"] == "finding").unwrap();
-    assert!(item["fix"].as_str().unwrap().starts_with(BATCH), "{item}");
+    assert!(item["fix"].as_str().unwrap().starts_with(LOOP), "{item}");
+    assert!(item["fix"].as_str().unwrap().contains(BATCH), "{item}");
     assert!(!item["fix"].as_str().unwrap().contains("ledger resolve"));
 }
 

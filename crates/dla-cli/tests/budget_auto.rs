@@ -569,19 +569,19 @@ fn a_workers_first_command_after_sweep_and_census_sizes_the_run() {
     // A second sizing by the same worker changes nothing, even with more candidates.
     let sized = r.state().budget;
     let deadlines = worker_deadlines(&r);
-    slice_candidates(&r, "python", "py", 5);
+    slice_candidates(&r, "go", "go", 5);
     r.ok(&["--worker", "python", "ledger", "list"]);
     r.out(&["--worker", "python", "gate", "check", "--stage", "sweep"]);
     assert_eq!(r.state().budget, sized);
     assert_eq!(worker_deadlines(&r), deadlines);
-    // The other worker may only raise it: its own smaller estimate is not smaller, since it
-    // counts every slice, and it makes the sizing final.
+    // The other worker sizes it from every slice, raises it (25 candidates: 125 minutes) and
+    // makes the sizing final.
     sweep_and_census_ran(&r, "go");
     r.ok(&["--worker", "go", "run", "status"]);
     let st = r.state();
     assert!(st.budget.settled);
     assert_eq!(st.budget.settled_workers, ["python", "go"]);
-    assert!(st.budget.deadline >= sized.deadline);
+    assert_eq!(st.budget.deadline, sized.deadline + mins(15));
     assert_eq!(st.budget.estimate.as_ref().unwrap().candidates, 25);
 }
 
@@ -648,12 +648,13 @@ fn settling_moves_the_deadline_of_every_unfinished_worker() {
             });
         }
     });
-    let (c, v) = r.gate("sweep");
-    assert_eq!(c, 0, "{v}");
-    // 20 + 15 + 30 = 65: five minutes more than the hour it started with.
+    // Sizing belongs to the workers of a dispatched run: python's passing check sizes it.
+    let (c, v, err) = r.out(&["--worker", "python", "gate", "check", "--stage", "sweep"]);
+    assert_eq!(c, 0, "{v} {err}");
+    // 20 + 15x2 + 30 = 80: twenty minutes more than the hour it started with.
     let st = r.state();
     let by = |n: &str| st.workers.iter().find(|w| w.name == n).unwrap().deadline;
-    assert_eq!(by("python"), at + mins(5));
+    assert_eq!(by("python"), at + mins(20));
     assert_eq!(by("go"), at, "a finished worker keeps its deadline");
 }
 

@@ -136,7 +136,7 @@ the worker's or the run's deadline; the refusal's fix names a smaller plan (`--i
   disposition everything still open. A worker, or a run whose `dla run init` reported a `consent`
   object (unattended), never extends: it closes `time_budget` with its remedy.
   A worker whose deadline passed cannot ask: the core waits on it and runs no commands. It closes what it cannot measure `time_budget` and says so in its hand-off; only the core extends, after the merge. An `auto` budget is sized
-  at the first passing gate check from `sweep` on (in a dispatched run by each worker's first one, raising
+  at the first passing gate check from `sweep` on (in a dispatched run by each worker's first command after its sweep and census, passing or not, raising
   it only), so a run that stalls before the sweep still has the 60 minutes it started with.
 - Record: `dla ledger resolve <F> --as unresolved --reason time_budget --remedy "<what to run next
   and how long it needs>"` for each unresolved item that the budget cut off (the ledger refuses `time_budget` while more than the larger of 10 minutes and 20% of the budget remains, unless a command of the core (of the worker, in a worker) was refused with nothing smaller that fits after the finding was added; a finding that was measured and left undecided is `inconclusive`, one nothing reached `not_exercised`) (a candidate with only static evidence may be

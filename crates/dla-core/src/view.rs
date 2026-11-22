@@ -440,6 +440,13 @@ fn incomplete_fix(view: &RunView) -> String {
 /// valid reason does not block. A finding merged into another worker's (`finding_merged`)
 /// is neither enumerated nor dispositioned: its twin carries it.
 pub fn status(view: &RunView) -> ReportStatus {
+    status_for(view, None)
+}
+
+/// [`status`] for the gate of `worker`: the same items, and the fix of a finding that waits
+/// for a harness names the Python test loop first when the worker's own queue has it as its
+/// first step (the test files are found where the worker's discovery put them).
+pub fn status_for(view: &RunView, worker: Option<&str>) -> ReportStatus {
     let mut blocking = Vec::new();
     let mut counts = StatusCounts::default();
     // The harness step per runtime, computed once for the pass (see `open_finding_step`).
@@ -449,8 +456,24 @@ pub fn status(view: &RunView) -> ReportStatus {
     // The measurement queue: one item per runtime with an open queue leads the list, and a
     // pending candidate's fix is the batch command, never the close.
     let queues = crate::queue::queues(view, None);
+    // While the Python test loop is a queue's first step, the fix of a finding that waits for
+    // a harness is the queue item's: the loop first, then the driver batch.
+    let mut loops = std::collections::BTreeMap::new();
     for q in queues.iter().filter(|q| q.open()) {
         blocking.push(queue_item(q));
+    }
+    let own;
+    let loop_queues = if worker.is_some() {
+        own = crate::queue::queues(view, worker);
+        &own
+    } else {
+        &queues
+    };
+    for q in loop_queues
+        .iter()
+        .filter(|q| q.open() && q.py_loop.is_some())
+    {
+        loops.insert(q.runtime.clone(), queue_item(q).fix);
     }
     // Right after the queue: a leak that grew under direct injection and whose trigger is
     // not checked.
@@ -485,8 +508,14 @@ pub fn status(view: &RunView) -> ReportStatus {
             let reason = view.ledger.supported_reason(&f.id);
             // Where the ledger would refuse that close for an unrun, unbuilt or missing
             // harness, the fix is the step that clears the rule.
-            let step =
-                crate::gate::open_finding_step(view, f, reason, &mut step_cache, &mut only_runtime);
+            let step = crate::gate::open_finding_step(
+                view,
+                f,
+                reason,
+                &mut step_cache,
+                &mut only_runtime,
+                &loops,
+            );
             let pending_in = ranked
                 .get(&f.id)
                 .filter(|r| r.state == FindingState::Candidate)
@@ -497,7 +526,13 @@ pub fn status(view: &RunView) -> ReportStatus {
                 g.commands().join("   then   ")
             } else if let Some(q) = pending_in {
                 // A candidate with no test class waits for a driver while the test loop runs.
-                q.command_for(&f.id)
+                match loops.get(&q.runtime) {
+                    // Only a step that would generate a harness gives way to the loop: a
+                    // harness that is generated and waits for its hooks or its run keeps
+                    // its own command.
+                    Some(first) if q.after_loop == q.batch_command => first.clone(),
+                    _ => q.command_for(&f.id),
+                }
             } else if let Some(step) = step {
                 step
             } else if queue_on

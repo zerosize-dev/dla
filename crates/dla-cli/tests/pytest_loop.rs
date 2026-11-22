@@ -760,3 +760,102 @@ fn ledger_list_prints_the_queue_command_of_run_status() {
     assert_eq!(ledger_queue_command(&p), DRIVER);
     assert_eq!(ledger_queue_command(&p), queue_command(&p));
 }
+
+/// A project with one worker, python, after its sweep, census and workload discovery.
+fn prepared_worker(with_tests: bool) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let project_dir = dir.path().join("project");
+    project(&project_dir, with_tests);
+    ok(&project_dir, &["run", "init", "--session-id", "t"]);
+    ok(&project_dir, &["run", "dispatch", "--workers", "python"]);
+    for a in [
+        &["sweep", "--lang", "python"][..],
+        &["census", "--lang", "python"][..],
+        &["workload", "discover", "--lang", "python"][..],
+    ] {
+        let mut args = vec!["--worker", "python"];
+        args.extend_from_slice(a);
+        ok(&project_dir, &args);
+    }
+    (dir, project_dir)
+}
+
+/// The items of the worker's `dla gate check --stage sweep`, with the optional `PATH`.
+fn worker_gate_items(project: &Path, path: Option<&str>) -> Vec<Value> {
+    let gate = dla_with(
+        project,
+        path,
+        &["--worker", "python", "gate", "check", "--stage", "sweep"],
+    );
+    gate.json["missing"].as_array().cloned().unwrap_or_default()
+}
+
+/// The fix of every item that is not the queue's own and generates a harness, with the
+/// description of the item.
+fn harness_fixes(items: &[Value]) -> Vec<(String, String)> {
+    items
+        .iter()
+        .filter(|i| i["kind"] != "queue")
+        .filter_map(|i| {
+            let fix = i["fix"].as_str()?;
+            fix.contains("dla harness gen").then(|| {
+                (
+                    i["description"].as_str().unwrap_or("").to_owned(),
+                    fix.to_owned(),
+                )
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn gate_items_of_python_findings_name_the_loop_first_while_it_is_pending() {
+    let (_d, p) = prepared_worker(true);
+    let items = worker_gate_items(&p, None);
+    let fixes = harness_fixes(&items);
+    assert!(
+        fixes.iter().any(|(d, _)| d.contains("has no disposition")),
+        "{items:?}"
+    );
+    for (what, fix) in &fixes {
+        assert!(fix.starts_with(LOOP_FIRST), "{what}: {fix}");
+    }
+    // The core's final gate lists the same items with the same text.
+    let (_dc, pc) = prepared(true);
+    let gate = dla(&pc, &["gate", "check", "--final"]);
+    // The output lists the first items only; the stored file has them all.
+    let file = fs::read_to_string(pc.join(gate.json["pointer"].as_str().unwrap())).unwrap();
+    let all: Value = serde_json::from_str(&file).unwrap();
+    let items = all["missing"].as_array().cloned().unwrap_or_default();
+    let fixes = harness_fixes(&items);
+    assert!(!fixes.is_empty(), "{items:?}");
+    for (what, fix) in &fixes {
+        assert!(fix.starts_with(LOOP_FIRST), "{what}: {fix}");
+    }
+    // After a refused generation of the loop the same items name the driver batch.
+    let shim = tempfile::tempdir().unwrap();
+    let path = path_without_pytest(shim.path());
+    let o = dla_with(
+        &p,
+        Some(&path),
+        &[
+            "--worker", "python", "harness", "gen", "--lang", "python", "--pytest",
+        ],
+    );
+    assert_ne!(o.code, 0, "{}", o.text);
+    let fixes = harness_fixes(&worker_gate_items(&p, None));
+    assert!(!fixes.is_empty());
+    for (what, fix) in &fixes {
+        assert!(!fix.contains("--pytest"), "{what}: {fix}");
+        assert!(fix.contains(DRIVER), "{what}: {fix}");
+    }
+
+    // A project without test files names the driver batch from the start.
+    let (_d2, p2) = prepared_worker(false);
+    let fixes = harness_fixes(&worker_gate_items(&p2, None));
+    assert!(!fixes.is_empty());
+    for (what, fix) in &fixes {
+        assert!(!fix.contains("--pytest"), "{what}: {fix}");
+        assert!(fix.contains(DRIVER), "{what}: {fix}");
+    }
+}
