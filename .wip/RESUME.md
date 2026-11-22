@@ -741,3 +741,18 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
   x86_64-unknown-linux-musl, x86_64-pc-windows-msvc, plus `SHA256SUMS`. Task 71 done.
   Not in it: the key line and the test-loop start-up agent (working tree, whole suite
   rerunning: `<sp>/u61/status3`).
+
+## State 2026-11-22 04:20 UTC
+
+- Whole suite on the tree with briefs Q and S: 166 binaries, 3135 passed, 0 failed
+  (`<sp>/u61/test-all3.log`); clippy and schema clean.
+- Sixth frozen snapshot 0302e2b (= main cc003a0 + Q + S) is in CI (waiter bx2hzc630, logs
+  `<sp>/u61/ci`). When green: `bash <sp>/wip-notes/commit-snapshot-tree.sh
+  0302e2b38f0af4beac1bdad6b701a764d45c20ed <sp>/wip-notes/commit-message-5.txt`, check no
+  trailers, push main and main:dev/wonderful-mccarthy-algc5s.
+- Brief T sent to builder a349aef413818803c (`wip-notes/test-loop-first-brief.md`), report
+  `<sp>/u64/report.md`. Its edits come on top of the frozen tree and are not in 0302e2b.
+- After brief T is checked: frozen build, real plugin rerun on spring-data-commons
+  (`python3 /root/dla-real/run.py spring-7 /root/dla-real/src/spring-data-commons
+  /root/dla-real/prompt-generic.txt --timeout 9000 --max-turns 600 --warm-m2
+  /root/dla-real/m2warm`).

@@ -1,0 +1,20 @@
+Say when a key comes from the caller; let the test loop load the mocking library at start-up
+
+Found by two more real runs of the plugin on a Java data library. Its documented leak is a
+static cache keyed by the lambda the caller passes. A hand-written unit passed the same
+method reference every time and read the cache constant. The project's own tests in a loop
+measure it in about 90 seconds, but that loop could not run where the JVM refuses to be
+attached to.
+
+- When the census says an insert at a holder takes its key from a parameter, the target
+  block of the driver file has a `key:` line, and the block explains once that the holder
+  grows only with a key it has not seen: a key compared by value is built from the unit's
+  key, a key compared by identity must be a fresh object per unit, and what makes one in
+  the driver's language (a method reference or a lambda that captures nothing is one object
+  for the whole run). `dla trend` adds to the `constant` reason of such a holder that the
+  unit may have passed the same keys, and the remedy `dla ledger close-rest` writes says so.
+- The JUnit repeat adds the mocking library's own jar as a start-up agent of the loop's JVM
+  when the test class path holds one with a `Premain-Class` (the mocking core, else the
+  agent jar it is built on), so nothing attaches to the running JVM. The run output and the
+  harness manifest name the jar. When every unit still fails on the attach, the message
+  says how to load the agent at start-up.
