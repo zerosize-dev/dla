@@ -694,3 +694,16 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - After spring-6: evidence to `<sp>/u36/spring-6`, delete the run dir, note
   `wip-notes/real-run-plugin-spring-6.md`; then freeze a snapshot with CI for the key-line
   change and commit it (message to write).
+
+## State 2026-11-22 03:35 UTC
+
+- spring-6 done (note `wip-notes/real-run-plugin-spring-6.md`, evidence `<sp>/u36/spring-6`,
+  run dir deleted): documented leak NOT found; the key line was ignored; the model stopped
+  after 15 minutes. The JUnit repeat was not tried (in spring-5 it failed on the Mockito
+  self-attach).
+- Brief S (`wip-notes/junit-loop-brief.md`) -> builder a349aef413818803c: start-up agent for
+  the mocking stack in the JUnit repeat, measure F160 through the project's tests, report
+  what the tool offers about the test loop, shorten the key line. Report
+  `<sp>/u63/report.md`.
+- Still waiting: CI on main at cc003a0 (waiter b8991t70t, logs `<sp>/u62/ci`); then the
+  release workflow for 0.9.0-preview.3.
