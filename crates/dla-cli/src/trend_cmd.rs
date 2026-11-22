@@ -49,7 +49,7 @@ mod short;
 #[path = "trend/summary.rs"]
 mod summary;
 #[path = "trend/verdicts.rs"]
-mod verdicts;
+pub(crate) mod verdicts;
 
 /// Flags of `dla trend`.
 #[derive(Args, Debug)]

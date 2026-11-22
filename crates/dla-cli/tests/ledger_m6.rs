@@ -685,6 +685,54 @@ fn the_verifier_label_is_compared_with_the_findings() {
 /// open item carries the verifier's mechanism (which starts with the reading). The
 /// finding keeps its state; the open item and `Verified: DISAGREES` are what the user reads.
 #[test]
+fn a_verifier_site_in_the_function_of_a_recorded_writer_is_the_same_place() {
+    let e = env();
+    // The holder is declared at line 1; `grow` (lines 3 to 12) writes it at line 4 and again,
+    // through another call, at line 10; `other` starts at line 14.
+    fs::write(
+        e.project.path().join("a.go"),
+        "var table = map[string]int{}\n\nfunc grow(k string) {\n\ttable[k] = 1\n\tx := 0\n\tx++\n\tx++\n\tx++\n\tx++\n\tput(k, x)\n\t_ = x\n}\n\nfunc other() {\n\t_ = table\n}\n",
+    )
+    .unwrap();
+    ok(&e, &["ledger", "annotate", "F1", "--writer", "a.go:4"]);
+    let bundle = bundle_for(&e, "F1");
+    let verify = |site: &str| {
+        run_with(
+            &e,
+            &[],
+            &[
+                "ledger",
+                "verify",
+                "F1",
+                "--site",
+                site,
+                "--holder",
+                "static/global",
+                "--mechanism",
+                "the table keeps every entry",
+                "--label",
+                "UNCLASSIFIED",
+                "--bundle",
+                &bundle,
+            ],
+        )
+    };
+    // Six lines from the recorded writer, more than the tolerance, in the same function.
+    let (code, v) = verify("a.go:10");
+    assert_eq!((code, &v["agrees_site"]), (0, &json!(true)), "{v}");
+    // Another function of the same file is another place.
+    let (code, v) = verify("a.go:15");
+    assert_eq!((code, &v["agrees_site"]), (0, &json!(false)), "{v}");
+    assert!(
+        v["disagreement"]
+            .as_str()
+            .unwrap()
+            .contains("site: finding a.go:1 vs verifier a.go:15"),
+        "{v}"
+    );
+}
+
+#[test]
 fn a_verifier_that_reads_a_leak_as_a_nonleak_is_recorded_as_a_disagreement() {
     let e = env();
     ok(

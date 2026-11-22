@@ -933,3 +933,11 @@ flat test-loop readings get only 9 second looks.
   only writing drivers, delete /root/dla-real/spring-8, write wip-notes/real-run-plugin-spring-8.md.
 - Scratch deleted: /root/dla-real/attr, attr2, vbase*, v160-*, v436-*, plugin-u, bin-u. Verifier
   records kept in <sp>/u68/verifier/, vrun.py in wip-notes/.
+- 10:55 UTC: real rerun spring-8 ended by itself (exit 0, 60 min, 107 turns): report COMPLETE,
+  "leak hypotheses: confirmed 1" = the documented leak TypedPropertyPaths.resolved with the trigger
+  "the project's own tests KPropertyReferenceUnitTests (14.6 entries per run)"; verifier agreed on
+  holder, mechanism and label (site disagreement only: 53 vs 116). Note:
+  wip-notes/real-run-plugin-spring-8.md. Evidence <sp>/u36/spring-8; run dir deleted.
+- Next small fix: site agreement accepts a verifier site in the same function as the finding's site
+  or a writer (crates/dla-core/src/verify.rs agrees_site_among; known sites are collected in
+  crates/dla-cli/src/ledger_m6.rs). Then commit b3b5ff4 when its CI is green (commit-message-7.txt).

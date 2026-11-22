@@ -1296,7 +1296,25 @@ fn verify(ctx: &Ctx, data: Option<&PathBuf>, a: VerifyArgs) -> Res<Value> {
     bundle_of(ctx, &a.finding, &a.bundle)?;
     let mut ledger = open(ctx)?;
     let table = ledger_m6::archetype_table(data)?;
-    let (line, item) = ledger.verify(
+    // A verifier often names the line that adds to the holder; the finding records the
+    // declaration and the writers the census found. A site in the same function as one of
+    // those is the same place.
+    let same_place: Vec<String> = match (&site, ctx.run_dir.parent().and_then(Path::parent)) {
+        (Some(v), Some(project)) => {
+            let own = ledger.finding(&a.finding).and_then(|f| f.site.clone());
+            let noted = ledger.annotation(&a.finding).map_or_else(Vec::new, |n| {
+                n.writers.iter().chain(&n.removers).cloned().collect()
+            });
+            own.iter()
+                .chain(noted.iter())
+                .any(|k| crate::trend_cmd::verdicts::same_function(project, k, v))
+                .then(|| v.clone())
+                .into_iter()
+                .collect()
+        }
+        _ => Vec::new(),
+    };
+    let (line, item) = ledger.verify_among(
         &a.finding,
         site,
         a.holder,
@@ -1304,6 +1322,7 @@ fn verify(ctx: &Ctx, data: Option<&PathBuf>, a: VerifyArgs) -> Res<Value> {
         &a.label,
         &a.bundle,
         dla_core::labels::Archetypes::from_table(table.as_ref()),
+        &same_place,
     )?;
     let dla_core::Record::Verification(v) = &line.record else {
         unreachable!("verify appends a verification record");

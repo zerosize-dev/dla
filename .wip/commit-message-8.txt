@@ -1,0 +1,15 @@
+A verifier's site in the function of a recorded writer is the same place
+
+In a real run the verifier agreed with a confirmed finding on holder,
+mechanism and label, and the report still printed "Verified: DISAGREES":
+the finding's site is the declaration of the cache, its recorded writers
+are two lines of one function, and the verifier named the call that adds
+the entry, five lines from a writer in that same function. The site check
+allowed three lines.
+
+`dla ledger verify` now also takes the verifier's site as the finding's own
+when it lies in the same function as the finding's site or one of its
+recorded writers or removers. The function is read from the source (same
+file, same name, same first line). A site in another function still
+disagrees, and a site outside any function falls back to the three-line
+rule.
