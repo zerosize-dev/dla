@@ -651,3 +651,10 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
   `bash <sp>/wip-notes/commit-snapshot-tree.sh <sha> <sp>/wip-notes/commit-message-4.txt`,
   check no trailers, push main and main:dev/wonderful-mccarthy-algc5s, then the
   0.9.0-preview.3 bump and release.
+- 02:20 UTC: CI waiter for ecbbe4e in background (logs `<sp>/u59/ci`). Meanwhile brief Q
+  (`wip-notes/identity-keys-brief.md`) -> builder a349aef413818803c (second-look builder):
+  spring-data-commons `TypedPropertyPaths.resolved` is keyed by the lambda object the caller
+  passes (TypedPropertyPaths.java:103-115); my earlier note "needs a Kotlin caller" is
+  probably wrong: a Java capturing lambda or `new` instance is a fresh key per unit. Step 1
+  is the experiment; then a general line in the driver block for holders keyed by a
+  caller's object. Report `<sp>/u60/report.md`. Its edits are NOT in the frozen snapshot.
