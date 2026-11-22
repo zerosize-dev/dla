@@ -181,6 +181,22 @@ fn one(inp: &Inputs<'_>, m: &HarnessManifest, f: &FindingId) -> TargetVerdict {
     }
     // The harness has a probe for the finding and the series has no column for it.
     if let Some(p) = m.probes.iter().find(|p| p.finding.as_ref() == Some(f)) {
+        // A reduced record may have carried that column: nothing says the code never loaded.
+        if inp
+            .series
+            .limitations
+            .iter()
+            .any(|l| l.starts_with("reduced record"))
+        {
+            return make(
+                Verdict::Unknown,
+                None,
+                format!(
+                    "probe {} has no column, and the series has a reduced record (see its limitations): the column may have been lost with it, so whether the code loaded is not known: dla harness run {} again",
+                    p.id, m.id
+                ),
+            );
+        }
         let what = match &p.target {
             dla_core::harness::ProbeTarget::PyGlobal { module, name } => format!("{module}.{name}"),
             dla_core::harness::ProbeTarget::PyAttr { module, qualname } => {

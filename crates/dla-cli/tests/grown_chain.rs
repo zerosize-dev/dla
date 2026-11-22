@@ -488,7 +488,7 @@ fn the_stacks_of_a_summary_whose_finding_an_alloc_test_decided_need_nothing() {
 /// The summary trend of `a_capture_summary` shaped like a goroutine capture: the total
 /// `metric:goroutine/total` and two non-flat groups with the one evidence, the first tied to F2
 /// by `candidates`, the second to nothing.
-fn a_summary_with_a_total_and_two_groups(r: &R) -> String {
+fn a_summary_with_a_total_and_two_groups(r: &R, alloc_tested: bool) -> String {
     let e = a_capture_summary(r, 0, false);
     let col = |name: &str, candidates: Vec<dla_core::FindingId>| ColumnTrend {
         name: name.into(),
@@ -525,16 +525,22 @@ fn a_summary_with_a_total_and_two_groups(r: &R) -> String {
     .unwrap();
     // F2 was decided by an alloc-test and is dispositioned.
     let mut l = Ledger::load(&r.run_dir).unwrap();
-    l.add_evidence(evidence(
-        EvidenceKind::Discriminator,
-        json!({"test": "plateau+purge", "favors": "leak", "supports": ["leak"],
-            "finding": "F2", "harness": "H1"}),
-    ))
-    .unwrap();
+    if alloc_tested {
+        l.add_evidence(evidence(
+            EvidenceKind::Discriminator,
+            json!({"test": "plateau+purge", "favors": "leak", "supports": ["leak"],
+                "finding": "F2", "harness": "H1"}),
+        ))
+        .unwrap();
+    }
     l.transition(
         &dla_core::FindingId::new(2),
         dla_core::FindingState::Unresolved,
-        Some(dla_core::UnresolvedReason::Inconclusive),
+        Some(if alloc_tested {
+            dla_core::UnresolvedReason::Inconclusive
+        } else {
+            dla_core::UnresolvedReason::NotExercised
+        }),
         Some("x".into()),
         vec![],
         "t",
@@ -546,12 +552,75 @@ fn a_summary_with_a_total_and_two_groups(r: &R) -> String {
 #[test]
 fn the_total_of_a_summary_follows_the_capture_rule_for_its_groups() {
     let (r, _, _) = run_with_a_passed_column("3h");
-    let e = a_summary_with_a_total_and_two_groups(&r);
+    let e = a_summary_with_a_total_and_two_groups(&r, true);
     // group:a is tied to the alloc-tested F2; group:b has the same evidence and is context of
     // it. Nothing waits for group:b, so the total is accounted for.
     let items = items_of_t2(&r);
     assert!(items.is_empty(), "{items:?}");
     let _ = e;
+}
+
+#[test]
+fn the_total_of_a_summary_is_listed_with_a_command_when_its_capture_is_not_accounted_for() {
+    let (r, _, _) = run_with_a_passed_column("3h");
+    // F2 is dispositioned but no alloc-test decided it: group:b is not context of anything.
+    let e = a_summary_with_a_total_and_two_groups(&r, false);
+    let items = items_of_t2(&r);
+    let total = items
+        .iter()
+        .find(|m| m["id"] == "T2:metric:goroutine/total")
+        .unwrap_or_else(|| panic!("{items:?}"));
+    let fix = total["fix"].as_str().unwrap();
+    assert!(
+        fix.starts_with(&format!(
+            "dla ledger add --origin growth-series --evidence {e}"
+        )),
+        "{fix}"
+    );
+    assert!(!fix.contains("their own trend_column items"), "{fix}");
+    // The capture's own item names the same command, so one run clears both.
+    assert!(
+        items.iter().any(|m| m["id"] == "T2:group:b"
+            && m["fix"].as_str().unwrap().starts_with(&format!(
+                "dla ledger add --origin growth-series --evidence {e}"
+            ))),
+        "{items:?}"
+    );
+    // The total and the capture's item name one command: they are one action.
+    let full: Value =
+        serde_json::from_str(&fs::read_to_string(r.run_dir.join("gate/final.json")).unwrap())
+            .unwrap();
+    let actions = full["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["id"].as_str().is_some_and(|i| i.starts_with("T2:")))
+        .count();
+    assert_eq!(actions, 1, "{full}");
+    let added = r.ok(&[
+        "ledger",
+        "add",
+        "--origin",
+        "growth-series",
+        "--evidence",
+        &e,
+    ]);
+    // What is left waits for the disposition of the finding it made. It names the finding and
+    // a re-check, never a closing command: the finding's own item gives its route.
+    let f = added["id"].as_str().unwrap();
+    let items = items_of_t2(&r);
+    assert_eq!(items.len(), 1, "{items:?}");
+    let fix = items[0]["fix"].as_str().unwrap();
+    assert!(
+        fix.starts_with("dla gate check --final") && fix.contains(&format!("after {f} has")),
+        "{items:?}"
+    );
+    assert!(!fix.contains("ledger resolve"), "{fix}");
+    let all = r.final_gate();
+    assert!(
+        all.iter().any(|m| m["kind"] == "finding" && m["id"] == f),
+        "the finding the total waits for has its own item: {all:?}"
+    );
 }
 
 #[test]

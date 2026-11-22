@@ -3678,6 +3678,19 @@ pub fn attention_lines(
     }) {
         lines.push(clip(&format!("DRIVER STEP: {l}"), 160));
     }
+    if out
+        .limitations
+        .iter()
+        .any(|l| l.starts_with("reduced record"))
+    {
+        lines.push(clip(
+            &format!(
+                "REDUCED RECORD: a point lost sections (probes, types, groups); targets with no column read unknown: dla harness run {} again before trusting the series",
+                manifest.id
+            ),
+            160,
+        ));
+    }
     if let Ok(text) = fs::read_to_string(executed)
         && let Ok(doc) = serde_json::from_str::<Value>(&text)
         && doc["kind"] == "none"

@@ -418,6 +418,26 @@ fn refusals_name_the_missing_item_and_the_fixing_command() {
 
 /// A batch worker that freezes the collector's heap after every batch, written for this test
 /// (the bench fixtures are not touched).
+/// What a failed run needs to explain itself: the run summary's `_attention`, the series'
+/// limitations and the names of its columns.
+fn run_context(run: &Value, run_dir: &Path, series: &str) -> String {
+    let file = fs::read_to_string(run_dir.join("series").join(format!("{series}.json")))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .unwrap_or(Value::Null);
+    let names: Vec<&str> = file["columns"]
+        .as_array()
+        .map(|c| c.iter().filter_map(|c| c["name"].as_str()).collect())
+        .unwrap_or_default();
+    format!(
+        "_attention: {}\nseries limitations: {}\nseries columns ({}): {}",
+        run["_attention"],
+        file["limitations"],
+        names.len(),
+        names.join(", ")
+    )
+}
+
 fn frozen_project(dir: &Path) {
     fs::create_dir_all(dir.join("batcher")).unwrap();
     fs::create_dir_all(dir.join("tests")).unwrap();
@@ -521,7 +541,12 @@ fn frozen_garbage_is_tied_to_the_freeze_site_by_a_count_column_and_reads_growth(
         .unwrap()
         .iter()
         .find(|c| c["column"] == column)
-        .unwrap_or_else(|| panic!("{column} did not pass the gate: {t}"));
+        .unwrap_or_else(|| {
+            panic!(
+                "{column} did not pass the gate: {t}\n{}",
+                run_context(&run, &run_dir, "S1")
+            )
+        });
     assert_eq!(tied["candidates"], serde_json::json!([f]), "{t}");
 
     ok(

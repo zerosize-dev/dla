@@ -217,6 +217,8 @@ pub fn build_series(
     let mut site_cache: HashMap<String, (Option<String>, Option<FindingId>)> = HashMap::new();
     let mut type_counts: Vec<BTreeMap<String, f64>> = vec![BTreeMap::new(); n];
     let with_rec = points.iter().filter(|p| p.rec.is_some()).count();
+    // Points whose record lost sections: `(point number, sections)`.
+    let mut reduced: Vec<(usize, Vec<String>)> = Vec::new();
 
     for (i, p) in points.iter().enumerate() {
         if let Some(rec) = &p.rec {
@@ -313,6 +315,24 @@ pub fn build_series(
             for l in d.limitations.iter().flatten() {
                 note(l.clone(), &mut limitations);
             }
+            let mut lost: Vec<String> = rec.dropped.clone();
+            // A full Python record (it has the readings before the collection) always carries
+            // these sections: a missing one is a record that was cut short.
+            if runtime == Runtime::Python && d.phase != DumpPhase::Tick && d.values_pre_gc.is_some()
+            {
+                for (name, missing) in [
+                    ("types", d.types.is_none()),
+                    ("probes", d.probes.is_none()),
+                    ("limitations", d.limitations.is_none()),
+                ] {
+                    if missing && !lost.iter().any(|l| l == name) {
+                        lost.push(name.to_owned());
+                    }
+                }
+            }
+            if !lost.is_empty() {
+                reduced.push((i + 1, lost));
+            }
         }
         if let Some(sites) = &p.sites {
             present_bases[i].insert("native.live_bytes".into());
@@ -367,6 +387,27 @@ pub fn build_series(
             }
             _ => {}
         }
+    }
+
+    if !reduced.is_empty() {
+        let mut sections: Vec<&str> = reduced
+            .iter()
+            .flat_map(|(_, s)| s.iter().map(String::as_str))
+            .collect();
+        sections.sort_unstable();
+        sections.dedup();
+        let points: Vec<String> = reduced.iter().take(4).map(|(i, _)| i.to_string()).collect();
+        note(
+            format!(
+                "reduced record: the record of point{} {}{} lost {}, so the columns they carry (probe readings, type counts, groups such as py.gc_frozen) are missing from this series; a target with no column is unknown here, not unloaded: run dla harness run {} again",
+                if reduced.len() > 1 { "s" } else { "" },
+                points.join(", "),
+                if reduced.len() > 4 { " and more" } else { "" },
+                sections.join(", "),
+                manifest.id
+            ),
+            &mut limitations,
+        );
     }
 
     // A site missing from a record that lists its metric holds nothing at that point.

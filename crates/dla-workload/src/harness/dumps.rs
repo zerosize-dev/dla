@@ -43,6 +43,9 @@ pub struct Rec {
     pub raw_sites: Option<Value>,
     /// The shim's `modules` list (`[{path, bias}]`).
     pub modules: Option<Value>,
+    /// Sections the record had that could not be read and were dropped to keep its values
+    /// (`probes`, `types`, `groups`, ...): a reduced record.
+    pub dropped: Vec<String>,
 }
 
 impl Rec {
@@ -91,6 +94,7 @@ fn numeric_only(v: &mut Value) {
 pub fn parse_record(line: &str) -> Option<Rec> {
     let mut doc: Value = serde_json::from_str(line).ok()?;
     let obj = doc.as_object_mut()?;
+    let mut dropped: Vec<String> = Vec::new();
     let raw_sites = obj.remove("raw_sites").filter(|v| !v.is_null());
     let modules = obj.remove("modules").filter(|v| !v.is_null());
     for key in ["values", "values_pre_gc", "values_in_run"] {
@@ -129,6 +133,7 @@ pub fn parse_record(line: &str) -> Option<Rec> {
         };
         if bad {
             obj.remove(key);
+            dropped.push(key.to_owned());
         }
     }
     let dump = match serde_json::from_value::<HarnessDump>(doc.clone()) {
@@ -148,12 +153,15 @@ pub fn parse_record(line: &str) -> Option<Rec> {
                 "in_run",
                 "values",
             ] {
-                doc.as_object_mut()?.remove(key);
+                if doc.as_object_mut()?.remove(key).is_some() {
+                    dropped.push(key.to_owned());
+                }
                 if let Ok(d) = serde_json::from_value::<HarnessDump>(doc.clone()) {
                     return Some(Rec {
                         dump: d,
                         raw_sites,
                         modules,
+                        dropped,
                     });
                 }
             }
@@ -164,6 +172,7 @@ pub fn parse_record(line: &str) -> Option<Rec> {
         dump,
         raw_sites,
         modules,
+        dropped,
     })
 }
 
