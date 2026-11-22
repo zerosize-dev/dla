@@ -727,3 +727,8 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - The tool today barely offers the test loop: one clipped `junit_hint`; status, trend and
   the queue name only `--driver --next`. 305 of 387 ranked candidates of the spring ledger
   have a test class named after their owner.
+- 03:47 UTC: the first whole-suite run on the tree with briefs Q and S was VOID (disk full
+  while linking: `test-all2.log`, exit 101, no test ran). Freed space: prune script, builder
+  copies, `go clean -modcache` and `-cache` (the Go module cache must be downloaded again
+  for a Go real run). Rerun: `<sp>/u61/verify3.sh` -> `status3`, `test-all3.log`.
+  One whole-suite cycle after a change to dla-workload or dla-cli needs about 5 GB free.
