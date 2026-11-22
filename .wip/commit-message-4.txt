@@ -18,3 +18,13 @@ left out the one choice the leak needs (when the intermediate objects are releas
   evidence, with a count and the three largest. One `dla ledger add --origin growth-series`
   finding stands for them, and the report lists the others under it. A finding of the
   evidence that an alloc-test decided accounts for them too.
+- The total of a capture summary follows the same rule as its group columns: a growing group
+  the capture accounts for no longer keeps the total in the final gate. When the total is
+  still listed, its fix is the capture's own `dla ledger add` line, or a re-check after the
+  named finding has its disposition; never a closing command.
+- A Python record that lost sections is said: the agent keeps the `py.gc_frozen` group under
+  `<non-project>` when it cannot read the call site and writes `reduced record: ...` when it
+  cannot write the group; the reader records the sections it had to drop; the series carries
+  a `reduced record` limitation and `dla harness run` prints `REDUCED RECORD` in
+  `_attention`. A target whose probe has no column in such a series reads `unknown` with the
+  command to measure again, not `not_loaded`.

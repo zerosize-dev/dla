@@ -99,6 +99,9 @@ fn a_reduced_record_is_said_and_its_target_reads_unknown_not_not_loaded() {
             && limits.contains("lost probes, types"),
         "{limits}"
     );
+    // The freeze group survives the loss of its site: the count is kept under `<non-project>`.
+    let columns = series["columns"].to_string();
+    assert!(columns.contains("py.gc_frozen@<non-project>"), "{columns}");
     let t = dla(&p, &["trend", "S1"]);
     assert_eq!(other(&t, "unknown"), 1, "{t}");
     assert_eq!(other(&t, "not_loaded"), 0, "{t}");

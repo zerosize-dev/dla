@@ -46,7 +46,7 @@ and cover only files under `DLA_PROJECT`.
 A full exit or checkpoint record always has `values_pre_gc`, `types`, `probes` and `limitations`.
 `dla harness run` reads each point's record with a typed reader that, when a section cannot be read
 (a value of the wrong type), drops the sections one by one until the record parses and keeps its
-values; it now remembers which it dropped, and a Python record that has `values_pre_gc` but lacks
+values; it remembers which it dropped, and a Python record that has `values_pre_gc` but lacks
 `types`, `probes` or `limitations` counts as cut short the same way. Either gives the series a limitation
 `reduced record: the record of point N lost ...`, the run output an `_attention` line
 `REDUCED RECORD: ...`, and a target whose probe has no column reads `unknown` in `dla trend` (with the

@@ -620,3 +620,24 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
   main and main:dev/wonderful-mccarthy-algc5s, then 0.9.0-preview.3.
 - The artifact host of GitHub Actions is blocked by the proxy here (403): CI artifacts
   cannot be downloaded; job logs can be read.
+
+## State 2026-11-22 (after the two builders' reports)
+
+- Pass 12 (gate builder, report `<sp>/u49/report.md` "Pass 12"): `capture_accounted` is one
+  predicate for `capture_item` and `group_columns_state`. Checked by me: grown_chain 13/13;
+  mutations MUT_G1 (predicate off) and MUT_G2 (fix text) each failed the right test.
+  My own edit: `total_fix` no longer prints `dla ledger resolve F --as unresolved ...` when
+  the total waits on a finding; it prints `dla gate check --final   # after F has a
+  disposition ...`; test asserts it and that F has its own `finding` item.
+- Brief P (Python builder, report `<sp>/u58/report.md`): macOS cause NOT established (10
+  runs in a row plus one under load passed on Linux). Two candidate paths: a swallowed
+  exception in `dla_freeze` (site lookup), or the typed reader dropping sections. Changes:
+  agent keeps the group under `<non-project>`, `reduced record:` limitations, `Rec.dropped`,
+  series limitation, `REDUCED RECORD` attention line, trend verdict `unknown`. Checked by
+  me: reduced_record test; my mutations MUT_P1 (agent fallback) and MUT_P2 (verdict rule)
+  each failed it. My own edits: the test asserts `py.gc_frozen@<non-project>`; the frozen
+  test's panic message also carries the agent's raw record of one point (it names the
+  interpreter in `exe`).
+- Running: `<sp>/u59/verify.sh` -> `<sp>/u59/verify.log` (fmt, clippy, schema, workspace
+  tests). Then: `dla-bench dynamic --only go-` once on the final tree, a new frozen
+  snapshot WITH CI, commit to main with `commit-message-4.txt` (already extended).
