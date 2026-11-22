@@ -26,7 +26,7 @@ writes one `exit` line at exit and may write periodic `tick` lines. One record:
  "x":2000,"t_ms":1234,"gc_forced":true,
  "values":{"jvm.heap_used":123456},"values_pre_gc":{"jvm.heap_used":456789},
  "purge":{"kind":"trim","before":{"os.rss":1},"after":{"os.rss":1}},
- "groups":{}, "group_series":{}, "raw_sites":{},
+ "groups":{}, "group_counts":{}, "raw_sites":{},
  "probes":[{"id":"P1","name":"ORDERS_BY_ID","path":"shop.OrderCache.ORDERS_BY_ID","size":1750,"reachable":5400,"bytes":null,"error":null}],
  "types":[{"name":"shop.Order","count":1750,"bytes":84000}],
  "coverage":{"kind":"classes|functions","items":["shop.OrderCache"],"project":1,"sources":["shop/OrderCache.java"]},
@@ -35,9 +35,10 @@ writes one `exit` line at exit and may write periodic `tick` lines. One record:
 
 `values` are read after a forced collection when the runtime has one; `values_pre_gc` holds the
 values read just before it. `purge` is present only when `DLA_PURGE` is set, at the exit record
-or the last checkpoint. `group_series` is present only in the last checkpoint record of a Python
-driver run: for a grouped counter (`py.blocks`) the series of the sites that grew, `{"x":[...],"sites":{"<site>":[<count per x>]}}`,
-which `dla harness run` turns into the columns `<base>@<site>` with a value at every point.
+or the last checkpoint. `group_counts` is present in every checkpoint record of a Python driver run:
+for a grouped counter (`py.blocks`) the count of every counted site, `{"py.blocks":{"<site>":<count>}}`
+(`group_capped` lists the counters cut at the agent's bound of 5000 sites). `dla harness run` picks the sites that
+grew over the whole run and turns them into the columns `<base>@<site>`.
 Absent optional sections are simply left out.
 
 | Variable | Meaning |

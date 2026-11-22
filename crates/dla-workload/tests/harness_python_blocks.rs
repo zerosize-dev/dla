@@ -459,3 +459,50 @@ fn a_library_installed_in_editable_mode_is_counted_at_its_own_path_in_the_source
     let want = format!("py.blocks@lib/editable.py:{line}");
     assert_eq!(block_columns(&s), [want], "{:?}", block_columns(&s));
 }
+
+/// A module with 320 live allocation sites (one object per line, kept for the whole run).
+fn many_live_sites() -> String {
+    let mut text = String::from("LIVE = []\n\n\ndef noop(i):\n    return i\n\n\n");
+    for k in 0..320 {
+        text.push_str(&format!("LIVE.append(object())  # SITE{k}\n"));
+    }
+    text
+}
+
+/// py.traced from the second measured point to the last.
+fn traced_rise(s: &SeriesFile) -> f64 {
+    let i = s.column_index("py.traced").unwrap();
+    let v: Vec<f64> = s.values(i).into_iter().flatten().collect();
+    // One warm-up point, so the second measured point is index 2.
+    v[v.len() - 1] - v[2]
+}
+
+/// The most py.traced may rise from the second measured point to the last on a unit with no
+/// leak and 320 live sites. Measured: see docs/VERIFY.md (fixed code and the mutation that keeps
+/// the counts of every checkpoint in the agent).
+const NO_LEAK_TRACED_RISE_BOUND: f64 = 8192.0;
+
+#[test]
+fn counting_the_sites_does_not_make_a_run_without_a_leak_read_as_growth() {
+    if !have_python() {
+        return;
+    }
+    let fx = fixture();
+    write(&fx, "live.py", &many_live_sites());
+    let s = run_driver(
+        &fx,
+        "import live\n    _state['live'] = live",
+        "_state['live'].noop(i)",
+        50,
+        1,
+        8,
+        &[],
+    );
+    let rise = traced_rise(&s);
+    eprintln!("py.traced rise from the second measured point to the last: {rise}");
+    assert!(
+        rise <= NO_LEAK_TRACED_RISE_BOUND,
+        "py.traced rose by {rise} bytes"
+    );
+    assert!(block_columns(&s).is_empty(), "{:?}", block_columns(&s));
+}

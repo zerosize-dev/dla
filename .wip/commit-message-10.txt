@@ -1,0 +1,42 @@
+Count live blocks per project line in Python driver runs
+
+A leak that nothing holds has no static candidate. On a Python library
+with C extension modules, a C function takes a reference and never
+releases it: one int stays per call. No container grows, so no probe sees
+it; the whole-process heap column grows, and the run had no way from that
+column to a line.
+
+A Python driver run now writes `py.blocks@<file:line>` columns: the live
+blocks tracemalloc traces, counted at each checkpoint by the first frame
+that is in the project and is neither a test file nor a harness file. The
+agent writes the counts of every checkpoint and keeps nothing between
+them; the series builder keeps the lines whose count at the last point is
+above the count at the first point after the warm-up, twelve at most,
+largest growth first. A process cut before its last checkpoint is judged
+on the records it wrote. The site columns are not dropped for probe
+columns at the column cap.
+
+A library installed in editable mode runs from its source tree, not from
+the scratch copy, so `dla harness run` passes the source root and the
+agent counts the files under it too. The run's own directory, installed
+packages and test files never count.
+
+`dla trend` prints the command that adds a finding at a growing line no
+finding is at, with what to read to choose the holder. The final gate
+lists such a column with the same command. A site column ties only to a
+finding at its own line. `dla alloc-test` decides a finding at a line by
+the column of that line; when the column is not in the new series nothing
+votes and the result is inconclusive, because a whole-process column
+cannot decide for one line. `L-OWNERSHIP` fits the heap region too: a
+reference that is never released keeps a managed object alive.
+
+tracemalloc keeps one frame in a driver run, chosen by measurement: two
+frames cost 1.3 to 1.4 times the unit time, four 1.9 times. A block that
+a library function allocates for project code therefore has no site; the
+series says so and `DLA_TRACEMALLOC_FRAMES` keeps more.
+
+Measured on that library: with a unit that draws text the column of the
+calling line rises by 1.04 blocks per unit in both key modes, the
+alloc-test decides by it, and the finding reaches `confirmed`. With a
+unit that has no leak the heap column reads the same with and without the
+counting.

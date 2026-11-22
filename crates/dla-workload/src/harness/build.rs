@@ -197,6 +197,98 @@ fn order_key(name: &str) -> (usize, String) {
     }
 }
 
+/// Most sites of one grouped counter that get a column.
+const MAX_SITE_COLUMNS: usize = 12;
+
+/// Turns the `group_counts` of the records into columns `<base>@<site>`. A site is kept when its
+/// count at the last point that has counts is above its count at the first such point after the
+/// warm-up; at most [`MAX_SITE_COLUMNS`], the largest growth first. A kept site reads 0 at a
+/// point whose record lists the base without it. A record the agent cut at its bound
+/// (`group_capped`) may lack a site that exists: that point is left empty (not 0), and a site
+/// with no reading at the first or the last of these points is not judged. A process cut
+/// before its last checkpoint is judged on the records it wrote.
+fn site_columns(
+    t: &mut Table,
+    points: &[PointInput],
+    warmup: usize,
+    runtime: Runtime,
+    limitations: &mut Vec<String>,
+) {
+    let mut bases: BTreeSet<&str> = BTreeSet::new();
+    for p in points {
+        for b in p.rec.iter().filter_map(|r| r.dump.group_counts.as_ref()) {
+            bases.extend(b.keys().map(String::as_str));
+        }
+    }
+    for base in bases {
+        // (point, counts, capped) of the records that have this base.
+        let have: Vec<(usize, &BTreeMap<String, f64>, bool)> = points
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| {
+                let d = &p.rec.as_ref()?.dump;
+                let counts = d.group_counts.as_ref()?.get(base)?;
+                let capped = d
+                    .group_capped
+                    .as_ref()
+                    .is_some_and(|c| c.iter().any(|b| b == base));
+                Some((i, counts, capped))
+            })
+            .collect();
+        let Some(first) = have.iter().find(|(i, ..)| *i >= warmup) else {
+            continue;
+        };
+        let last = have[have.len() - 1];
+        if last.0 <= first.0 {
+            continue;
+        }
+        let read = |(_, counts, capped): (usize, &BTreeMap<String, f64>, bool), site: &str| {
+            counts.get(site).copied().or((!capped).then_some(0.0))
+        };
+        let mut grown: Vec<(f64, &str)> = Vec::new();
+        for site in last.1.keys() {
+            if let (Some(a), Some(b)) = (read(*first, site), read(last, site))
+                && b > a
+            {
+                grown.push((b - a, site.as_str()));
+            }
+        }
+        grown.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(b.1)));
+        if grown.len() > MAX_SITE_COLUMNS {
+            limitations.push(format!(
+                "{} more allocation sites grew and have no column",
+                grown.len() - MAX_SITE_COLUMNS
+            ));
+        }
+        let cut: Vec<usize> = have.iter().filter(|h| h.2).map(|h| h.0 + 1).collect();
+        if !cut.is_empty() {
+            limitations.push(format!(
+                "{base}: the agent keeps only its largest sites at point{} {}, so a site missing there is left empty, not 0, and a site with no reading at the first or the last point is not judged",
+                if cut.len() > 1 { "s" } else { "" },
+                cut.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+            ));
+        }
+        for (_, site) in grown.into_iter().take(MAX_SITE_COLUMNS) {
+            let name = format!("{base}@{site}");
+            for &h in &have {
+                if let Some(v) = read(h, site) {
+                    let src = source_tag(
+                        runtime,
+                        points[h.0]
+                            .rec
+                            .as_ref()
+                            .map_or(DumpPhase::Exit, |r| r.dump.phase),
+                    );
+                    let acc = t.set(&name, h.0, v, src);
+                    if looks_like_site(site) {
+                        acc.site = Some(site.to_owned());
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Builds the series of one key mode. `points` are in x order; the first `warmup` are
 /// warm-up. Never fails: whatever could not be read is a null value or a limitation.
 pub fn build_series(
@@ -394,35 +486,15 @@ pub fn build_series(
         }
     }
 
-    // Series kept for every point of a process, written by the record of its last point
-    // (`py.blocks`): each point takes the value at its own `x`.
-    for rec in points.iter().rev().filter_map(|p| p.rec.as_ref()) {
-        let Some(tables) = &rec.dump.group_series else {
-            continue;
-        };
-        let src = source_tag(runtime, rec.dump.phase);
-        for (base, table) in tables {
-            for (site, counts) in &table.sites {
-                if counts.len() != table.x.len() {
-                    continue;
-                }
-                let name = format!("{base}@{site}");
-                for (i, p) in points.iter().enumerate() {
-                    if p.rec.is_none() {
-                        continue;
-                    }
-                    let Some(j) = table.x.iter().position(|x| *x == p.x) else {
-                        continue;
-                    };
-                    let acc = t.set(&name, i, counts[j], src);
-                    if looks_like_site(site) {
-                        acc.site = Some(site.clone());
-                    }
-                }
-            }
-        }
-        break;
-    }
+    // Counts of every site of a grouped counter (`py.blocks`), one set per record: the columns
+    // are chosen here, from the records of the whole run.
+    site_columns(
+        &mut t,
+        points,
+        params.warmup as usize,
+        runtime,
+        &mut limitations,
+    );
 
     if !reduced.is_empty() {
         let mut sections: Vec<&str> = reduced
@@ -945,40 +1017,57 @@ mod tests {
         s.validate().unwrap();
     }
 
-    /// The checkpoint records of a Python driver: `py.blocks` series of two sites in the last.
-    fn blocks_points(xs: &[f64], with_table: bool) -> Vec<PointInput> {
-        let n = xs.len();
+    /// Checkpoint records of a Python driver; point `k` (0-based) carries `counts[k]` for
+    /// `py.blocks` (`capped` lists the points whose record was cut at the agent's bound).
+    fn blocks_points(xs: &[f64], counts: &[Value], capped: &[usize]) -> Vec<PointInput> {
         xs.iter()
             .enumerate()
             .map(|(i, x)| {
                 let mut rec = json!({"dla_harness":1,"phase":"checkpoint","pid":1,"runtime":"python",
                     "x": x, "values":{"py.traced": 100.0 + x}});
-                if with_table && i + 1 == n {
-                    rec["group_series"] = json!({"py.blocks": {
-                        "x": xs,
-                        "sites": {
-                            "src/a.py:3": (0..n).map(|k| 10 + 5 * k).collect::<Vec<_>>(),
-                            "src/b.py:7": (0..n).map(|k| 2 * k).collect::<Vec<_>>(),
-                            "src/short.py:1": [1, 2],
-                        }}});
+                if let Some(c) = counts.get(i) {
+                    rec["group_counts"] = json!({"py.blocks": c});
+                }
+                if capped.contains(&i) {
+                    rec["group_capped"] = json!(["py.blocks"]);
                 }
                 pt(*x, rec)
             })
             .collect()
     }
 
+    const XS: [f64; 5] = [100.0, 200.0, 300.0, 400.0, 500.0];
+
+    fn blocks_series(counts: &[Value], capped: &[usize]) -> dla_core::series::SeriesFile {
+        // `params()` has one warm-up point.
+        build_series(
+            &ctx(),
+            &manifest(Runtime::Python),
+            &params(),
+            &blocks_points(&XS[..counts.len().max(1)], counts, capped),
+        )
+    }
+
+    fn blocks_cols(s: &dla_core::series::SeriesFile) -> Vec<&str> {
+        s.columns
+            .iter()
+            .filter(|c| c.name.starts_with("py.blocks@"))
+            .map(|c| c.name.as_str())
+            .collect()
+    }
+
     #[test]
-    fn a_group_series_gives_every_point_a_value_at_its_own_x() {
-        let pts = blocks_points(&[100.0, 200.0, 300.0, 400.0], true);
-        let s = build_series(&ctx(), &manifest(Runtime::Python), &params(), &pts);
-        let a = s.column_index("py.blocks@src/a.py:3").unwrap();
+    fn the_records_counts_give_every_point_a_value_and_the_column_its_site_and_meaning() {
+        let counts: Vec<Value> = (0..5)
+            .map(|k| json!({"src/a.py:3": 10 + 5 * k, "src/b.py:7": 2 * k, "src/flat.py:1": 9}))
+            .collect();
+        let s = blocks_series(&counts, &[]);
         assert_eq!(
-            s.values(a),
-            [Some(10.0), Some(15.0), Some(20.0), Some(25.0)]
+            blocks_cols(&s),
+            ["py.blocks@src/a.py:3", "py.blocks@src/b.py:7"]
         );
-        let b = s.column_index("py.blocks@src/b.py:7").unwrap();
-        assert_eq!(s.values(b), [Some(0.0), Some(2.0), Some(4.0), Some(6.0)]);
-        // The series carries its site, as a count of the heap, from the driver.
+        let a = s.column_index("py.blocks@src/a.py:3").unwrap();
+        assert_eq!(s.values(a), [10.0, 15.0, 20.0, 25.0, 30.0].map(Some));
         let c = &s.columns[a];
         assert_eq!(c.site.as_deref(), Some("src/a.py:3"));
         assert_eq!(
@@ -990,26 +1079,128 @@ mod tests {
                 "driver"
             )
         );
-        // A site whose series does not have one count per point is not a column.
-        assert!(s.column_index("py.blocks@src/short.py:1").is_none());
-        // A series without the table has no such column.
-        let none = build_series(
-            &ctx(),
-            &manifest(Runtime::Python),
-            &params(),
-            &blocks_points(&[100.0, 200.0, 300.0, 400.0], false),
+        // No counts in any record: no column.
+        assert!(blocks_cols(&blocks_series(&[], &[])).is_empty());
+    }
+
+    #[test]
+    fn a_site_that_does_not_grow_after_the_warm_up_has_no_column_and_equal_is_not_growth() {
+        // Grows only between the warm-up point and the first measured one; equal at the end.
+        let early: Vec<Value> = [0, 40, 40, 40, 40]
+            .iter()
+            .map(|n| json!({"e.py:1": n}))
+            .collect();
+        assert!(blocks_cols(&blocks_series(&early, &[])).is_empty());
+        // Strictly above: one block more is growth.
+        let one: Vec<Value> = [0, 40, 40, 40, 41]
+            .iter()
+            .map(|n| json!({"e.py:1": n}))
+            .collect();
+        assert_eq!(blocks_cols(&blocks_series(&one, &[])), ["py.blocks@e.py:1"]);
+    }
+
+    #[test]
+    fn at_most_twelve_sites_the_largest_growth_first_and_the_rest_are_counted() {
+        let counts: Vec<Value> = (0..5)
+            .map(|k| {
+                let mut m = serde_json::Map::new();
+                for j in 0..15 {
+                    m.insert(format!("m.py:{}", j + 1), json!(k * (j + 1)));
+                }
+                Value::Object(m)
+            })
+            .collect();
+        let s = blocks_series(&counts, &[]);
+        let cols = blocks_cols(&s);
+        assert_eq!(cols.len(), 12, "{cols:?}");
+        // Sites 1..=3 grow the least and have none.
+        for j in 1..=15 {
+            assert_eq!(
+                cols.contains(&format!("py.blocks@m.py:{j}").as_str()),
+                j > 3,
+                "{j}"
+            );
+        }
+        assert!(
+            s.limitations
+                .iter()
+                .any(|l| l == "3 more allocation sites grew and have no column")
+        );
+    }
+
+    #[test]
+    fn a_kept_site_reads_zero_where_its_record_lists_the_counter_without_it() {
+        let counts = vec![
+            json!({"a.py:1": 1}),
+            json!({"x.py:9": 1}),
+            json!({"a.py:1": 3}),
+            json!({"a.py:1": 5}),
+            json!({"a.py:1": 9}),
+        ];
+        let s = blocks_series(&counts, &[]);
+        let a = s.column_index("py.blocks@a.py:1").unwrap();
+        assert_eq!(
+            s.values(a),
+            [Some(1.0), Some(0.0), Some(3.0), Some(5.0), Some(9.0)]
+        );
+    }
+
+    #[test]
+    fn a_record_cut_at_the_bound_leaves_a_missing_site_empty_and_says_so() {
+        let counts = vec![
+            json!({"a.py:1": 1}),
+            json!({"a.py:1": 2}),
+            json!({"a.py:1": 3}),
+            json!({"b.py:1": 50}),
+            json!({"a.py:1": 9}),
+        ];
+        let s = blocks_series(&counts, &[3]);
+        let a = s.column_index("py.blocks@a.py:1").unwrap();
+        assert_eq!(
+            s.values(a),
+            [Some(1.0), Some(2.0), Some(3.0), None, Some(9.0)]
         );
         assert!(
-            none.columns
+            s.limitations
                 .iter()
-                .all(|c| !c.name.starts_with("py.blocks@"))
+                .any(|l| l
+                    .starts_with("py.blocks: the agent keeps only its largest sites at point 4")),
+            "{:?}",
+            s.limitations
         );
-        // A point whose x the table does not know stays empty.
-        let mut odd = blocks_points(&[100.0, 200.0, 300.0, 400.0], true);
-        odd[1].x = 250.0;
-        let s = build_series(&ctx(), &manifest(Runtime::Python), &params(), &odd);
-        let a = s.column_index("py.blocks@src/a.py:3").unwrap();
-        assert_eq!(s.values(a)[1], None);
+        // Cut at the first measured point: the site there has no reading, so it is not judged.
+        let s = blocks_series(&counts, &[1]);
+        assert!(blocks_cols(&s).is_empty() || s.column_index("py.blocks@a.py:1").is_some());
+        let counts = vec![
+            json!({"a.py:1": 1}),
+            json!({"b.py:1": 5}),
+            json!({"b.py:1": 6}),
+            json!({"a.py:1": 8}),
+            json!({"a.py:1": 9}),
+        ];
+        let s = blocks_series(&counts, &[1]);
+        assert!(
+            s.column_index("py.blocks@a.py:1").is_none(),
+            "{:?}",
+            blocks_cols(&s)
+        );
+    }
+
+    #[test]
+    fn a_process_cut_before_its_last_checkpoint_is_judged_on_the_records_it_wrote() {
+        // Two points after the warm-up (one warm-up point here) are enough; the later points have no record.
+        let counts: Vec<Value> = (0..3).map(|k| json!({"a.py:1": 5 + 4 * k})).collect();
+        let mut pts = blocks_points(&XS[..3], &counts, &[]);
+        pts.push(PointInput {
+            x: 400.0,
+            ..PointInput::default()
+        });
+        let s = build_series(&ctx(), &manifest(Runtime::Python), &params(), &pts);
+        let a = s.column_index("py.blocks@a.py:1").unwrap();
+        assert_eq!(s.values(a), [Some(5.0), Some(9.0), Some(13.0), None]);
+        // Only one point after the warm-up: nothing to compare.
+        let s = blocks_series(&counts[..2], &[]);
+        assert!(blocks_cols(&s).is_empty());
     }
 
     #[test]
@@ -1026,7 +1217,10 @@ mod tests {
                 site: None,
             })
             .collect();
-        let pts: Vec<PointInput> = blocks_points(&[100.0, 200.0, 300.0, 400.0], true)
+        let counts: Vec<Value> = (0..4)
+            .map(|k| json!({"src/a.py:3": 10 + 5 * k, "src/b.py:7": 2 * k}))
+            .collect();
+        let pts: Vec<PointInput> = blocks_points(&XS[..4], &counts, &[])
             .into_iter()
             .map(|mut p| {
                 let k = p.x / 100.0;

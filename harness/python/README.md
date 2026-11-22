@@ -29,8 +29,9 @@ and cover only files under `DLA_PROJECT`.
   `/proc/self/status`. `values_pre_gc` holds `py.traced`, `py.gc_objects`, `os.rss` read before
   the collection (this is how cyclic garbage waiting for the collector shows up).
 - `types`: top 20 types by instance count with summed `sys.getsizeof`.
-- `group_series`, in the last checkpoint record of a driver run only: `py.blocks`, the live blocks
-  tracemalloc traces per allocation site, for the sites that grew (see "Allocation sites" below).
+- `group_counts`, in every checkpoint record of a driver run: `py.blocks`, the live blocks tracemalloc
+  traces per allocation site, all counted sites (see "Allocation sites" below); `group_capped` names
+  the counters a record cut at the bound of 5000 sites.
 - `groups`, only after the target has called `gc.freeze()`: `py.gc_frozen`, objects in the
   permanent generation by the project call site that froze them (`{"journeys/worker.py:25": 26000}`).
   The agent wraps `gc.freeze` and `gc.unfreeze` (the real call and its errors are the target's; the
@@ -55,16 +56,25 @@ file follows the rule `dla workload discover` uses for Python (`FileInfo.is_test
 directory named `test`, `tests`, `__tests__`, `__mocks__`, `testing`, `spec` or `specs`, `test_*.py`,
 `*_test.py`, `conftest.py`, and the entry files `setup.py` and `__main__.py`.
 
-The agent learns which sites grew only at the end, so it keeps the counts of every checkpoint in memory
-(one dict per checkpoint, at most 5000 sites each) and the record of the last checkpoint carries
-`group_series: {"py.blocks": {"x": [...], "sites": {"<file:line>": [<count per checkpoint>]}, "ms": [...]}}`:
-only the sites whose count at the last checkpoint is above the count at the first checkpoint after the
-warm-up (`DLA_WARMUP`), the largest growth first, at most 12, each with one count for every checkpoint of
-the process, the early ones included. `dla harness run` builds the series columns `py.blocks@<file:line>`
-from it, each point taking the count at its own `x`. When more sites grew, the limitation line
-`N more allocation sites grew and have no column` says how many. A process that is cut before its last
-checkpoint, or in which tracemalloc is not tracing, has no columns and a limitation line. Command mode and
-the other runtimes are unchanged. `ms` is the time the snapshot and the grouping took at each checkpoint.
+The agent keeps nothing between checkpoints that grows with their number (only the file-name caches,
+which fill once): every checkpoint record carries its own counts as
+`group_counts: {"py.blocks": {"<file:line>": <blocks>}}`, at most 5000 sites (the largest counts; a record
+that cut the list also has `group_capped: ["py.blocks"]` and a limitation line). `dla harness run` picks the
+columns from the records of the whole run: a site is kept when its count at the last point that has counts
+is above its count at the first such point after the warm-up (`DLA_WARMUP`); at most 12, the largest growth
+first, and `N more allocation sites grew and have no column` says how many more. A kept site reads 0 at a
+point whose record lists the counter without it; at a point cut at the bound it is left empty (not 0), a
+site with no reading at the first or last point is not judged, and a limitation line says so. A process
+cut before its last checkpoint is judged on the records it wrote (two points after the warm-up are
+enough). In a process where tracemalloc is not tracing there are no columns and a limitation line. Command
+mode and the other runtimes are unchanged.
+
+Order inside a checkpoint: the two collections, then the snapshot and the grouping (with the collector
+switched off meanwhile), then `py.traced`, `py.traced_peak` and the OS values. The snapshot's transient
+memory is thus in every reading alike, the warm-up checkpoints' and the first measured one's included; read
+before it, the first points would be cheaper than the later ones and the difference would read as growth.
+The counts dict of a checkpoint lives until its record is written, the same size on every point of a run
+whose number of sites is stable.
 
 Depth. With one frame only the innermost frame of a block is known, so a block a library function
 allocates for project code has no site. `DLA_TRACEMALLOC_FRAMES` sets the depth (a capture with `alloc`
@@ -74,7 +84,7 @@ fresh keys, 9 points, snapshot and grouping at every checkpoint included):
 
 | Frames | 1 | 2 | 4 | 8 |
 |---|---|---|---|---|
-| one `ImageDraw.text` call per unit (mean of 3 runs) | 0.66 | 0.94 (1.42x) | 1.26 (1.90x) | 2.38 (3.6x) |
+| one text-drawing call of an imaging library per unit (mean of 3 runs) | 0.66 | 0.94 (1.42x) | 1.26 (1.90x) | 2.38 (3.6x) |
 | two test files of the project per unit (1 run) | 3313 | 4417 (1.33x) | 6133 (1.85x) | 10222 (3.1x) |
 | snapshot and grouping, mean per checkpoint, first unit | 78 ms | 111 ms | 165 ms | 423 ms |
 | snapshot and grouping, mean per checkpoint, second unit | 680 ms | 966 ms | 1302 ms | 3152 ms |

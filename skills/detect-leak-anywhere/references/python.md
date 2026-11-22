@@ -29,9 +29,10 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   works. The frozen count is a count, so the bytes growth is tied to the site through the group column.
 - Allocation sites (driver runs only): at each checkpoint, after the forced collections, the agent counts
   the live blocks `tracemalloc` traces per site: the first frame, from the innermost outward, that lies
-  in the project and is neither a test file nor a file of the harness. A site whose count at the last
-  checkpoint is above its count at the first checkpoint after the warm-up gets the column
-  `py.blocks@<file:line>` (a count, region heap), with a value at every checkpoint; at most 12 sites, the
+  in the project and is neither a test file nor a file of the harness. Every record carries its counts
+  (the agent keeps nothing between checkpoints); `dla harness run` gives the column
+  `py.blocks@<file:line>` (a count, region heap) to a site whose count at the last point is above its count at
+  the first point after the warm-up, with a value at every point (0 where the record lacks the site); at most 12 sites, the
   largest growth first, and a limitation line says how many more grew. Sites that did not grow have no
   column. A column ties to the finding whose own site is that line and to no other, so a leaked object
   that nothing holds shows at the line that made it, for example the line of a Python function that calls

@@ -176,6 +176,28 @@ plan) is NOT part of this brief; Python candidate batches stay hook drivers.
    `corrected` or `added`, in the style of the rows about the JVM test loop): what is verified and
    what is not.
 
+7. Three small items found on the real tree (each with a test):
+   a. A finding added from a line that grew in the test loop is then tested with
+      `dla alloc-test <H> --finding F`. On the loop harness that reruns the whole test suite,
+      minutes per run. When the series comes from a `pytest-loop` harness, the commands `dla trend`
+      prints for such a finding (and the `growth-not-measured` refusal of `dla ledger resolve`)
+      first name a small driver of its own: `dla harness gen --lang python --driver --probe F`,
+      a unit that calls the function of that line, `dla harness run`, `dla trend`, and the
+      alloc-test on THAT harness; one sentence says why (seconds instead of the whole suite).
+      Check that `--probe F` accepts a finding that has a site and no container (holder
+      `native-handle/global-ref`) and that its hooks comment names the line; if it does not, make
+      it so. The alloc-test on the loop harness stays allowed.
+   b. The file-name rule of the agent's test-file test (`_is_test_rel` in
+      harness/python/sitecustomize.py: `test_*`, `*_test`, `conftest.py`) is not pinned: a
+      mutation that disables the `test_` prefix passes the suite. The evidence library keeps its
+      tests in a directory `Tests` (capital T, not a test directory by the rule) in files named
+      `test_*.py`, so this is the rule that matters there. Add the test.
+   c. `producer_hint` and `producer_command` in crates/dla-core/src/labels.rs print
+      `dla trend <S> --finding F` for growth-series evidence; the command refuses `--finding`
+      without `--against <S2>`. Print a command that runs. Say in the report which evidence
+      records that command writes and whether `dla ledger label` then accepts them as the
+      growth-series of the finding; do not change the label rule.
+
 ## Tests
 
 - Real loop (crates/dla-workload/tests, next to the tests that run a real Python driver; skip

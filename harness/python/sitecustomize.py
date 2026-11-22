@@ -1291,9 +1291,17 @@ def _count_blocks():
 
     if not tracemalloc.is_tracing():
         raise RuntimeError("tracemalloc is not tracing")
-    snap = tracemalloc.take_snapshot()
-    stats = snap.statistics("traceback")
-    del snap
+    # The collector is off while the snapshot is grouped: it allocates millions of tuples, and
+    # the collections they would trigger are the agent's own work, not the program's.
+    was_on = gc.isenabled()
+    gc.disable()
+    try:
+        snap = tracemalloc.take_snapshot()
+        stats = snap.statistics("traceback")
+        del snap
+    finally:
+        if was_on:
+            gc.enable()
     counts = {}
     files = _blocks["files"]  # file name -> counting path or None, kept across checkpoints
     for st in stats:
