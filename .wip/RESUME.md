@@ -1088,3 +1088,23 @@ flat test-loop readings get only 9 second looks.
   column); the JVM census does not write the discovery when it only joins the sweep's sites; the loop is an order of
   the queue, not a gate rule; pytest loop untested on macOS and Windows; a pytest-loop series holds many growing
   lines that are the test suite's own (12 columns, more without a column).
+
+## State at about 21:10 UTC 2026-11-22
+
+- Tenth frozen snapshot on wip/progress: 868bfed6d31d8da18259a2754a74ae73a541b25c (W1 + X + Y + Z + S + ci.yml pytest step).
+  CI for it is running; wait with `bash wip-notes/ci-wait-branch.sh 868bfed... <outdir> wip/progress 3300`.
+- Local checks on that tree: whole suite 171 result lines, 3281 passed, 0 failed, 5 ignored (default PATH, pytest tests
+  skip); with the venv first on PATH harness_pytest_loop 17, harness_python_blocks 8, pytest_loop 13, py_site_columns 7,
+  trigger 4, keep_going 31 pass; clippy -D warnings clean; schema --check clean; fmt clean; eleven own mutations
+  (u79/mut.py Q1..Q11) each failed a named test.
+- Builder S (brief site-order-brief.md): allocation-site columns come with a finding first, then largest Sen slope
+  (`passing` in trend/summary.rs, gate.rs `site_columns_largest_first`).
+- Real tree, run 20261122-191401-d847 in u72/pillow: probe, sweep, census -> queue names the loop; loop 1258 s, 9 points,
+  149 files, 3736 tests per run, dropped 0; 12 site columns pass, the leak line src/.../ImageFont.py:580 at 299 blocks
+  per run (second); F278 added there; H2 via --probe F278 with a text-drawing unit: 1.03 blocks per unit; alloc-test
+  favors leak, decided by the site column; F278 confirmed.
+- Why 12 lines grow in the loop: the library's deferred-import-error object re-raises one stored exception; each raise
+  extends its traceback, whose frames pin every pytest session (120k objects, 80 MB per run; measured without the agent).
+- When CI is green: commit three trees to main with commit-snapshot-tree.sh: 8253583 + commit-message-9.txt,
+  7633949 + commit-message-10.txt, 868bfed + commit-message-11.txt; push main and main:dev/wonderful-mccarthy-algc5s;
+  refresh /root/dla-real/plugin and bin; run pillow-2.
