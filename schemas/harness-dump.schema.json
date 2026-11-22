@@ -65,6 +65,16 @@
         "null"
       ]
     },
+    "group_series": {
+      "description": "Grouped counters kept for every point of the process, written by the record of the last\npoint: base name to its series per site (the Python agent's `py.blocks`: the sites that\ngrew, each with one count per checkpoint).",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/DumpGroupSeries"
+      }
+    },
     "groups": {
       "description": "Grouped counters: base name to site to value.",
       "type": [
@@ -375,6 +385,44 @@
             "string",
             "null"
           ]
+        }
+      }
+    },
+    "DumpGroupSeries": {
+      "description": "The series of grouped counters of a whole process, in the record of its last point.",
+      "type": "object",
+      "properties": {
+        "ms": {
+          "description": "Milliseconds the counting took at each point.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "sites": {
+          "description": "Site to one count per entry of `x`.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "default": {}
+        },
+        "x": {
+          "description": "The `x` of each point of the process, in order (units completed).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
         }
       }
     },

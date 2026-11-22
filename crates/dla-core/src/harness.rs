@@ -1307,6 +1307,11 @@ pub struct HarnessDump {
     /// Grouped counters: base name to site to value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub groups: Option<BTreeMap<String, BTreeMap<String, f64>>>,
+    /// Grouped counters kept for every point of the process, written by the record of the last
+    /// point: base name to its series per site (the Python agent's `py.blocks`: the sites that
+    /// grew, each with one count per checkpoint).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_series: Option<BTreeMap<String, DumpGroupSeries>>,
     /// Unsymbolized allocation stacks from the allocator shim: stack key to
     /// `{live_bytes, live_blocks, allocs, frames: [{a, m, o}]}` (hex strings), kept as
     /// JSON because its shape belongs to the shim.
@@ -1336,6 +1341,20 @@ pub struct HarnessDump {
     /// Files the agent wrote for `DLA_CAPTURE` at this record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub captures: Option<Vec<DumpCapture>>,
+}
+
+/// The series of grouped counters of a whole process, in the record of its last point.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+pub struct DumpGroupSeries {
+    /// The `x` of each point of the process, in order (units completed).
+    #[serde(default)]
+    pub x: Vec<f64>,
+    /// Site to one count per entry of `x`.
+    #[serde(default)]
+    pub sites: BTreeMap<String, Vec<f64>>,
+    /// Milliseconds the counting took at each point.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ms: Option<Vec<f64>>,
 }
 
 /// How the in-run readings of a record were taken (Go command mode).

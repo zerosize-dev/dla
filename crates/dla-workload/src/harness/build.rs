@@ -158,6 +158,9 @@ enum Class {
     Group,
     Other,
     Probe,
+    /// The allocation-site columns of a Python driver (`py.blocks@<site>`, at most 12): the
+    /// agent kept only the sites that grew, so none of them is dropped for a probe column.
+    Site,
     Baseline,
 }
 
@@ -167,6 +170,8 @@ fn classify(name: &str) -> Class {
         Class::Type
     } else if name.starts_with("probe:") {
         Class::Probe
+    } else if name.starts_with("py.blocks@") {
+        Class::Site
     } else if name.contains('@') {
         Class::Group
     } else if meta.baseline {
@@ -389,6 +394,36 @@ pub fn build_series(
         }
     }
 
+    // Series kept for every point of a process, written by the record of its last point
+    // (`py.blocks`): each point takes the value at its own `x`.
+    for rec in points.iter().rev().filter_map(|p| p.rec.as_ref()) {
+        let Some(tables) = &rec.dump.group_series else {
+            continue;
+        };
+        let src = source_tag(runtime, rec.dump.phase);
+        for (base, table) in tables {
+            for (site, counts) in &table.sites {
+                if counts.len() != table.x.len() {
+                    continue;
+                }
+                let name = format!("{base}@{site}");
+                for (i, p) in points.iter().enumerate() {
+                    if p.rec.is_none() {
+                        continue;
+                    }
+                    let Some(j) = table.x.iter().position(|x| *x == p.x) else {
+                        continue;
+                    };
+                    let acc = t.set(&name, i, counts[j], src);
+                    if looks_like_site(site) {
+                        acc.site = Some(site.clone());
+                    }
+                }
+            }
+        }
+        break;
+    }
+
     if !reduced.is_empty() {
         let mut sections: Vec<&str> = reduced
             .iter()
@@ -487,6 +522,7 @@ pub fn build_series(
                 Class::Group => "grouped",
                 Class::Other => "other",
                 Class::Probe => "probe",
+                Class::Site => "allocation-site",
                 Class::Baseline => "baseline",
             };
             *dropped.entry(label).or_default() += 1;
@@ -905,6 +941,123 @@ mod tests {
             s.limitations
                 .iter()
                 .any(|l| l.starts_with("dropped 17 grouped"))
+        );
+        s.validate().unwrap();
+    }
+
+    /// The checkpoint records of a Python driver: `py.blocks` series of two sites in the last.
+    fn blocks_points(xs: &[f64], with_table: bool) -> Vec<PointInput> {
+        let n = xs.len();
+        xs.iter()
+            .enumerate()
+            .map(|(i, x)| {
+                let mut rec = json!({"dla_harness":1,"phase":"checkpoint","pid":1,"runtime":"python",
+                    "x": x, "values":{"py.traced": 100.0 + x}});
+                if with_table && i + 1 == n {
+                    rec["group_series"] = json!({"py.blocks": {
+                        "x": xs,
+                        "sites": {
+                            "src/a.py:3": (0..n).map(|k| 10 + 5 * k).collect::<Vec<_>>(),
+                            "src/b.py:7": (0..n).map(|k| 2 * k).collect::<Vec<_>>(),
+                            "src/short.py:1": [1, 2],
+                        }}});
+                }
+                pt(*x, rec)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_group_series_gives_every_point_a_value_at_its_own_x() {
+        let pts = blocks_points(&[100.0, 200.0, 300.0, 400.0], true);
+        let s = build_series(&ctx(), &manifest(Runtime::Python), &params(), &pts);
+        let a = s.column_index("py.blocks@src/a.py:3").unwrap();
+        assert_eq!(
+            s.values(a),
+            [Some(10.0), Some(15.0), Some(20.0), Some(25.0)]
+        );
+        let b = s.column_index("py.blocks@src/b.py:7").unwrap();
+        assert_eq!(s.values(b), [Some(0.0), Some(2.0), Some(4.0), Some(6.0)]);
+        // The series carries its site, as a count of the heap, from the driver.
+        let c = &s.columns[a];
+        assert_eq!(c.site.as_deref(), Some("src/a.py:3"));
+        assert_eq!(
+            (c.unit, c.kind, c.region, c.source.as_str()),
+            (
+                dla_core::series::Unit::Count,
+                dla_core::series::ColumnKind::Counter,
+                SeriesRegion::Heap,
+                "driver"
+            )
+        );
+        // A site whose series does not have one count per point is not a column.
+        assert!(s.column_index("py.blocks@src/short.py:1").is_none());
+        // A series without the table has no such column.
+        let none = build_series(
+            &ctx(),
+            &manifest(Runtime::Python),
+            &params(),
+            &blocks_points(&[100.0, 200.0, 300.0, 400.0], false),
+        );
+        assert!(
+            none.columns
+                .iter()
+                .all(|c| !c.name.starts_with("py.blocks@"))
+        );
+        // A point whose x the table does not know stays empty.
+        let mut odd = blocks_points(&[100.0, 200.0, 300.0, 400.0], true);
+        odd[1].x = 250.0;
+        let s = build_series(&ctx(), &manifest(Runtime::Python), &params(), &odd);
+        let a = s.column_index("py.blocks@src/a.py:3").unwrap();
+        assert_eq!(s.values(a)[1], None);
+    }
+
+    #[test]
+    fn the_allocation_site_columns_are_not_dropped_for_probe_columns_at_the_cap() {
+        let mut m = manifest(Runtime::Python);
+        m.probes = (1..=70)
+            .map(|i| dla_core::harness::ProbeSpec {
+                id: format!("P{i}"),
+                finding: None,
+                target: dla_core::harness::ProbeTarget::PyGlobal {
+                    module: "m".into(),
+                    name: format!("v{i}"),
+                },
+                site: None,
+            })
+            .collect();
+        let pts: Vec<PointInput> = blocks_points(&[100.0, 200.0, 300.0, 400.0], true)
+            .into_iter()
+            .map(|mut p| {
+                let k = p.x / 100.0;
+                if let Some(rec) = &mut p.rec {
+                    rec.dump.probes = Some(
+                        (1..=70)
+                            .map(|i| {
+                                serde_json::from_value(json!({"id": format!("P{i}"),
+                                    "path": format!("m.v{i}"), "size": k * f64::from(i)}))
+                                .unwrap()
+                            })
+                            .collect(),
+                    );
+                }
+                p
+            })
+            .collect();
+        let s = build_series(&ctx(), &m, &params(), &pts);
+        assert_eq!(s.columns.len(), MAX_COLUMNS);
+        assert!(s.column_index("py.blocks@src/a.py:3").is_some());
+        assert!(s.column_index("py.blocks@src/b.py:7").is_some());
+        assert!(
+            s.column_index("py.traced").is_some(),
+            "the baseline column stays"
+        );
+        assert!(
+            s.limitations
+                .iter()
+                .any(|l| l.starts_with("dropped") && l.contains("probe columns")),
+            "{:?}",
+            s.limitations
         );
         s.validate().unwrap();
     }

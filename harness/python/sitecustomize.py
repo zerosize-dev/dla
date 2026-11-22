@@ -2,7 +2,7 @@
 
 Placed first on PYTHONPATH by `dla harness run`. It chain-imports the project's own
 sitecustomize (if any), starts tracemalloc (DLA_TRACEMALLOC_FRAMES frames: 10 when allocation or non-heap
-captures are asked for, else 1) and, on Python 3.12+, a sys.monitoring
+captures are asked for, else _DRIVER_FRAMES in driver mode (DLA_KEY_MODE is set), else 1) and, on Python 3.12+, a sys.monitoring
 PY_START coverage collector, and writes one JSON record per dump to the file named by
 DLA_HARNESS_OUT: an `exit` record from an atexit handler, `checkpoint` records when a driver calls
 `checkpoint()`, and optional light `tick` records every DLA_TICK_MS.
@@ -12,6 +12,9 @@ DLA_PROJECT (scratch root), DLA_TICK_MS, DLA_ITER. Raw captures (`dla harness ru
 DLA_CAPTURE (comma list of histogram, alloc, nonheap), DLA_CAPTURE_DIR, DLA_CAPTURE_DUMPS,
 DLA_TRACEMALLOC_FRAMES, DLA_PY_MEMRAY=0 to leave memray out of `alloc`. The module never raises
 into the target.
+
+Driver mode also counts the live traced blocks per allocation site at every checkpoint (see
+"py.blocks" below): the last checkpoint carries the series of the sites that grew.
 """
 
 import atexit
@@ -82,6 +85,12 @@ _ACTIVE = _env("DLA_HARNESS_OUT") is not None and not _is_tool_process()
 
 
 _TRACEMALLOC_FRAMES_MAX = 60
+# Frames tracemalloc keeps per block in driver mode when no capture asks for more. The site of a
+# block (py.blocks) is its innermost project frame, so a block made inside a library function that
+# project code called has a site only when enough frames are kept. Chosen by measuring the unit time
+# of a driver run at 1, 2, 4 and 8 frames (harness/python/README.md): the deepest within 1.25 times
+# the time at one frame.
+_DRIVER_FRAMES = 1
 
 
 def _int_env(name, fallback):
@@ -110,7 +119,11 @@ def _start_tracemalloc():
         import tracemalloc
 
         if not tracemalloc.is_tracing():
-            frames = _int_env("DLA_TRACEMALLOC_FRAMES", 10 if ("alloc" in _CAPTURE_KINDS or "nonheap" in _CAPTURE_KINDS) else 1)
+            if "alloc" in _CAPTURE_KINDS or "nonheap" in _CAPTURE_KINDS:
+                fallback = 10
+            else:
+                fallback = _DRIVER_FRAMES if _env("DLA_KEY_MODE") is not None else 1
+            frames = _int_env("DLA_TRACEMALLOC_FRAMES", fallback)
             tracemalloc.start(max(1, min(frames, _TRACEMALLOC_FRAMES_MAX)))
     except BaseException:
         pass
@@ -1190,6 +1203,163 @@ def _freeze_record(rec, limitations):
 
 
 # ---------------------------------------------------------------------------------------------
+# py.blocks: live traced blocks per allocation site (driver mode)
+# ---------------------------------------------------------------------------------------------
+#
+# At each checkpoint, after the forced collections, the live blocks tracemalloc traces are counted
+# by site: the first frame, from the innermost outward, that lies in the project and is neither a
+# test file nor a file of the harness (the agent, the driver). The agent learns only at the end
+# which sites grew, so the counts of every checkpoint stay in memory (one small dict each) and the
+# last checkpoint's record carries `group_series`: for the sites that grew most, one count per
+# checkpoint, with the x of each. A site grew when its count at the last checkpoint is above its
+# count at the first checkpoint after the warm-up. At most _BLOCKS_MAX_SITES sites get a series.
+
+_BLOCKS_MAX_SITES = 12
+_BLOCKS_SITES_CAP = 5000  # sites kept per checkpoint (the largest counts), so memory stays bounded
+_BLOCKS_TEST_DIRS = frozenset(("test", "tests", "__tests__", "__mocks__", "testing", "spec", "specs"))
+_blocks = {"xs": [], "snaps": [], "ms": [], "failed": None, "capped": False, "own": {}, "files": {}}
+
+
+def _is_test_rel(rel):
+    """The rule `FileInfo.is_test` of the workload discovery applies to a Python file: a file under
+    a test directory, `test_*` and `*_test`, `conftest.py`, and the entry files `setup.py` and
+    `__main__.py`. `rel` is project-relative with '/' separators."""
+    parts = rel.split("/")
+    name = parts[-1]
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    return (
+        any(d in _BLOCKS_TEST_DIRS for d in parts[:-1])
+        or stem.startswith("test_")
+        or stem.endswith("_test")
+        or name == "conftest.py"
+        or stem in ("setup", "__main__")
+    )
+
+
+def _harness_file(filename):
+    """True for a file of the harness: the agent's directory (which also holds the driver the
+    harness copied there) and the main script when it is the driver."""
+    got = _blocks["own"].get(filename)
+    if got is None:
+        real = os.path.realpath(filename)
+        got = real.startswith(os.path.realpath(_HERE) + os.sep)
+        if not got:
+            main = getattr(sys.modules.get("__main__"), "__file__", None)
+            got = bool(main) and os.path.basename(main) == "dla_harness.py" and real == os.path.realpath(main)
+        if len(_blocks["own"]) < 20000:
+            _blocks["own"][filename] = got
+    return got
+
+
+def _source_rel(filename):
+    """Path of a file of the project the scratch copy was made from (DLA_SOURCE_ROOT), relative to
+    that project, else None. A library installed in editable mode runs from there, not from the
+    copy; the copy keeps the project's layout, so the path names the same line in both. The run's
+    own directory (.dla), the repository metadata and installed packages are not the project."""
+    root = _env("DLA_SOURCE_ROOT")
+    if root is None or not filename or filename.startswith("<"):
+        return None
+    low = filename.replace("\\", "/")
+    if "/site-packages/" in low or "/dist-packages/" in low:
+        return None
+    root = os.path.realpath(root)
+    real = os.path.realpath(filename)
+    if not real.startswith(root + os.sep):
+        return None
+    rel = real[len(root) + 1 :].replace(os.sep, "/")
+    return None if rel.split("/", 1)[0] in (".dla", ".git") else rel
+
+
+def _block_file(filename):
+    """The project-relative path of `filename` when blocks made there count, else None."""
+    rel = _project_rel(filename) or _source_rel(filename)
+    if rel is None or _is_test_rel(rel) or _harness_file(filename):
+        return None
+    return rel
+
+
+def _count_blocks():
+    """`{site: live traced blocks}` for the project's allocation sites right now."""
+    import tracemalloc
+
+    if not tracemalloc.is_tracing():
+        raise RuntimeError("tracemalloc is not tracing")
+    snap = tracemalloc.take_snapshot()
+    stats = snap.statistics("traceback")
+    del snap
+    counts = {}
+    files = _blocks["files"]  # file name -> counting path or None, kept across checkpoints
+    for st in stats:
+        site = None
+        for frame in reversed(st.traceback):  # tracemalloc lists the oldest frame first
+            name = frame.filename
+            rel = files.get(name, 0)
+            if rel == 0:
+                rel = _block_file(name)
+                if len(files) < 20000:
+                    files[name] = rel
+            if rel is not None:
+                site = f"{rel}:{frame.lineno}"
+                break
+        if site is not None:
+            counts[site] = counts.get(site, 0) + st.count
+    if len(counts) > _BLOCKS_SITES_CAP:
+        counts = dict(sorted(counts.items(), key=lambda kv: -kv[1])[:_BLOCKS_SITES_CAP])
+        _blocks["capped"] = True
+    return counts
+
+
+def _blocks_checkpoint(x, last, limitations):
+    """Counts the blocks at a driver checkpoint; at the last one returns the `group_series` table
+    (or None, with a limitation, when the columns cannot be built)."""
+    try:
+        import tracemalloc
+
+        if tracemalloc.get_traceback_limit() == 1:
+            limitations.append(
+                "py.blocks sees only the innermost frame of a block (tracemalloc keeps 1 frame in a driver run): a block a library function allocates for project code has no site; DLA_TRACEMALLOC_FRAMES=<n> keeps n frames"
+            )
+    except BaseException:
+        pass
+    try:
+        t0 = _now_ms()
+        counts = _count_blocks()
+        _blocks["snaps"].append(counts)
+        _blocks["xs"].append(x)
+        _blocks["ms"].append(_now_ms() - t0)
+    except BaseException as exc:
+        _blocks["failed"] = _blocks["failed"] or repr(exc)
+    if not last:
+        return None
+    try:
+        if _blocks["failed"]:
+            limitations.append(
+                f"reduced record: py.blocks could not be counted ({_blocks['failed']}), so the allocation-site columns are missing"
+            )
+            return None
+        snaps, xs = _blocks["snaps"], _blocks["xs"]
+        first = min(max(_int_env("DLA_WARMUP", 0), 0), len(snaps) - 1)
+        if len(snaps) - first < 2 or any(v is None for v in xs):
+            return None
+        a, b = snaps[first], snaps[-1]
+        grown = sorted(
+            ((b[site] - a.get(site, 0), site) for site in b if b[site] > a.get(site, 0)),
+            key=lambda g: (-g[0], g[1]),
+        )
+        if _blocks["capped"]:
+            limitations.append(f"py.blocks keeps the {_BLOCKS_SITES_CAP} sites with the most blocks at each checkpoint")
+        if len(grown) > _BLOCKS_MAX_SITES:
+            limitations.append(f"{len(grown) - _BLOCKS_MAX_SITES} more allocation sites grew and have no column")
+        sites = {site: [s.get(site, 0) for s in snaps] for _, site in grown[:_BLOCKS_MAX_SITES]}
+        if not sites:
+            return None
+        return {"py.blocks": {"x": xs, "sites": sites, "ms": _blocks["ms"]}}
+    except BaseException as exc:
+        limitations.append(f"reduced record: py.blocks could not be read: {exc!r}, so the allocation-site columns are missing")
+        return None
+
+
+# ---------------------------------------------------------------------------------------------
 # dumping
 # ---------------------------------------------------------------------------------------------
 
@@ -1235,12 +1405,20 @@ def _build(phase, x, last):
         values["py.traced_peak"] = traced[1]
     else:
         limitations.append("tracemalloc not tracing: py.traced unavailable")
+    series = None
+    if phase == "checkpoint":
+        if traced is None:
+            limitations.append("tracemalloc not tracing: the py.blocks columns are unavailable")
+        else:
+            series = _blocks_checkpoint(x, last, limitations)
     objs = None if tick else gc.get_objects()
     values["py.gc_objects"] = len(objs) if objs is not None else len(gc.get_objects())
     values["py.gc_collections"] = sum(s.get("collections", 0) for s in gc.get_stats())
     os_own = _os_values()
     values.update(os_own)
     rec["values"] = values
+    if series:
+        rec["group_series"] = series
     if pre is not None:
         rec["values_pre_gc"] = pre
     if want_purge:

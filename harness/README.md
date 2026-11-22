@@ -26,7 +26,7 @@ writes one `exit` line at exit and may write periodic `tick` lines. One record:
  "x":2000,"t_ms":1234,"gc_forced":true,
  "values":{"jvm.heap_used":123456},"values_pre_gc":{"jvm.heap_used":456789},
  "purge":{"kind":"trim","before":{"os.rss":1},"after":{"os.rss":1}},
- "groups":{}, "raw_sites":{},
+ "groups":{}, "group_series":{}, "raw_sites":{},
  "probes":[{"id":"P1","name":"ORDERS_BY_ID","path":"shop.OrderCache.ORDERS_BY_ID","size":1750,"reachable":5400,"bytes":null,"error":null}],
  "types":[{"name":"shop.Order","count":1750,"bytes":84000}],
  "coverage":{"kind":"classes|functions","items":["shop.OrderCache"],"project":1,"sources":["shop/OrderCache.java"]},
@@ -35,7 +35,10 @@ writes one `exit` line at exit and may write periodic `tick` lines. One record:
 
 `values` are read after a forced collection when the runtime has one; `values_pre_gc` holds the
 values read just before it. `purge` is present only when `DLA_PURGE` is set, at the exit record
-or the last checkpoint. Absent optional sections are simply left out.
+or the last checkpoint. `group_series` is present only in the last checkpoint record of a Python
+driver run: for a grouped counter (`py.blocks`) the series of the sites that grew, `{"x":[...],"sites":{"<site>":[<count per x>]}}`,
+which `dla harness run` turns into the columns `<base>@<site>` with a value at every point.
+Absent optional sections are simply left out.
 
 | Variable | Meaning |
 |---|---|
@@ -43,6 +46,7 @@ or the last checkpoint. Absent optional sections are simply left out.
 | `DLA_HARNESS_PROBES` | path of `probes.json`: a JSON array of `ProbeSpec` (`{"id","finding","target":{"kind",...},"site"}`); an object with a `probes` array is also accepted. A runtime reads only its own probe kinds. Kind spelling is compared ignoring case, `-` and `_` (`JvmClass`, `jvm-class`) |
 | `DLA_PURGE` | `none`, `trim`, `gc`, `free-os-memory`, `trim-native-heap`, `jemalloc`, `empty-cache`. Handled per runtime: JVM `trim-native-heap` and `gc`; Python `trim` and `gc`; Node `gc`; Go `free-os-memory` and `gc` (agent and driver); the allocator shim `trim` and `jemalloc` (the latter untested); the Rust and C drivers `trim`. An unsupported kind becomes a limitation. `empty-cache` has no handler yet |
 | `DLA_PROJECT` | scratch project root; used to select project classes/functions for coverage |
+| `DLA_SOURCE_ROOT` | Python only: the project the scratch copy was made from; a library installed in editable mode runs from there, so the allocation-site columns (`py.blocks`) count its files too |
 | `DLA_PROJECT_PACKAGES` | JVM only: comma list of the packages the project's own sources declare (`com.acme.shop,com.acme.billing`); the agent ranks classes of these packages with the project's, so a jar that lies outside `DLA_PROJECT` or a package that sorts late never drops the project's classes from the coverage list. `dla harness run` sets it from the scratch copy's `.java` and `.kt` files |
 | `DLA_WARM_ROUNDS` | JVM only: how many times the agent runs its own readings before its first checkpoint, so its first use of the compiler and metaspace is not read as growth of the program (default 30, at most 3 seconds; 0 turns it off) |
 | `DLA_TICK_MS` | optional period of light `tick` records (no forced collection, no probes) |

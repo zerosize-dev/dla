@@ -484,3 +484,13 @@ fn the_verifier_stays_blind() {
         "the verifier is never given a site"
     );
 }
+
+#[test]
+fn l_ownership_fits_a_managed_object_kept_alive_by_native_code_as_well_as_native_memory() {
+    // A CPython reference count or a JNI global reference that native code never released keeps a
+    // managed object alive: the leak lies in the managed heap. The row fits both regions.
+    let t = table();
+    let e = t.get("L-OWNERSHIP").expect("the L-OWNERSHIP row");
+    let regions: Vec<&str> = e.regions.iter().map(|r| r.as_str()).collect();
+    assert_eq!(regions, ["off-heap", "heap"]);
+}

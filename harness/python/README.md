@@ -17,7 +17,7 @@ PYTHONPATH=<harness dir>[:<existing PYTHONPATH>] DLA_HARNESS_OUT=... python3 -m 
 ```
 
 The agent chain-imports the next `sitecustomize` found on `sys.path` (the project's, or the
-system's), skips `pip`/`venv`/`ensurepip`/`build` runs, starts tracemalloc (`DLA_TRACEMALLOC_FRAMES` frames: 10 when `--capture alloc` or `nonheap` is asked for, else 1) and, on
+system's), skips `pip`/`venv`/`ensurepip`/`build` runs, starts tracemalloc (`DLA_TRACEMALLOC_FRAMES` frames: 10 when `--capture alloc` or `nonheap` is asked for, else 1, in command and driver mode alike: see "Allocation sites" for the depth) and, on
 3.12+, a `sys.monitoring` `PY_START` collector (each code object disables itself after its first
 event). Coverage items look like `reports.builder:ReportBuilder.render@reports/builder.py:18`
 and cover only files under `DLA_PROJECT`.
@@ -29,6 +29,8 @@ and cover only files under `DLA_PROJECT`.
   `/proc/self/status`. `values_pre_gc` holds `py.traced`, `py.gc_objects`, `os.rss` read before
   the collection (this is how cyclic garbage waiting for the collector shows up).
 - `types`: top 20 types by instance count with summed `sys.getsizeof`.
+- `group_series`, in the last checkpoint record of a driver run only: `py.blocks`, the live blocks
+  tracemalloc traces per allocation site, for the sites that grew (see "Allocation sites" below).
 - `groups`, only after the target has called `gc.freeze()`: `py.gc_frozen`, objects in the
   permanent generation by the project call site that froze them (`{"journeys/worker.py:25": 26000}`).
   The agent wraps `gc.freeze` and `gc.unfreeze` (the real call and its errors are the target's; the
@@ -40,6 +42,45 @@ and cover only files under `DLA_PROJECT`.
   called. Whenever the freeze count is above zero (whoever froze), a limitation line says that
   `py.gc_objects` and the type counts exclude those objects: the permanent generation is not in
   `gc.get_objects()`. An interpreter without `gc.freeze` or `gc.get_freeze_count` (before 3.7) is left alone.
+
+### Allocation sites (`py.blocks@<file:line>`, driver runs)
+
+At every checkpoint, after the two collections the record already forces, the agent takes a
+tracemalloc snapshot, groups it by traceback and counts the live blocks per site. The site of a block
+is the first frame, from the innermost outward, that lies in the project (under `DLA_PROJECT`, or under
+`DLA_SOURCE_ROOT`, the project the scratch copy was made from, because a library installed in editable
+mode runs from there and not from the copy; its `.dla` directory, `.git` and installed packages never
+count) and is neither a test file nor a file of the harness (the agent's directory, the driver). A test
+file follows the rule `dla workload discover` uses for Python (`FileInfo.is_test`): a file under a
+directory named `test`, `tests`, `__tests__`, `__mocks__`, `testing`, `spec` or `specs`, `test_*.py`,
+`*_test.py`, `conftest.py`, and the entry files `setup.py` and `__main__.py`.
+
+The agent learns which sites grew only at the end, so it keeps the counts of every checkpoint in memory
+(one dict per checkpoint, at most 5000 sites each) and the record of the last checkpoint carries
+`group_series: {"py.blocks": {"x": [...], "sites": {"<file:line>": [<count per checkpoint>]}, "ms": [...]}}`:
+only the sites whose count at the last checkpoint is above the count at the first checkpoint after the
+warm-up (`DLA_WARMUP`), the largest growth first, at most 12, each with one count for every checkpoint of
+the process, the early ones included. `dla harness run` builds the series columns `py.blocks@<file:line>`
+from it, each point taking the count at its own `x`. When more sites grew, the limitation line
+`N more allocation sites grew and have no column` says how many. A process that is cut before its last
+checkpoint, or in which tracemalloc is not tracing, has no columns and a limitation line. Command mode and
+the other runtimes are unchanged. `ms` is the time the snapshot and the grouping took at each checkpoint.
+
+Depth. With one frame only the innermost frame of a block is known, so a block a library function
+allocates for project code has no site. `DLA_TRACEMALLOC_FRAMES` sets the depth (a capture with `alloc`
+keeps 10). The default of a driver run was chosen by measuring the time of the run at 1, 2, 4 and 8
+frames, the deepest whose time is at most 1.25 times the time at one frame (milliseconds per unit,
+fresh keys, 9 points, snapshot and grouping at every checkpoint included):
+
+| Frames | 1 | 2 | 4 | 8 |
+|---|---|---|---|---|
+| one `ImageDraw.text` call per unit (mean of 3 runs) | 0.66 | 0.94 (1.42x) | 1.26 (1.90x) | 2.38 (3.6x) |
+| two test files of the project per unit (1 run) | 3313 | 4417 (1.33x) | 6133 (1.85x) | 10222 (3.1x) |
+| snapshot and grouping, mean per checkpoint, first unit | 78 ms | 111 ms | 165 ms | 423 ms |
+| snapshot and grouping, mean per checkpoint, second unit | 680 ms | 966 ms | 1302 ms | 3152 ms |
+
+Both units exceed the bound at two frames, so a driver run keeps one frame and says so in a limitation
+line (`py.blocks sees only the innermost frame of a block`).
 
 ### Reduced records
 

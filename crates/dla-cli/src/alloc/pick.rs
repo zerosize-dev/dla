@@ -79,6 +79,8 @@ pub struct Picked {
     pub required: Vec<String>,
     /// How the columns were chosen, in a few words.
     pub basis: String,
+    /// A limitation of the choice the result must carry.
+    pub note: Option<String>,
 }
 
 /// The newest trend report of a series of harness `harness` (a harness series first, then
@@ -263,6 +265,30 @@ fn tied(
     (Vec::new(), "")
 }
 
+/// The allocation-site count column (`py.blocks@<site>`) of the latest trend that passed the gate
+/// and is tied to `root` (by its finding, its candidates or the finding's own site) but is not in
+/// `series`. The agent writes only the sites that grew, so the absence says the count at the line
+/// did not grow in this series, or was not counted; the whole process (`py.traced`: a unit that
+/// runs a test runner grows on its own) cannot decide for one line either way.
+fn vanished_site_column(
+    series: &SeriesFile,
+    root: &FindingId,
+    site: Option<&str>,
+    trend: Option<&TrendReport>,
+) -> Option<String> {
+    trend?
+        .columns
+        .iter()
+        .filter(|c| c.gate == GateVerdict::Pass && dla_core::grown::is_alloc_site_column(&c.name))
+        .filter(|c| {
+            c.finding.as_ref() == Some(root)
+                || c.candidates.contains(root)
+                || site.is_some() && dla_core::grown::column_site(c) == site
+        })
+        .find(|c| series.column_index(&c.name).is_none())
+        .map(|c| c.name.clone())
+}
+
 /// Chooses the columns: `--column` names, else the columns tied to the finding (its
 /// probe, its site group, its region's primary column), else every column that passed the
 /// gate in the latest trend of the harness plus `os.rss`. `os.rss`, `os.vm_hwm` and
@@ -319,7 +345,19 @@ pub fn pick(
             root_owner.as_deref(),
             trend,
         );
-        if let Some(first) = cols.first() {
+        let vanished = if cols.is_empty() {
+            vanished_site_column(series, &root, root_site.as_deref(), trend)
+        } else {
+            None
+        };
+        if let Some(col) = vanished {
+            p.basis = format!(
+                "no column decides: {col}, the count at the line of {root}, is not in this series"
+            );
+            p.note = Some(format!(
+                "{col} passed the gate in the latest trend and is not in this series: the agent writes only the sites that grew, so the count at the line did not grow here (or was not counted). A whole-process column such as py.traced cannot decide for one line, so nothing votes and the result is inconclusive; read the site's count in a longer run"
+            ));
+        } else if let Some(first) = cols.first() {
             p.primary = Some(first.clone());
             p.voting.push(first.clone());
             for c in &cols {
@@ -453,8 +491,9 @@ pub fn pick(
             add(&mut p.tested, name);
         }
     }
-    if p.voting.is_empty() {
-        // Nothing else to judge by: the support columns decide.
+    if p.voting.is_empty() && p.note.is_none() {
+        // Nothing else to judge by: the support columns decide. (Not for a finding at a line
+        // whose count column is missing: no whole-process column decides for one line.)
         for name in SUPPORT {
             if series.column_index(name).is_some() {
                 add(&mut p.voting, name);
@@ -561,6 +600,60 @@ mod tests {
         let mut f = non_heap_finding();
         f.region = Some(Region::Heap);
         f
+    }
+
+    /// A finding at `shop/store.py:5`, the series without or with the allocation-site column
+    /// of that line, and a trend that passed it.
+    fn site_case(in_series: bool) -> (SeriesFile, Ledger, Finding, TrendReport) {
+        let site_col = "py.blocks@shop/store.py:5";
+        let mut names = vec!["py.traced", "os.rss"];
+        if in_series {
+            names.push(site_col);
+        }
+        let mut s = series_of(&names);
+        if in_series {
+            s.columns[2].site = Some("shop/store.py:5".to_owned());
+        }
+        let mut f = heap_finding();
+        f.site = Some("shop/store.py:5".to_owned());
+        let mut t = trend(&["py.traced", site_col]);
+        t.columns[1].site = Some("shop/store.py:5".to_owned());
+        t.columns[1].candidates = vec![f.id.clone()];
+        (s, Ledger::from_text("").unwrap(), f, t)
+    }
+
+    #[test]
+    fn a_finding_at_a_line_is_decided_by_the_site_column_not_by_the_whole_process() {
+        let (s, ledger, f, t) = site_case(true);
+        let p = pick(&s, &ledger, Some(&f), &[], Some(&t), "H1").unwrap();
+        assert_eq!(
+            p.primary.as_deref(),
+            Some("py.blocks@shop/store.py:5"),
+            "{}",
+            p.basis
+        );
+        assert_eq!(p.voting, ["py.blocks@shop/store.py:5"]);
+        assert!(p.note.is_none());
+    }
+
+    #[test]
+    fn a_site_column_that_is_not_in_the_new_series_leaves_nothing_to_vote_for_the_line() {
+        // The agent writes only the sites that grew: the column is missing, `py.traced` stays
+        // the whole process and does not decide for one line.
+        let (s, ledger, f, t) = site_case(false);
+        let p = pick(&s, &ledger, Some(&f), &[], Some(&t), "H1").unwrap();
+        assert!(p.primary.is_none() && p.voting.is_empty(), "{p:?}");
+        assert!(p.basis.contains("py.blocks@shop/store.py:5"), "{}", p.basis);
+        assert!(
+            p.note.as_deref().is_some_and(|n| n.contains("py.traced")),
+            "{p:?}"
+        );
+        // A finding of another line is not held to it.
+        let mut other = f.clone();
+        other.site = Some("shop/other.py:9".to_owned());
+        other.id = FindingId::new(25);
+        let p = pick(&s, &ledger, Some(&other), &[], Some(&t), "H1").unwrap();
+        assert_eq!(p.primary.as_deref(), Some("py.traced"), "{}", p.basis);
     }
 
     #[test]

@@ -27,6 +27,33 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   not listed. The label is `UNCLASSIFIED` (no Python row names it). The fix: freeze once in the parent
   before the fork, or `gc.unfreeze()` and `gc.collect()` after the batch; deleting the per-batch call also
   works. The frozen count is a count, so the bytes growth is tied to the site through the group column.
+- Allocation sites (driver runs only): at each checkpoint, after the forced collections, the agent counts
+  the live blocks `tracemalloc` traces per site: the first frame, from the innermost outward, that lies
+  in the project and is neither a test file nor a file of the harness. A site whose count at the last
+  checkpoint is above its count at the first checkpoint after the warm-up gets the column
+  `py.blocks@<file:line>` (a count, region heap), with a value at every checkpoint; at most 12 sites, the
+  largest growth first, and a limitation line says how many more grew. Sites that did not grow have no
+  column. A column ties to the finding whose own site is that line and to no other, so a leaked object
+  that nothing holds shows at the line that made it, for example the line of a Python function that calls
+  into an extension module and never releases the reference it was given. By default tracemalloc keeps
+  one frame in a driver run, so a block allocated inside a library function that project code called
+  has no site (the limitation line says so); `DLA_TRACEMALLOC_FRAMES=<n>` keeps more, at the cost
+  in `harness/python/README.md`. Command mode has no such columns. A library installed in editable mode
+  runs from its source tree, not from the scratch copy; the agent counts the files of that tree too (the
+  run's `.dla`, installed packages and the test files are never counted).
+  A growing site that no finding names: `dla trend S<n>` prints `dla ledger add --origin growth-series
+  --evidence E --site <file:line> --region heap --holder <kind>`. Choose the holder by reading the line: a
+  container of the project that keeps the objects is `static/global`, `container-field` or
+  `registration-table`; a line that calls into an extension module or a C function, with nothing in the
+  program holding the result, is `native-handle/global-ref` (a reference count that is never released
+  keeps a managed object alive, so the finding's region is heap; the archetype table lists `L-OWNERSHIP`
+  for the heap too, but the python reference has no row for it, so `dla ledger label` asks for `--note`
+  or `UNCLASSIFIED`). Then the route is
+  the one of any finding: the non-leak sibling (`N-WARM`), `dla ledger test`, `dla alloc-test H --finding F`
+  (it decides by the `py.blocks@` column of the finding's line, not by `py.traced`, which a unit that runs
+  a test runner grows on its own), refute the loser, `dla ledger confirm`. The final gate lists a growing
+  `py.blocks@` column that ties to no dispositioned finding, and `dla ledger resolve` refuses to close a
+  finding whose column passed until an alloc-test is bound to it.
 - Purges: `trim` (glibc `malloc_trim` through ctypes) and `gc`.
 - Raw captures: `dla harness run H1 --capture histogram,alloc,nonheap`. `histogram` writes
   `py-<n>.types.json` (300 types by instance count), `alloc` writes `py-<n>.alloc.json` (tracemalloc live
@@ -67,5 +94,7 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
 - Only collector-tracked objects are visible: extension modules, native libraries and pymalloc
   pools returned late are outside object-graph tools.
 - Allocation tracing slows the process and changes timing.
-- Reference-count errors in C extensions show only as native growth.
+- A reference-count error in a C extension that leaks a Python object shows as a growing `py.blocks@`
+  site, at the line that calls into the extension (driver runs). Memory the extension takes with `malloc`
+  does not: only native growth shows it (`os.rss_anon`).
 - Task and thread leaks in async code are visible only while the tasks can be enumerated.

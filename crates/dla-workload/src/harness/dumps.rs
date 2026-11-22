@@ -147,6 +147,7 @@ pub fn parse_record(line: &str) -> Option<Rec> {
                 "detectors",
                 "limitations",
                 "purge",
+                "group_series",
                 "groups",
                 "values_pre_gc",
                 "values_in_run",

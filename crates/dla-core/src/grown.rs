@@ -109,6 +109,27 @@ pub fn commands(
     out
 }
 
+/// True for an allocation-site count column of a Python driver run (`py.blocks@<file:line>`):
+/// it counts what one line allocated, so only a finding at that line is tied to it.
+pub fn is_alloc_site_column(column: &str) -> bool {
+    column
+        .strip_suffix(".pre_gc")
+        .unwrap_or(column)
+        .starts_with("py.blocks@")
+}
+
+/// The command that adds the finding a passing allocation-site count column of a Python driver
+/// run (`py.blocks@<file:line>`) ties to, when no finding is at its site. `None` for any other
+/// column. A leak of a Python object that nothing holds has no census candidate, so the column
+/// is where the finding starts; the holder is read from the line.
+pub fn site_column_add(column: &str, site: &str, evidence: &str) -> Option<String> {
+    is_alloc_site_column(column).then(|| {
+        format!(
+            "dla ledger add --origin growth-series --evidence {evidence} --site {site} --region heap --holder <kind>   # no finding there; {column} then ties to it. Holder: read the line: a container of the project that keeps the objects (static/global, container-field, registration-table), or native-handle/global-ref when the line calls into an extension module or a C function and nothing in the program holds the result"
+        )
+    })
+}
+
 /// True when an alloc-test evidence is bound to the family of `root`.
 pub(crate) fn alloc_tested(view: &RunView, root: &FindingId) -> bool {
     let family: Vec<FindingId> = view
@@ -125,7 +146,7 @@ pub(crate) fn alloc_tested(view: &RunView, root: &FindingId) -> bool {
 }
 
 /// The `file:line` a column is tied to: its `site`, else the part of its name after `@`.
-fn column_site(c: &crate::trend::ColumnTrend) -> Option<&str> {
+pub fn column_site(c: &crate::trend::ColumnTrend) -> Option<&str> {
     c.site
         .as_deref()
         .or_else(|| c.name.split_once('@').map(|(_, s)| s))

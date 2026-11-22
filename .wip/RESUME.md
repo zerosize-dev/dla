@@ -1041,3 +1041,10 @@ flat test-loop readings get only 9 second looks.
   with extension modules built in place cannot import from the copy (pillow-1: the agent copied the
   .so files by hand in its hook). Added to brief Y as item 5.
 - W1 commit message written: wip-notes/commit-message-9.txt.
+
+## 2026-11-22 about 17:10 UTC: builder X reported; one defect found by me
+
+- X (py.blocks@<file:line> columns) reported done; real route on the Pillow tree reaches `ledger confirm`; label `--as L-OWNERSHIP` is refused `label-runtime-row` (python reference has only L-COLLECT; the fix line offers `--note`).
+- Defect I measured: the agent keeps one dict of counts per checkpoint, so `py.traced` grows by about 24 KB per checkpoint on a unit with NO leak (harness H3 in run 20261122-152125-9f39 of u72/pillow: series S5 new agent: py.traced steady 55 B/unit, os.rss passes too; series S7 old agent: no column passes). On the leak unit py.traced reads 91 B/unit against 32 to 36 before.
+- Sent back to builder X (agent a10fa59fbfcdce816): agent keeps nothing between checkpoints (full counts in every checkpoint record), the series builder picks the sites that grew (12 at most), a cut run still gets columns, counting order such that every point carries the same transient cost. Acceptance: no-leak unit passes no column; leak unit still passes the site column and py.traced is back near 32 to 36 B/unit.
+- After X: start builder Y with py-test-loop-brief.md (scratch u77 holds base-plugin export of main; use u78 for Y).

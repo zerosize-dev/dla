@@ -929,6 +929,10 @@ fn suggestions(
             .filter(|f| declared.contains(f))
             .chain(c.candidates.iter())
             .find_map(|f| ledger.finding(f));
+        let site_add = c
+            .site
+            .as_deref()
+            .and_then(|site| dla_core::grown::site_column_add(&c.name, site, &e));
         match cand {
             Some(f) => {
                 let root = f.root_id();
@@ -1019,6 +1023,12 @@ fn suggestions(
                 {
                     next.push(hint);
                 }
+            }
+            // An allocation-site count of a Python driver run that no finding is at: the add
+            // command names the site and what to read to choose the holder.
+            None if unbound < 3 && site_add.is_some() => {
+                unbound += 1;
+                next.extend(site_add);
             }
             None if unbound < 3 => {
                 unbound += 1;

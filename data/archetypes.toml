@@ -98,7 +98,7 @@ summary = "Objects reference each other in a cycle that reference counting canno
 
 [L-OWNERSHIP]
 holders = ["native-handle/global-ref"]
-regions = ["off-heap"]
+regions = ["off-heap", "heap"]
 requires = [["growth-series", "alloc-stack"], ["growth-series", "intervention"]]
 disconfirm = ["N-ALLOC", "N-INTENT", "N-OBSERVER"]
 signals = ["native.live_bytes", "native.live_blocks", "os.rss", "os.rss_anon"]
