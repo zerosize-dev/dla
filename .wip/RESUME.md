@@ -1664,3 +1664,33 @@ flat test-loop readings get only 9 second looks.
   wip-notes/commit-message-19.txt`, push main and main:dev/wonderful-mccarthy-algc5s.
 - pillow-9 started 17:08 with the plugin and binary of d8ad316; waiter task bd46xi7se.
   `target/` was cleaned (8.4 GB).
+
+## 18:20 UTC: H is on main
+
+- CI of the eighteenth snapshot d8ad316: success, run 45224180803, all 15 jobs.
+- main = d9ec81b "An alloc-test decides a finding only on a harness that is about it" (tree of
+  d8ad316), pushed to main and dev/wonderful-mccarthy-algc5s. Working tree clean.
+- Not published: bd1fc84, f30f050, 22bd696, 1a3bfb2, cbf3de3, dd6c4cd, d9ec81b
+  (0.9.0-preview.6 after pillow-9, if it finds the leak).
+
+## 18:35 UTC (approx.): pillow-9 NOT CONFIRMED; cause found; builder I started
+
+- pillow-9 (tree of d9ec81b): exit 0, 4410 s, COMPLETE, "no leak confirmed". Kept:
+  /root/dla-real/pillow-9-keep (report, state, coverage, ledger, transcript, run.json, S47.json,
+  S48.json, H18-harness.json, H18-dla_harness.py, gate). Run directory deleted. Replay copy:
+  scratch u98/project/.dla/20261123-170841-90a0 (F572 goes unresolved at ledger line 2000).
+- What worked: loop clean (failed_units=0); closing F571..F582 as not_exercised was refused
+  (`growth-not-measured`); the agent made probe drivers; H18 (targets [F572]) gave
+  `py.blocks@src/PIL/ImageFont.py:580` = 440, 880, ... 3960 in both key modes; alloc-test E186
+  favors leak by that column; eight victim lines were refuted by their own probe drivers.
+- Why it was not confirmed: the agent worked from its own script, not from `next`.
+  `ledger confirm F572 --evidence E186` -> `growth-gate-failed` (a discriminator cited as growth;
+  the fix was a placeholder naming S1); `ledger confirm F572 --evidence E258` ->
+  `nonleak-refutation-required` (fix: placeholders); then
+  `ledger resolve F572 --as unresolved --reason inconclusive` was ACCEPTED with 107 of 180 budget
+  minutes left. Two commands would have confirmed it.
+- Pillow unattended runs: 1 no, 2 yes, 3 yes, 4 no, 5 no, 6 yes, 7 no, 8 no, 9 no (closest).
+- Builder I running (brief leak-favored-brief.md, scratch u99): refusal (suggested `leak-favored`)
+  for closing a finding that has a route to confirm, exact commands there, in close-rest, in the
+  gate and in the two confirm refusals.
+- 0.9.0-preview.6 still NOT published.
