@@ -168,9 +168,10 @@ pub fn supported(rt: Runtime) -> CaptureSet {
             alloc: true,
         },
         // Python: type counters (histogram), tracemalloc and memray stacks (alloc), threads,
-        // tasks and ResourceWarnings by creation site (nonheap).
+        // tasks and ResourceWarnings by creation site (nonheap), and the holder chains of the
+        // objects made at the growing lines (heap).
         Runtime::Python => CaptureSet {
-            heap: false,
+            heap: true,
             histogram: true,
             jfr: false,
             nonheap: true,
@@ -314,6 +315,13 @@ pub fn classify(name: &str) -> Option<(CaptureKind, u32, &'static str)> {
             CaptureKind::Alloc,
             n,
             "memray allocations still live at the end",
+        ));
+    }
+    if let Some(n) = seq_of("py-", ".retain.json") {
+        return Some((
+            CaptureKind::Heap,
+            n,
+            "python objects that keep the growing lines alive (holder chains)",
         ));
     }
     if let Some(n) = seq_of("py-", ".types.json") {
@@ -579,6 +587,8 @@ pub fn summarize_commands(
     // point is a process of its own, and three or more dumps, one per point, are a per-point
     // series over n (heap-graph reads the format of the files, so one command per format).
     for (_, g) in &groups {
+        // Python: the holder chains of one process (one file per process).
+        push("heap-graph", CaptureKind::Heap, &[".retain.json"], g);
         if !command_mode {
             push("heap-graph", CaptureKind::Heap, &[], g);
             continue;
