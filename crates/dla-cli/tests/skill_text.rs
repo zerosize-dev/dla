@@ -826,3 +826,39 @@ fn the_references_say_the_alloc_test_runs_on_a_harness_about_the_finding() {
         "VERIFY.md has no row for the alloc-test on an unrelated harness"
     );
 }
+
+#[test]
+fn the_references_say_a_finding_with_a_leak_favoring_alloc_test_is_confirmed_or_refuted() {
+    let read = |p: &str| {
+        fs::read_to_string(root().join(p))
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let stages = read("skills/detect-leak-anywhere/references/stages.md");
+    let report = read("skills/detect-leak-anywhere/references/evidence-and-report.md");
+    let verify = read("docs/VERIFY.md");
+    let sentence = "After an alloc-test that favors leak, run the commands of its `next` in order (the refute of each open non-leak sibling, then the confirm with the growth evidence); a finding with a leak-favoring alloc-test is confirmed or refuted, never closed unresolved (`leak-favored`).";
+    assert!(stages.contains(sentence), "stages.md lacks the sentence");
+    assert!(
+        report.contains(sentence),
+        "evidence-and-report.md lacks the sentence"
+    );
+    assert!(
+        report.contains("| `leak-favored` |"),
+        "evidence-and-report.md does not list the leak-favored refusal"
+    );
+    assert!(
+        verify.contains(
+            "| A finding whose alloc-test favored leak was closed as inconclusive | corrected |"
+        ),
+        "VERIFY.md has no row for the finding closed after a leak-favoring alloc-test"
+    );
+    // The code exists in the binary's refusal list.
+    let error = fs::read_to_string(root().join("crates/dla-core/src/error.rs")).unwrap();
+    assert!(
+        error.contains("\"leak-favored\""),
+        "error.rs lacks the code"
+    );
+}

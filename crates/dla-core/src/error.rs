@@ -130,6 +130,9 @@ pub mod codes {
     pub const TIME_LEFT: &str = "time-left";
     /// A finding a passed growth column points at was closed without an alloc-test bound to it.
     pub const GROWTH_NOT_MEASURED: &str = "growth-not-measured";
+    /// A finding whose newest alloc-test favors leak was closed unresolved: it is confirmed or
+    /// refuted, never closed.
+    pub const LEAK_FAVORED: &str = "leak-favored";
     /// `intake.workload` was recorded as blocked although a harness of the run ran and wrote a
     /// series for every runtime that has candidates.
     pub const WORKLOAD_RAN: &str = "workload-ran";

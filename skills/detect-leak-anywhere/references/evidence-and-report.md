@@ -130,6 +130,8 @@ no command to add one by hand. Its `result` carries:
 | `finding` | the finding it is bound to, or null |
 | `column`, `columns` | the tested columns, each with its own verdict and numbers |
 
+After an alloc-test that favors leak, run the commands of its `next` in order (the refute of each open non-leak sibling, then the confirm with the growth evidence); a finding with a leak-favoring alloc-test is confirmed or refuted, never closed unresolved (`leak-favored`).
+
 `dla alloc-test H1 [--finding F3]` re-runs the harness with `iterations + extra` points (extra
 defaults to the iteration count) and a purge applied at the last point, then tests each chosen
 column. The column is `--column`, else the one tied to `--finding`, else (a finding with a region
@@ -195,10 +197,11 @@ siblings of the root.
 |---|---|---|
 | `ledger test F3 --evidence E` | a `workload` evidence from `harness gen` or `harness run` among the cited or supporting evidence | `harness-required` |
 | `ledger test F3` (leak-side) | at least one non-leak sibling in the family | `sibling-required` |
-| `ledger confirm F3` (leak-side) | a `growth-series` or `unit-count-series` evidence of authority test, live or dump whose result has `gate: pass` | `growth-gate-failed` |
+| `ledger resolve F3 --as unresolved` (any reason; `time_budget` while the budget is over the floor), `ledger close-rest` | the newest alloc-test bound to the finding, on a harness about it, does not favor leak (a leak-favoring one is confirmed or refuted: the fix is the refute of each open sibling, the test when it is a candidate and the confirm, with real ids; `close-rest` leaves the finding with them) | `leak-favored` |
+| `ledger confirm F3` (leak-side) | a `growth-series` or `unit-count-series` evidence of authority test, live or dump whose result has `gate: pass` | `growth-gate-failed` (a cited discriminator is said to be no growth evidence, and the fix is the confirm with the growth evidence that passed) |
 | | a cited passing growth column tied to the finding (probe, site, owner or `candidates`) | `growth-not-tied` |
 | | the finding has a `site` and a `holder` | `site-required`, `holder-required` |
-| | some non-leak member of the family is `refuted` | `nonleak-refutation-required` |
+| | some non-leak member of the family is `refuted` | `nonleak-refutation-required` (when an alloc-test bound to the finding favors leak, the fix is the refute of each open sibling with it, then the confirm) |
 | | the growth is not only the unit's own calls of the registration function of a start-up registration (trigger `direct`; the fix gives one route, an entry-path harness whose unit does not call it, then `dla alloc-test`) | `registration-only` |
 | `bundle F3` (confirmed or strong, leak-side) | the bundle holds an allocation or retention record when the growth is a count of blocks allocated at one line (`py.blocks@<file:line>`) and the runtime captures allocation stacks: run `dla harness run <H> --mode <m> --capture alloc` and the `dla summarize alloc-stack-diff` command it prints, then bundle again; a capture that was made and never summarized is refused too, and the fix is its summarize command | `stacks-not-captured` |
 | `alloc-test H --finding F3`, `ledger refute F3` or `ledger confirm F3.n1` citing the alloc-test evidence of `H` | `H` targets the finding, runs the project's own workload (a command-mode harness with a workload, or a test loop), or measured something tied to it (a column of a trend of its series tied to the finding, growth evidence the finding cites, or an allocation-stack or retention-path summary of its captures that names the finding); the fix names the harness that does, and the driver of its own (`dla harness gen --lang <rt> --driver --probe F3`) | `harness-not-about` |

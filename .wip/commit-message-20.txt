@@ -1,0 +1,46 @@
+A finding whose alloc-test favors leak is confirmed, not closed as inconclusive
+
+A real unattended run on a Python library did everything up to the last
+step. The loop over the project's tests measured the documented leak line,
+the run added a finding at the line, made a probe driver for it, and the
+driver's series was one more block at the line per unit: 440, 880, up to
+3960 at nine checkpoints. `dla alloc-test` on that driver favored leak.
+
+The agent then worked from a script of its own and not from the `next`
+list of the alloc-test. It cited the discriminator to confirm and was
+refused with `growth-gate-failed`; the fix was a placeholder and named the
+series of another harness. It cited a trend and was refused with
+`nonleak-refutation-required`; the fix was two placeholders, although the
+alloc-test it had just run rules out the sibling. Then
+`dla ledger resolve <F> --as unresolved --reason inconclusive` was
+accepted, with 107 of 180 budget minutes left, and the report ended with no
+leak confirmed. Two commands would have confirmed it.
+
+A leak-side finding now has a route to confirm when the newest alloc-test
+bound to it, on a harness that is about it, favors leak: the refute of
+each open N-* sibling that the discriminator rules out, the test when the
+finding is still a candidate, and the confirm with the growth evidence the
+confirm rule accepts. The route is built by the code that writes the `next`
+list of the alloc-test, so the two cannot differ.
+
+`dla ledger resolve --as unresolved` is refused with `leak-favored` for
+such a finding and for its siblings, for every reason, and the fix is the
+route with real ids. `dla ledger close-rest` leaves it with the same
+commands, and the final gate and `dla run status` print the route as the
+fix. A newer alloc-test that does not favor leak lifts the rule, and at the
+floor of the budget `time_budget` still closes.
+
+The two confirm refusals name real ids. `growth-gate-failed` says which
+cited record is a discriminator and gives the confirm command with the
+growth evidence of the finding, preferring the series of the harness that
+was just measured. `nonleak-refutation-required` gives the refute of the
+sibling with the discriminator that exists, then the confirm.
+
+Replayed on a copy of that run's state, cut before the finding was closed:
+the close is refused with the two commands, and running them confirms the
+finding at the documented line.
+
+Not seen yet: an unattended run with this change. The bench tool's
+mechanical flow closes a candidate unresolved when its alloc-test favors
+leak on a column that did not pass; that close is refused now. No fixture
+reaches that path.

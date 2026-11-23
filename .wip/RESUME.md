@@ -1694,3 +1694,24 @@ flat test-loop readings get only 9 second looks.
   for closing a finding that has a route to confirm, exact commands there, in close-rest, in the
   gate and in the two confirm refusals.
 - 0.9.0-preview.6 still NOT published.
+
+## About 19:20 UTC: builder I built; my replay confirms the leak on the ninth run's state
+
+- Builder I (brief leak-favored-brief.md): `grown::route_to_confirm` / `route_for`
+  (`ConfirmRoute`), refusal `leak-favored` in `ledger resolve` (finding and siblings, every
+  reason; `time_budget` passes at the floor; aborted runs exempt), `close-rest` leaves it with
+  the route, gate and `run status` print the route, `growth-gate-failed` and
+  `nonleak-refutation-required` name real ids. Growth-evidence chooser moved to core
+  (`growth_evidence`). One existing test changed (it closed a finding inconclusive after a
+  leak-favoring alloc-test: now asserts `leak-favored`).
+- My replay (copy u99/myreplay, binary u99/dla-I, ledger cut to 1999 lines): closing F572 as
+  inconclusive -> `leak-favored`, fix "dla ledger refute F572.n1 --evidence E186 then dla ledger
+  confirm F572 --evidence E260"; confirm citing E186 -> `growth-gate-failed` saying E186 is a
+  discriminator, fix names E260; the two commands -> F572 CONFIRMED; report: "leak hypotheses:
+  confirmed 1", F572 first finding, growth `py.blocks@src/PIL/ImageFont.py:580` 1 per iteration.
+- Bench risk the builder flagged: `test_candidate` in bench/runner/src/dynamic_cmd.rs closes a
+  candidate unresolved when its alloc-test says leak on a column that did not pass; that close
+  is now refused. Nine fixtures did not reach it. Full dynamic bench running to see all 64
+  (u99/dyn3.out, task bjn0lvmcn, frozen binaries u99/dla-I, u99/dla-bench-I).
+- After the bench: `bash u99/suite.sh` (my mutation Q35, clippy, schema, pytest tests, whole
+  suite, static bench), then non-skip snapshot, CI, commit 20 (commit-message-20.txt), pillow-10.

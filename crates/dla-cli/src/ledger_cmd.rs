@@ -793,6 +793,8 @@ pub(crate) fn resolve_finding(
     if a.reason != Some(UnresolvedReason::TimeBudget) {
         refuse_grown_unmeasured(ctx, &id, loaded)?;
     }
+    // A finding whose newest alloc-test favors leak is confirmed or refuted, never closed.
+    refuse_leak_favored(ctx, &id, a.reason, loaded)?;
     if let Some(reason) = a.reason {
         refuse_target_pending(ctx, &id, reason, loaded)?;
         refuse_unrun_harness(ctx, &id, reason, loaded)?;
@@ -1278,6 +1280,47 @@ fn refuse_grown_unmeasured(ctx: &Ctx, id: &FindingId, loaded: Option<&Loaded<'_>
             )
         },
         g.commands().join("   then   "),
+    ))
+}
+
+/// Refuses to close a finding, or a sibling of one, that has a route to confirm
+/// ([`dla_core::grown::route_to_confirm`]): an alloc-test on a harness about it favors leak and
+/// nothing newer says otherwise. The fix is the route, with the ids of this run. `time_budget` is
+/// held to it while the budget is over the floor (the rule `time-left` has for the reason); an
+/// aborted run is not held to it.
+fn refuse_leak_favored(
+    ctx: &Ctx,
+    id: &FindingId,
+    reason: Option<UnresolvedReason>,
+    loaded: Option<&Loaded<'_>>,
+) -> Res<()> {
+    let own;
+    let view: &RunView = match loaded {
+        Some(l) => l.view,
+        None => {
+            own = RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())?;
+            &own
+        }
+    };
+    if view.state.status == dla_core::state::RunStatus::Aborted {
+        return Ok(());
+    }
+    if reason == Some(UnresolvedReason::TimeBudget)
+        && gate::budget_over_floor(&view.state, ctx.worker.as_deref()).is_none()
+    {
+        return Ok(());
+    }
+    let Some(route) = dla_core::grown::route_for(view, id) else {
+        return Ok(());
+    };
+    Err(Failure::refuse(
+        core_codes::LEAK_FAVORED,
+        format!("{}.", route.refusal_message(id)),
+        format!(
+            "{} confirmed (its non-leak siblings refuted by {}), or refuted by a newer alloc-test that favors non-leak",
+            route.finding, route.discriminator
+        ),
+        route.fix(),
     ))
 }
 
