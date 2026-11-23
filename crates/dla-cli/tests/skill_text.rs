@@ -788,3 +788,41 @@ fn the_python_test_loop_is_never_put_under_a_shell_timeout_and_a_registration_ta
         "evidence-and-report.md does not list the registration-only refusal"
     );
 }
+
+#[test]
+fn the_references_say_the_alloc_test_runs_on_a_harness_about_the_finding() {
+    let read = |p: &str| {
+        fs::read_to_string(root().join(p))
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let python = read("skills/detect-leak-anywhere/references/python.md");
+    let stages = read("skills/detect-leak-anywhere/references/stages.md");
+    let report = read("skills/detect-leak-anywhere/references/evidence-and-report.md");
+    let verify = read("docs/VERIFY.md");
+    assert!(
+        python.contains(
+            "The alloc-test runs on a harness that targets the finding or measured it, never on another one (`harness-not-about`)"
+        ),
+        "python.md lacks the rule"
+    );
+    assert!(
+        stages.contains("The alloc-test runs on a harness that targets the finding or measured it")
+            && stages.contains(
+                "never on another one: the other is refused with `harness-not-about` before it runs"
+            ),
+        "stages.md lacks the rule"
+    );
+    assert!(
+        report.contains("| `harness-not-about` |"),
+        "evidence-and-report.md does not list the harness-not-about refusal"
+    );
+    assert!(
+        verify.contains(
+            "| An alloc-test on an unrelated harness refuted the finding at the leak line | corrected |"
+        ),
+        "VERIFY.md has no row for the alloc-test on an unrelated harness"
+    );
+}

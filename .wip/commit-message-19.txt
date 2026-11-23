@@ -1,0 +1,44 @@
+An alloc-test decides a finding only on a harness that is about it
+
+A real unattended run on a Python library measured the documented leak
+line cleanly in the loop over the project's tests: 299 blocks more at each
+of nine rounds, gate passed. It added a finding at the line. The gate's fix
+said to make a probe driver for the finding and to alloc-test that driver.
+The agent skipped the driver and ran `dla alloc-test H5 --finding F572` on
+a batch driver made for three other findings. That driver never touches
+the line and its series had no column of the finding. The alloc-test fell
+back to the whole-process column of the finding's region, which was flat,
+answered "non-leak", and `dla ledger refute` accepted that evidence. The
+run ended COMPLETE with no leak confirmed, and the leak line was nowhere in
+its report.
+
+`dla alloc-test <H> --finding <F>` is now refused with `harness-not-about`,
+before anything runs, unless the harness is about the finding: the finding
+is among its targets or their siblings, the harness is its entry-path or
+probe harness, a trend of a series of the harness has a column tied to the
+finding (its finding, a candidate, or the finding's site for an
+allocation-site column), or the finding cites growth evidence of a series
+of the harness. The fix names the harnesses that are about the finding and
+the command for a probe driver of its own.
+
+`dla ledger refute` and `dla ledger confirm` refuse to cite the alloc-test
+evidence of a harness that is not about the finding. That covers an
+alloc-test run without `--finding`, whose evidence names no finding.
+
+On a harness that is about the finding, the whole-process fallback is not
+used for a finding that has an allocation-site column of its own in a trend
+of any harness of the run. When that column is missing from the new series,
+the coverage of the run decides: the function of the line ran and none of
+its blocks stayed, which is a non-leak reading, or the unit does not reach
+the line, which is inconclusive and says so.
+
+Replayed on a copy of that run's state: the alloc-test on the unrelated
+harness is refused and writes no series, and its old evidence can no longer
+be cited to refute the finding.
+
+Seven tests of the non-heap readings alloc-tested a finding on a harness
+that was not about it; their fixtures now declare the target or cite the
+growth evidence, and what they assert is unchanged.
+
+Not seen yet: an unattended run with this change. The coverage reading is
+tested for Python only.

@@ -1606,3 +1606,28 @@ flat test-loop readings get only 9 second looks.
   (executed -> non-leak "the line ran and nothing stayed"; not reached -> inconclusive);
   H3 refute/confirm binding; H4 texts.
 - 0.9.0-preview.6 still NOT published.
+
+## About 15:30 UTC: builder H built, too strict, sent back
+
+- Builder H (brief alloc-about-brief.md): `grown::harness_about` (target, sibling target, entry
+  or probe harness, tied column of a trend of the harness, cited growth evidence), refusal
+  `harness-not-about` in `dla alloc-test --finding` before the run, `refuse_unrelated_alloc_test`
+  in `ledger refute` and `confirm`, H2 coverage reading for a missing site column.
+- My mutations Q31 (confirm exempt), Q32 (probe rule off), Q33 (module-probe coverage case off):
+  each fails a named test. Clean: py_site_columns 17, alloc_test 5, alloc_test_jvm 9, ledger_m6 43,
+  skill_text 21, trigger 7, queue 16, keep_going 31, gate_harness 25, gate_flow 13, core lib 270,
+  CLI unit tests 323.
+- PROBLEM found by running the mechanical dynamic bench with the frozen binaries
+  (`u97/dla-bench-H dynamic --dla-bin u97/dla-H --parallel 2 --json u97/dynamic.json`, logs
+  u97/dynamic.logs; stopped by pid after eight Go fixtures): go-buffer-pool and go-gc-tuned-batch
+  fail "no rule-out on a non-leak fixture" (the bench's step 3b refutes candidates with an
+  unbound alloc-test on the fixture's command-mode workload harness), go-header-index fails "leak
+  L1 is not confirmed" (alloc-test refused although the capture summary of the same harness
+  named the finding).
+- Sent back to the builder: rule (d) a command-mode workload harness or a test loop is about
+  every finding (limitation: whether the code ran there is not checked); rule (e) a capture
+  summary of this harness that names the finding. The hook-driver case (H5, F572) must stay
+  refused. It also runs the bench on five Go fixtures.
+- After its report: my replay, then the WHOLE dynamic bench locally (all 64 fixtures, no other
+  cargo job at the same time), whole suite, static bench, snapshot, CI, commit 19
+  (commit-message-19.txt needs a sentence on rules d and e), pillow-9.

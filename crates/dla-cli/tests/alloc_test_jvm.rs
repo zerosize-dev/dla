@@ -154,7 +154,18 @@ fn prepared(cap: Option<u32>) -> (tempfile::TempDir, PathBuf, String, String) {
     );
     let run = ok(&project, &["harness", "run", "H1"]);
     let workload = run["evidence"][0].as_str().unwrap().to_owned();
-    ok(&project, &["trend", "S1"]);
+    let trend = ok(&project, &["trend", "S1"]);
+    // The growth evidence of the trend of the harness: the finding cites it, which is what makes
+    // the harness about the finding (an alloc-test says nothing about a finding on a harness
+    // that neither targets it nor measured it).
+    let growth = trend["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join(",");
+    let cited = format!("{workload},{growth}");
     // The non-heap hypothesis, the way the route prints it: a finding of the region and an
     // `N-WARM` sibling, then under test.
     let f = ok(
@@ -167,7 +178,7 @@ fn prepared(cap: Option<u32>) -> (tempfile::TempDir, PathBuf, String, String) {
             "--region",
             "non-heap",
             "--evidence",
-            &workload,
+            &cited,
         ],
     )["id"]
         .as_str()
@@ -605,6 +616,7 @@ fn a_small_non_heap_rise_on_an_idle_driver_is_never_a_leak_verdict_and_prints_no
         ],
     );
     ok(&project, &["ledger", "test", &f, "--evidence", &workload]);
+    declare_target(&project, &f);
     let a = ok(&project, &["alloc-test", "H1", "--finding", &f]);
     assert_ne!(a["favors"], "leak", "{a}");
     if a.get("caution").is_some() {
@@ -613,6 +625,21 @@ fn a_small_non_heap_rise_on_an_idle_driver_is_never_a_leak_verdict_and_prints_no
             !next.contains("ledger refute") && !next.contains("ledger confirm"),
             "{next}"
         );
+    }
+}
+
+/// Makes harness H1 declare `finding` as a target, as `dla harness gen --probe` would have if the
+/// finding had existed then: an alloc-test says nothing about a finding on a harness that neither
+/// targets it nor measured something tied to it.
+fn declare_target(project: &Path, finding: &str) {
+    for e in fs::read_dir(project.join(".dla")).unwrap() {
+        let path = e.unwrap().path().join("harness/H1/harness.json");
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let mut doc: Value = serde_json::from_str(&text).unwrap();
+        doc["targets"] = serde_json::json!([finding]);
+        fs::write(&path, doc.to_string()).unwrap();
     }
 }
 
@@ -662,6 +689,7 @@ fn bound_finding(project: &Path, run: &Value, trend: bool) -> String {
         ],
     );
     ok(project, &["ledger", "test", &f, "--evidence", &workload]);
+    declare_target(project, &f);
     f
 }
 

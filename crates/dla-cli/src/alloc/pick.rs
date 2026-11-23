@@ -81,6 +81,19 @@ pub struct Picked {
     pub basis: String,
     /// A limitation of the choice the result must carry.
     pub note: Option<String>,
+    /// The allocation-site column of the finding that grew in a trend of some harness of the run
+    /// and is not in this series, and the line it counts. Nothing votes then: the verdict is the
+    /// one the coverage of the run gives for the line (see `alloc_cmd`).
+    pub absent_site: Option<AbsentSite>,
+}
+
+/// An allocation-site count column of the finding that is missing from the series under test.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AbsentSite {
+    /// The column (`py.blocks@<file:line>`).
+    pub column: String,
+    /// The line it counts (`file:line`).
+    pub site: String,
 }
 
 /// The newest trend report of a series of harness `harness` (a harness series first, then
@@ -265,40 +278,70 @@ fn tied(
     (Vec::new(), "")
 }
 
-/// The allocation-site count column (`py.blocks@<site>`) of the latest trend that passed the gate
-/// and is tied to `root` (by its finding, its candidates or the finding's own site) but is not in
-/// `series`. The agent writes only the sites that grew, so the absence says the count at the line
-/// did not grow in this series, or was not counted; the whole process (`py.traced`: a unit that
-/// runs a test runner grows on its own) cannot decide for one line either way.
+/// The allocation-site count column (`py.blocks@<file:line>`) that counts as growth
+/// ([`dla_core::grown::counts_as_growth`]) in a trend of ANY harness of the run, is tied to `root`
+/// ([`dla_core::grown::column_tied_to`]: its finding, its candidates, or the finding's own site)
+/// and is not in `series`. The agent writes only the sites that grew, so the absence says the count
+/// at the line did not grow in this series, or the line did not run; the whole process
+/// (`py.traced`: a unit that runs a test runner grows on its own) cannot decide for one line either
+/// way. The newest trend is read first.
 fn vanished_site_column(
     series: &SeriesFile,
+    ledger: &Ledger,
     root: &FindingId,
-    site: Option<&str>,
-    trend: Option<&TrendReport>,
-) -> Option<String> {
-    trend?
-        .columns
-        .iter()
-        .filter(|c| c.gate == GateVerdict::Pass && dla_core::grown::is_alloc_site_column(&c.name))
-        .filter(|c| {
-            c.finding.as_ref() == Some(root)
-                || c.candidates.contains(root)
-                || site.is_some() && dla_core::grown::column_site(c) == site
-        })
-        .find(|c| series.column_index(&c.name).is_none())
-        .map(|c| c.name.clone())
+    trends: &[&TrendReport],
+) -> Option<AbsentSite> {
+    trends.iter().rev().find_map(|t| {
+        t.columns
+            .iter()
+            .filter(|c| {
+                dla_core::grown::is_alloc_site_column(&c.name)
+                    && dla_core::grown::counts_as_growth(c)
+            })
+            .filter(|c| dla_core::grown::column_tied_to(ledger, c, root))
+            .find(|c| series.column_index(&c.name).is_none())
+            .and_then(|c| {
+                Some(AbsentSite {
+                    column: c.name.clone(),
+                    site: dla_core::grown::column_site(c)?.to_owned(),
+                })
+            })
+    })
 }
 
 /// Chooses the columns: `--column` names, else the columns tied to the finding (its
 /// probe, its site group, its region's primary column), else every column that passed the
 /// gate in the latest trend of the harness plus `os.rss`. `os.rss`, `os.vm_hwm` and
 /// `native.peak_bytes` are always tested for the purge reading.
+#[cfg(test)]
 pub fn pick(
     series: &SeriesFile,
     ledger: &Ledger,
     finding: Option<&Finding>,
     explicit: &[String],
     trend: Option<&TrendReport>,
+    harness: &str,
+) -> Res<Picked> {
+    pick_in(
+        series,
+        ledger,
+        finding,
+        explicit,
+        trend,
+        &trend.into_iter().collect::<Vec<_>>(),
+        harness,
+    )
+}
+
+/// [`pick`], with every trend of the run (`all_trends`, oldest first) for the allocation-site
+/// column of the finding that grew in some harness and is missing from this series.
+pub fn pick_in(
+    series: &SeriesFile,
+    ledger: &Ledger,
+    finding: Option<&Finding>,
+    explicit: &[String],
+    trend: Option<&TrendReport>,
+    all_trends: &[&TrendReport],
     harness: &str,
 ) -> Res<Picked> {
     let mut p = Picked::default();
@@ -346,17 +389,19 @@ pub fn pick(
             trend,
         );
         let vanished = if cols.is_empty() {
-            vanished_site_column(series, &root, root_site.as_deref(), trend)
+            vanished_site_column(series, ledger, &root, all_trends)
         } else {
             None
         };
-        if let Some(col) = vanished {
+        if let Some(gone) = vanished {
+            let col = &gone.column;
             p.basis = format!(
                 "no column decides: {col}, the count at the line of {root}, is not in this series"
             );
             p.note = Some(format!(
-                "{col} passed the gate in the latest trend and is not in this series: the agent writes only the sites that grew, so the count at the line did not grow here (or was not counted). A whole-process column such as py.traced cannot decide for one line, so nothing votes and the result is inconclusive; read the site's count in a longer run"
+                "{col} grew in a trend of this run and is not in this series: the agent writes only the sites that grew, so the count at the line did not grow here (or the line did not run). A whole-process column such as py.traced cannot decide for one line, so nothing votes"
             ));
+            p.absent_site = Some(gone);
         } else if let Some(first) = cols.first() {
             p.primary = Some(first.clone());
             p.voting.push(first.clone());
@@ -654,6 +699,35 @@ mod tests {
         other.id = FindingId::new(25);
         let p = pick(&s, &ledger, Some(&other), &[], Some(&t), "H1").unwrap();
         assert_eq!(p.primary.as_deref(), Some("py.traced"), "{}", p.basis);
+    }
+
+    #[test]
+    fn the_site_column_that_grew_in_a_trend_of_another_harness_is_the_one_looked_for() {
+        // The trend of this harness (a driver made for other code) has no site column at all;
+        // the one of another harness has it passed, tied to the finding. Its absence in the new
+        // series is what is read, not the whole-process fallback.
+        let (s, ledger, f, t_other) = site_case(false);
+        let t_here = trend(&["py.traced"]);
+        let all = [&t_other, &t_here];
+        let p = pick_in(&s, &ledger, Some(&f), &[], Some(&t_here), &all, "H2").unwrap();
+        assert!(p.primary.is_none() && p.voting.is_empty(), "{p:?}");
+        let gone = p.absent_site.expect("the missing column is named");
+        assert_eq!(gone.column, "py.blocks@shop/store.py:5");
+        assert_eq!(gone.site, "shop/store.py:5");
+        // With no trend of any harness that counted it, the whole-process column is the fallback
+        // as before.
+        let p = pick_in(&s, &ledger, Some(&f), &[], Some(&t_here), &[&t_here], "H2").unwrap();
+        assert_eq!(p.primary.as_deref(), Some("py.traced"), "{}", p.basis);
+        assert!(p.absent_site.is_none());
+        // A non-flat site column whose gate failed counts as growth too.
+        let mut failed = t_other.clone();
+        failed.columns[1].gate = GateVerdict::Fail;
+        let p = pick_in(&s, &ledger, Some(&f), &[], Some(&t_here), &[&failed], "H2").unwrap();
+        assert!(p.absent_site.is_some(), "{p:?}");
+        // A flat one does not.
+        failed.columns[1].shape = dla_stats::TrendShape::Flat;
+        let p = pick_in(&s, &ledger, Some(&f), &[], Some(&t_here), &[&failed], "H2").unwrap();
+        assert!(p.absent_site.is_none(), "{p:?}");
     }
 
     #[test]

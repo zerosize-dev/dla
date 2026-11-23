@@ -189,6 +189,138 @@ pub fn finding_is_at_site(
     })
 }
 
+/// Why a harness is about a finding (see [`harness_about`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HarnessAbout {
+    /// The finding (or the finding its sibling hangs from) is a declared target of the harness.
+    Target,
+    /// The harness is an entry-path harness of the finding.
+    EntryPath,
+    /// A holder probe of the harness was made for the finding.
+    Probe,
+    /// A trend of a series of the harness has this column, tied to the finding.
+    Column(String),
+    /// The finding cites this growth or unit-count evidence of a series of the harness.
+    Evidence(crate::ids::EvidenceId),
+}
+
+/// The leak-side root of `id` (a sibling counts through its parent).
+fn root_of(ledger: &crate::ledger::Ledger, id: &FindingId) -> FindingId {
+    ledger.finding(id).map_or_else(
+        || id.parent().unwrap_or_else(|| id.clone()),
+        |f| f.root_id(),
+    )
+}
+
+/// True when the trend column `c` is tied to the root finding `root`: its `finding`, one of its
+/// `candidates` (each read through its root), or, for an allocation-site count column, the
+/// finding is at the column's site ([`finding_is_at_site`]).
+pub fn column_tied_to(
+    ledger: &crate::ledger::Ledger,
+    c: &crate::trend::ColumnTrend,
+    root: &FindingId,
+) -> bool {
+    c.finding
+        .iter()
+        .chain(c.candidates.iter())
+        .any(|f| &root_of(ledger, f) == root)
+        || (is_alloc_site_column(&c.name)
+            && column_site(c).is_some_and(|site| {
+                ledger
+                    .finding(root)
+                    .is_some_and(|f| finding_is_at_site(ledger, f, site))
+            }))
+}
+
+/// Whether harness `manifest` is about `finding`, and why; `None` when it is not. An
+/// `alloc-test` bound to a finding says something about it only on a harness that is about it:
+/// the finding's root (a sibling counts through its parent) is read, and at least one of these
+/// holds.
+///
+/// 1. The finding is among the targets of the manifest (`targets`, or the keys or values of
+///    `sibling_of`), or a holder probe of the manifest was made for it; an entry-path harness
+///    is told apart from a plain target.
+/// 2. A trend of a series measured by this harness has a column tied to the finding
+///    ([`column_tied_to`]): the column's `finding`, its `candidates`, or, for an allocation-site
+///    column, the finding is at the column's site.
+/// 3. The finding (or one of its siblings) cites, in `supports` or `contradicts`, growth or
+///    unit-count evidence of a series of this harness.
+///
+/// A harness made for other findings, whose series has no column of the finding's and that the
+/// finding does not cite, is not about it: whatever its whole-process columns say, they say it
+/// of other code.
+pub fn harness_about(
+    view: &RunView,
+    manifest: &crate::harness::HarnessManifest,
+    finding: &FindingId,
+) -> Option<HarnessAbout> {
+    let ledger = &view.ledger;
+    let root = root_of(ledger, finding);
+    let is_root = |f: &FindingId| root_of(ledger, f) == root;
+    if manifest.targets.iter().any(is_root)
+        || manifest
+            .sibling_of
+            .iter()
+            .any(|(k, v)| is_root(k) || is_root(v))
+    {
+        return Some(if manifest.is_entry_path() {
+            HarnessAbout::EntryPath
+        } else {
+            HarnessAbout::Target
+        });
+    }
+    if manifest
+        .probes
+        .iter()
+        .any(|p| p.finding.as_ref().is_some_and(is_root))
+    {
+        return Some(HarnessAbout::Probe);
+    }
+    let of_harness = |series: &str| {
+        view.series_harness.get(series).map(String::as_str) == Some(manifest.id.as_str())
+    };
+    for t in view.trends.iter().filter(|t| of_harness(&t.series)) {
+        if let Some(c) = t.columns.iter().find(|c| column_tied_to(ledger, c, &root)) {
+            return Some(HarnessAbout::Column(c.name.clone()));
+        }
+    }
+    let family: Vec<&crate::finding::Finding> = ledger
+        .findings()
+        .filter(|f| f.id == root || f.parent.as_ref() == Some(&root))
+        .collect();
+    for ev in ledger.evidence() {
+        if !matches!(
+            ev.kind,
+            EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries
+        ) || !family.iter().any(|f| {
+            f.supports.contains(&ev.evidence_id) || f.contradicts.contains(&ev.evidence_id)
+        }) {
+            continue;
+        }
+        let series = ev.result.get("series").and_then(|s| s.as_str());
+        if series.is_some_and(of_harness) {
+            return Some(HarnessAbout::Evidence(ev.evidence_id.clone()));
+        }
+    }
+    None
+}
+
+/// The harnesses of the run that are about `finding` ([`harness_about`]), in numeric order, with
+/// their manifests; empty for a view without a run directory.
+pub fn harnesses_about(
+    view: &RunView,
+    finding: &FindingId,
+) -> Vec<(crate::harness::HarnessManifest, HarnessAbout)> {
+    let Some(dir) = view.run_dir.as_deref() else {
+        return Vec::new();
+    };
+    crate::gate::harness_ids(dir)
+        .into_iter()
+        .filter_map(|(_, id)| crate::harness::HarnessManifest::load(dir, &id).ok())
+        .filter_map(|m| harness_about(view, &m, finding).map(|why| (m, why)))
+        .collect()
+}
+
 /// The harnesses (`H1`), oldest series first and each once, in whose latest trend a passed
 /// allocation-site count column (`py.blocks@<file:line>`) is at a site where the leak-side finding
 /// `f` is (`finding_is_at_site`): the runs that grew the finding's line.
@@ -736,5 +868,210 @@ mod tests {
                 .iter()
                 .any(|c| c == "dla alloc-test H1 --finding F2")
         );
+    }
+
+    /// A manifest of harness `id` with the given targets, probe finding and purpose.
+    fn manifest(id: &str, extra: serde_json::Value) -> crate::harness::HarnessManifest {
+        let mut v = serde_json::json!({
+            "id": id, "runtime": "python", "mode": "driver",
+            "scratch": "x", "run": {"argv": ["x"], "cwd": "."},
+            "warmup": 1, "iterations": 8, "step": 10, "key_modes": ["fresh"],
+            "agent": "driver-python", "timeout_secs": 60,
+        });
+        for (k, x) in extra.as_object().unwrap() {
+            v[k] = x.clone();
+        }
+        serde_json::from_value(v).unwrap()
+    }
+
+    /// A view over [`scene`] with a trend of series S1 of harness H1 holding `column`.
+    fn view_with(l: Ledger, column: serde_json::Value) -> RunView {
+        let state =
+            crate::state::RunState::init("/p", None, 3600, None, crate::state::now_utc()).unwrap();
+        let mut view = RunView::new(state, l, None);
+        let col: crate::trend::ColumnTrend = serde_json::from_value(serde_json::json!({
+            "unit": "count", "kind": "counter", "region": "heap", "n": 8, "noise": 0.0,
+            "rise": 100.0, "shape": "steady", "gate": "pass", "gate_failed": [],
+        }))
+        .map(|mut v: serde_json::Value| {
+            for (k, x) in column.as_object().unwrap() {
+                v[k] = x.clone();
+            }
+            v
+        })
+        .and_then(serde_json::from_value)
+        .unwrap();
+        view.trends = vec![crate::trend::TrendReport {
+            schema_version: 1,
+            id: "T1".into(),
+            series: "S1".into(),
+            thresholds: dla_stats::GateThresholds::default(),
+            columns: vec![col],
+            targets: vec![],
+        }];
+        view.series_harness.insert("S1".into(), "H1".into());
+        view
+    }
+
+    fn about(view: &RunView, m: &crate::harness::HarnessManifest, f: u32) -> Option<HarnessAbout> {
+        harness_about(view, m, &FindingId::new(f))
+    }
+
+    #[test]
+    fn a_harness_is_about_the_findings_it_targets_and_not_about_the_others() {
+        let (_d, l) = scene();
+        let view = view_with(l, serde_json::json!({"name": "py.traced", "unit": "bytes"}));
+        let m = manifest("H1", serde_json::json!({"targets": ["F2"]}));
+        assert_eq!(about(&view, &m, 2), Some(HarnessAbout::Target));
+        assert_eq!(about(&view, &m, 3), None);
+        // A sibling counts through its parent.
+        assert_eq!(
+            harness_about(&view, &m, &"F2.n1".parse().unwrap()),
+            Some(HarnessAbout::Target)
+        );
+        let on_sibling = manifest("H2", serde_json::json!({"targets": ["F1.n1"]}));
+        assert_eq!(about(&view, &on_sibling, 1), Some(HarnessAbout::Target));
+    }
+
+    #[test]
+    fn the_keys_and_values_of_sibling_of_are_targets_too() {
+        let (_d, l) = scene();
+        let view = view_with(l, serde_json::json!({"name": "py.traced", "unit": "bytes"}));
+        let m = manifest("H1", serde_json::json!({"sibling_of": {"F3": "F2"}}));
+        assert_eq!(about(&view, &m, 3), Some(HarnessAbout::Target));
+        assert_eq!(about(&view, &m, 2), Some(HarnessAbout::Target));
+        assert_eq!(about(&view, &m, 1), None);
+    }
+
+    #[test]
+    fn an_entry_path_harness_and_a_probe_harness_are_about_their_finding() {
+        let (_d, l) = scene();
+        let view = view_with(l, serde_json::json!({"name": "py.traced", "unit": "bytes"}));
+        let entry = manifest(
+            "H1",
+            serde_json::json!({"targets": ["F3"], "purpose": "entry-path"}),
+        );
+        assert_eq!(about(&view, &entry, 3), Some(HarnessAbout::EntryPath));
+        let probed = manifest(
+            "H1",
+            serde_json::json!({"probes": [{"id": "P1", "finding": "F2",
+                "target": {"kind": "py-global", "module": "m", "name": "X"}}]}),
+        );
+        assert_eq!(about(&view, &probed, 2), Some(HarnessAbout::Probe));
+        assert_eq!(about(&view, &probed, 3), None);
+    }
+
+    #[test]
+    fn a_column_tied_to_the_finding_by_finding_candidate_or_site_makes_the_harness_about_it() {
+        let m = manifest("H1", serde_json::json!({}));
+        for (column, f, want) in [
+            (
+                serde_json::json!({"name": "probe:x", "finding": "F2"}),
+                2,
+                Some("probe:x"),
+            ),
+            (
+                serde_json::json!({"name": "py.traced", "unit": "bytes", "candidates": ["F3"]}),
+                3,
+                Some("py.traced"),
+            ),
+            // A candidate that is a sibling counts through its parent.
+            (
+                serde_json::json!({"name": "probe:y", "candidates": ["F1.n1"]}),
+                1,
+                Some("probe:y"),
+            ),
+            // The column of a line counts for the finding at the line, or at a writer of it.
+            (
+                serde_json::json!({"name": "py.blocks@a.py:20", "site": "a.py:20"}),
+                3,
+                Some("py.blocks@a.py:20"),
+            ),
+            (
+                serde_json::json!({"name": "py.blocks@a.py:12"}),
+                2,
+                Some("py.blocks@a.py:12"),
+            ),
+            // Another finding's line, a whole-process column and a site column of no finding.
+            (serde_json::json!({"name": "py.blocks@a.py:20"}), 2, None),
+            (
+                serde_json::json!({"name": "py.traced", "unit": "bytes"}),
+                2,
+                None,
+            ),
+            (serde_json::json!({"name": "py.blocks@z.py:9"}), 3, None),
+        ] {
+            let (_d, l) = scene();
+            let view = view_with(l, column.clone());
+            assert_eq!(
+                about(&view, &m, f),
+                want.map(|c| HarnessAbout::Column(c.to_owned())),
+                "{column}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_trend_of_another_harness_does_not_make_this_one_about_the_finding() {
+        let (_d, l) = scene();
+        let view = view_with(l, serde_json::json!({"name": "probe:x", "finding": "F2"}));
+        assert_eq!(
+            about(&view, &manifest("H1", serde_json::json!({})), 2),
+            Some(HarnessAbout::Column("probe:x".into()))
+        );
+        assert_eq!(
+            about(&view, &manifest("H2", serde_json::json!({})), 2),
+            None
+        );
+    }
+
+    #[test]
+    fn the_growth_evidence_a_finding_cites_makes_the_harness_of_its_series_about_it() {
+        let (_d, mut l) = scene();
+        let _ev = l
+            .add_evidence(NewEvidence {
+                source: Source::Repo {
+                    commit: "c".into(),
+                    path: None,
+                },
+                tool: Tool {
+                    name: "t".into(),
+                    version: "1".into(),
+                },
+                authority: Authority::Static,
+                kind: EvidenceKind::GrowthSeries,
+                result: serde_json::json!({"series": "S1"}),
+                raw: None,
+                coverage: EvidenceCoverage::default(),
+                limitations: vec![],
+                unknowns: vec![],
+            })
+            .unwrap();
+        let mut nf = NewFinding::new(
+            Origin::parse("growth-series").unwrap(),
+            vec![crate::EvidenceId::new(2)],
+        );
+        nf.site = Some("a.py:40".into());
+        l.add_finding(nf).unwrap();
+        let view = view_with(l, serde_json::json!({"name": "py.traced", "unit": "bytes"}));
+        let h1 = manifest("H1", serde_json::json!({}));
+        let h2 = manifest("H2", serde_json::json!({}));
+        assert!(matches!(
+            harness_about(&view, &h1, &FindingId::new(4)),
+            Some(HarnessAbout::Evidence(_))
+        ));
+        // Another harness, and a finding that cites nothing of the series.
+        assert_eq!(harness_about(&view, &h2, &FindingId::new(4)), None);
+        assert_eq!(about(&view, &h1, 3), None);
+    }
+
+    #[test]
+    fn a_harness_with_none_of_it_is_not_about_the_finding() {
+        let (_d, l) = scene();
+        let view = view_with(l, serde_json::json!({"name": "py.traced", "unit": "bytes"}));
+        let m = manifest("H1", serde_json::json!({"targets": ["F1"]}));
+        for f in [2, 3] {
+            assert_eq!(about(&view, &m, f), None, "F{f}");
+        }
     }
 }

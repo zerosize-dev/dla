@@ -153,6 +153,10 @@ pub mod codes {
     /// of blocks allocated at one line, where the bundle would hold no allocation or retention
     /// evidence and the stacks that lead to the line were never captured.
     pub const STACKS_NOT_CAPTURED: &str = "stacks-not-captured";
+    /// `dla alloc-test <H> --finding <F>` on a harness that does not target the finding and
+    /// whose series have nothing tied to it, or `dla ledger refute` / `confirm` citing the
+    /// discriminator of such a harness.
+    pub const HARNESS_NOT_ABOUT: &str = "harness-not-about";
 }
 
 /// A rule-based refusal: what was refused, what is missing, the command that fixes it.

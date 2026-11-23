@@ -222,6 +222,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         series: &main.series,
         columns: &cols,
         too_short: short::is_short(&main.series, &th).then(|| short::points(&main.series, &th)),
+        executed: None,
     });
 
     // Persist the full report first: the evidence points at it.
