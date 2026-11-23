@@ -1750,3 +1750,21 @@ flat test-loop readings get only 9 second looks.
   My mutation Q36 (chooser back to kind only) fails that test.
 - Running: `bash u99/suite.sh` again on the final tree (output u99/suite2.out), task below.
   Then non-skip snapshot, CI, commit 20, pillow-10.
+
+## 21:50 UTC: nineteenth snapshot frozen, CI running, pillow-10 started
+
+- Second whole-suite run (u99/suite2.out, with my chooser fix): 3376 passed, 2 failed, both unit
+  tests in crates/dla-cli/src/alloc_cmd.rs whose fixtures built growth evidence with STATIC
+  authority (`the_growth_evidence_to_confirm_with_is_the_newest_tied_one...`,
+  `a_root_closed_as_static_only_gets_refute_test_and_confirm_in_that_order`). I changed the
+  fixtures to authority `test` (what `dla trend` writes); assertions unchanged. After that:
+  CLI unit tests 323, m3_rules 27, alloc_test 5, py_site_columns 23, fmt and clippy clean. I did
+  not run the whole suite a third time (the two failures were the only ones; the edit is inside
+  a test module); CI runs it.
+- Static bench 64 pass, schema check 20 ok, pytest-dependent tests under 3.12: 21 and 17.
+- Nineteenth frozen snapshot: ea98058442052c422320568b7805cd2145685aac (non-skip). CI waiter:
+  task bdxhoz5mn, logs u99/ci19. DO NOT push a non-skip snapshot while it runs.
+- After green CI: `bash wip-notes/commit-snapshot-tree.sh ea98058442052c422320568b7805cd2145685aac
+  wip-notes/commit-message-20.txt`, push main and main:dev/wonderful-mccarthy-algc5s.
+- pillow-10 started 21:50 with the plugin and binary of ea98058; waiter task byezjbc8m.
+  `target/` was cleaned (8.6 GB).
