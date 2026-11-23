@@ -5,7 +5,7 @@ sitecustomize (if any), starts tracemalloc (DLA_TRACEMALLOC_FRAMES frames: 10 wh
 captures are asked for, else _DRIVER_FRAMES in driver mode (DLA_KEY_MODE is set), else 1) and, on Python 3.12+, a sys.monitoring
 PY_START coverage collector, and writes one JSON record per dump to the file named by
 DLA_HARNESS_OUT: an `exit` record from an atexit handler, `checkpoint` records when a driver calls
-`checkpoint()`, and optional light `tick` records every DLA_TICK_MS.
+`checkpoint()`, and optional light `tick` records every DLA_TICK_MS (a tick reads no heap: no gc.get_objects, no referrers, no snapshot).
 
 Environment: DLA_HARNESS_OUT, DLA_HARNESS_PROBES (probes.json), DLA_PURGE (trim|gc|none),
 DLA_PROJECT (scratch root), DLA_TICK_MS, DLA_ITER. Raw captures (`dla harness run --capture`):
@@ -1428,8 +1428,12 @@ def _build(phase, x, last):
         values["py.traced_peak"] = traced[1]
     else:
         limitations.append("tracemalloc not tracing: py.traced unavailable")
+    # A tick runs on the agent's own thread, so it never walks the heap: gc.get_objects() holds a
+    # list that refers to objects another thread is building, and that thread's resize of a tuple
+    # then fails ("bad argument to internal function"). A tick carries no py.gc_objects.
     objs = None if tick else gc.get_objects()
-    values["py.gc_objects"] = len(objs) if objs is not None else len(gc.get_objects())
+    if objs is not None:
+        values["py.gc_objects"] = len(objs)
     values["py.gc_collections"] = sum(s.get("collections", 0) for s in gc.get_stats())
     os_own = _os_values()
     values.update(os_own)
