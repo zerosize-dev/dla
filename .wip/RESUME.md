@@ -1252,3 +1252,16 @@ flat test-loop readings get only 9 second looks.
 - Open work: task 82 (narrowed test loop must not satisfy the first step), task 83 (one project copy per harness),
   Jetty not run, report quality items from pillow-2/3 (verifier stage skipped when the run ends incomplete,
   mechanism text less exact in pillow-3).
+
+## State at about 04:20 UTC 2026-11-23
+
+- pillow-4 (plugin of e6f8581 = main bd1fc84): NOT FOUND. 6072 s, status COMPLETE, 608 findings all dispositioned;
+  leak hypotheses confirmed 0 (one disputed by the verifier), refuted 11; non-leak explanations confirmed 11 (the
+  registry rule works unattended). The python worker generated the full loop H2, never ran it, ran a three-file loop
+  H3; no ledger line mentions the leak line; 119 harness directories (9.5 GB). Kept: /root/dla-real/pillow-4-keep.
+- Unattended Pillow runs so far: pillow-1 not found (before the fixes), pillow-2 found (own driver), pillow-3 found
+  (full loop), pillow-4 not found (narrowed loop).
+- Builder L (brief py-loop-full-brief.md, task 82) is running on the clean tree at bd1fc84: a narrowed loop must not
+  satisfy the queue's first step. After it: my checks (mutations, real library), whole suite (keep 6 GB free), CI,
+  commit message 14 to write, then pillow-5, then 0.9.0-preview.6.
+- Disk 19 GB free after deleting /root/dla-real/pillow-4; target/ was empty before builder L started.
