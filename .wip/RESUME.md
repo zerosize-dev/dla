@@ -1490,3 +1490,14 @@ flat test-loop readings get only 9 second looks.
   gate tie through the holder, hints. Start its builder after pillow-7 ends (disk).
 - Still to write: static rule for `raise <stored exception>`; a finding's site always gets its
   column beyond the twelve largest.
+
+## 10:55 UTC: N and A are on main
+
+- CI of the sixteenth snapshot dfbb9dd: success, run 45151139840, all 15 jobs.
+- main = cbf3de3 "A finding at a growing line reaches the verifier with its stack" (tree of dfbb9dd),
+  parent 1a3bfb2 "Do not read the interpreter's cache or a known writer line as a new leak" (tree
+  of a4c73ba), parent 24a42ab. Pushed to main and to dev/wonderful-mccarthy-algc5s.
+- Not published: bd1fc84, f30f050, 22bd696, 1a3bfb2, cbf3de3 (next preview 0.9.0-preview.6;
+  decide after pillow-7, which runs on the tree of cbf3de3).
+- Uncommitted in the working tree: builder R1's holder capture (harness/python/sitecustomize.py,
+  README.md). It waits for R2 (Rust side) and its own CI round.
