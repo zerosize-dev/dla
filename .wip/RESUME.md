@@ -1226,3 +1226,11 @@ flat test-loop readings get only 9 second looks.
   the disk drops under 700 MB; it only reports, it does not stop the run). After it: keep report/state/ledger/
   transcript in /root/dla-real/pillow-4-keep and delete /root/dla-real/pillow-4.
 - Disk: keep at least 4 GB free before a whole-suite run; a real run on this library uses up to 3.7 GB.
+
+## State at about 03:20 UTC 2026-11-23
+
+- pillow-4 (plugin of e6f8581) is running. Interim at 24 min: registries refuted with N-INTENT siblings confirmed
+  (non-leak confirmed 11, leak confirmed 0 plus one disputed by the verifier); the python worker generated the full
+  loop (H2), did not run it, generated a loop with `--tests` on three files (H3) and ran that, so the loop step
+  counted as done and the leak line was not seen. Task 82: a narrowed loop must not satisfy the queue's first step.
+- Disk: pillow-4 uses 5.5 GB and grows; `cargo clean -p dla-cli` freed 3.6 GB (rebuild dla-cli before any cargo test).
