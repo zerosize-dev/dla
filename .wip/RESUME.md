@@ -1471,3 +1471,22 @@ flat test-loop readings get only 9 second looks.
   (2) a static rule for `raise <stored exception>`; (3) the cause line was not among the twelve
   site columns of the loop series ("21 more allocation sites grew and have no column").
   Task 91.
+
+## About 11:00 UTC: holder capture (Python agent) built and checked on the real library
+
+- Builder R1 (brief py-holder-brief.md, scratch u91): new capture kind `heap` in
+  harness/python/sitecustomize.py, file `py-1.retain.json` (format in py-holder-rust-brief.md).
+  Its case checks pass under 3.13 and 3.12 when I rerun them (`python3 u91/check_cases.py <python> <tag>`).
+- My real-tree check (u92/pillow_heap.py, units u92/units): on the library checkout, a font unit
+  and a colour-management unit, 5 rounds of 200, capture 6.7 s:
+  `src/PIL/ImageCms.py:411`, `:176` and `src/PIL/_util.py:19` -> root module-global
+  `PIL.ImageCms._imagingcms`, chain traceback x4774 <- ImportError(.ex) <- DeferredError;
+  `src/PIL/ImageFont.py:580` -> blocks 200 -> 1200, no object found, note "native code holds them
+  or a reference was lost there". Both leaks told apart in one file.
+- The working tree now differs from snapshot dfbb9dd by R1's edit of sitecustomize.py and
+  harness/python/README.md (uncommitted, not in CI). Commits 16 and 17 are made from the snapshot
+  trees, not from the working tree.
+- Brief R2 written (py-holder-rust-brief.md): capture flag, `dla summarize heap-graph` adapter,
+  gate tie through the holder, hints. Start its builder after pillow-7 ends (disk).
+- Still to write: static rule for `raise <stored exception>`; a finding's site always gets its
+  column beyond the twelve largest.
