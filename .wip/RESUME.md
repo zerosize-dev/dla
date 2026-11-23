@@ -1768,3 +1768,30 @@ flat test-loop readings get only 9 second looks.
   wip-notes/commit-message-20.txt`, push main and main:dev/wonderful-mccarthy-algc5s.
 - pillow-10 started 21:50 with the plugin and binary of ea98058; waiter task byezjbc8m.
   `target/` was cleaned (8.6 GB).
+
+## 22:40 UTC: I is on main
+
+- CI of the nineteenth snapshot ea98058: success, run 45273663975, all 15 jobs.
+- main = b91cbe6 "A finding whose alloc-test favors leak is confirmed, not closed as inconclusive"
+  (tree of ea98058), pushed to main and dev/wonderful-mccarthy-algc5s. Working tree clean.
+- Not published: bd1fc84, f30f050, 22bd696, 1a3bfb2, cbf3de3, dd6c4cd, d9ec81b, b91cbe6
+  (0.9.0-preview.6 after pillow-10, if it confirms the leak).
+
+## 23:35 UTC: pillow-10 CONFIRMED the leak (run still going); version commit pushed
+
+- pillow-10 (tree of b91cbe6), ledger at 23:31: F2 added at src/PIL/ImageFont.py:580 (holder
+  native-handle/global-ref) 23:21:55; under test; alloc-test E928 on its own driver H162 favors
+  leak; alloc-stack E932 tied to F2 (capture and summary were made); sibling F2.n1 refuted with
+  E928; F2 CONFIRMED 23:24:09 with E933; label UNCLASSIFIED; explanation stored: "At
+  src/PIL/ImageFont.py:580 font.render calls font_render in src/_imagingft.c:888, where
+  PyObject_GetAttrString(image,"id") returns a new int reference that is ..." (the documented
+  mechanism). Final report not read yet: the run goes on until 00:20 at the latest; waiter task
+  bv1slgnqc.
+- Disk: the run reached 168 harnesses (13 GB of project copies) and 1170 MB free. I deleted old
+  scratch binaries and bench logs, and `harness/H{3..150}/work` of the run (project copies of old
+  finished harnesses), 13.7 GB free after. Task 83 is the real fix.
+- Pillow unattended runs: 1 no, 2 yes, 3 yes, 4 no, 5 no, 6 yes, 7 no, 8 no, 9 no, 10 YES.
+- Version commit: main = 28979b4 "Version 0.9.0-preview.6" (four files), pushed to main and dev.
+  CI waiter on main: task bq7cx398o (logs u99/ci-main-v6). When green: trigger release.yml with
+  publish true, then verify with
+  `gh api repos/zerosize-dev/dla/releases/tags/v0.9.0-preview.6 --jq '{tag_name, prerelease, assets: [.assets[].name]}'`.
