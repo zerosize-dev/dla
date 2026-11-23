@@ -1447,3 +1447,27 @@ flat test-loop readings get only 9 second looks.
   pillow-7).
 - pillow-7 started 09:55 with the plugin and binary of dfbb9dd; waiter task bkvede3sr.
   `target/` was cleaned (7.2 GB) for its disk: the next cargo command rebuilds everything.
+
+## About 10:25 UTC: the loop's "noise" is a second real leak in the library
+
+- Experiment P, second pass (scripts u89/full.py, outputs full*.out): on the full suite every
+  round's pytest Session stays alive. Anchor: `PIL.ImageCms._imagingcms` is a
+  `PIL._util.DeferredError` (the optional extension is not built on this machine);
+  `DeferredError.__getattr__` does `raise self.ex` (src/PIL/_util.py:19), the SAME exception object
+  every time; each raise adds the raising frames to its `__traceback__`, and the frames keep their
+  locals: test function -> request -> Function -> Session -> all items -> test instances -> images.
+  Clearing `ex.__traceback__` after each call makes helper.py:331, Image.py:512/523/2712 and
+  PngImagePlugin.py:374 flat while ImageFont.py:580 keeps growing.
+- So eleven of the twelve growing lines of pillow-6's loop are victims of one holder in the
+  library. It is a real retention reachable through the public API: hand run H2 in
+  u72/pillow run 20261123-091638-9cef, unit `ImageCms.getOpenProfile("p<key>.icc")` in try/except:
+  `py.blocks@src/PIL/ImageCms.py:411` +4 per unit, `py.blocks@src/PIL/_util.py:19` +2 per unit,
+  `py.blocks@src/PIL/ImageCms.py:176` +2 per unit, `os.private_dirty` +6.3 KB per unit.
+  pillow-2 had measured `_util.py:19` as steady in three trends and left it tied to no finding.
+- Two web searches found no upstream report of it; the class is unchanged in later versions seen
+  in the results. Not verified beyond that. Do not name the project in the repository.
+- What the tool lacks: (1) who holds the objects allocated at a growing line (Python has no
+  retention capture; `gc.get_referrers` chains to a root would have named the holder);
+  (2) a static rule for `raise <stored exception>`; (3) the cause line was not among the twelve
+  site columns of the loop series ("21 more allocation sites grew and have no column").
+  Task 91.
