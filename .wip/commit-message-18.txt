@@ -1,0 +1,49 @@
+The Python agent's tick thread no longer breaks the program it measures
+
+A real unattended run on a Python library ran the project's tests in a
+loop, measured the documented leak line growing by 299 blocks per round,
+and ended COMPLETE with no leak confirmed. Three defects acted in turn.
+
+The agent broke the program. Its tick thread wrote a light record every
+100 ms, and that record counted the tracked objects with
+`gc.get_objects()`. On a large heap the call takes longer than the
+interpreter's switch interval, so the thread gave up the interpreter lock
+while it still held the list, and the list referred to a tuple the main
+thread was building. The main thread's resize of that tuple then failed
+with `SystemError: Objects/tupleobject.c:909: bad argument to internal
+function`. In the run seven of nine rounds had such failures. Reproduced
+with a driver that keeps 600000 tracked objects and builds tuples from
+generators for 30 s: 155 SystemErrors on Python 3.12 and 138 on 3.13
+before, none after.
+
+A tick now reads nothing that creates a reference to an object of the
+program, so a tick record carries no `py.gc_objects`. Checkpoint records,
+which the driver takes on the main thread, are unchanged.
+
+The loop counted a cut run as a round. In round 2 the error hit while
+pytest collected a test file, pytest stopped and ran no test, and every
+line of the series got one flat step. From the second run on, a run whose
+exit code is neither "all passed" nor "some tests failed", or that ran no
+test, is not a unit: it is noted and made again, at most twice for one
+unit and four times in the loop, and the summary counts the units that
+stayed cut. `--continue-on-collection-errors` makes a test file that fails
+to import cost its own tests and not the whole run.
+
+A finding at a growing line could be closed as not exercised. The flat
+step failed the counter gate of every `py.blocks@` column (`delta < 1`),
+the final gate still listed the columns as not flat, findings were added
+at the lines, and then the tool treated them as never measured: only a
+column whose gate passed made a finding "grown". The gate printed
+`dla ledger close-rest` as their fix and that command closed them as
+`not_exercised`. An allocation-site column that is non-flat by the gate's
+own rule now makes the finding at its site grown, so `resolve` and
+`close-rest` refuse to close it unmeasured and the fix is the measuring
+route: a probe driver, then the alloc-test.
+
+Replayed on a copy of that run's state: the gate's fix for the finding at
+the leak line is the probe driver route, `close-rest` leaves it open and
+says why, and closing it by hand is refused with `growth-not-measured`.
+
+Not seen yet: an unattended run with this change. Left as it was: closing
+with `time_budget` skips the refusal in `resolve`, and the bundle's check
+for missing stacks looks only at columns whose gate passed.

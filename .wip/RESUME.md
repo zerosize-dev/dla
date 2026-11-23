@@ -1531,3 +1531,28 @@ flat test-loop readings get only 9 second looks.
   wip-notes/r1-holder-capture.patch (applies to cbf3de3; `git apply` it before starting R2).
   It may need a small merge with G1's edit of sitecustomize.py.
 - 0.9.0-preview.6 is NOT published: wait for G and a run that finds the leak with it.
+
+## About 12:25 UTC: builder G done; my checks; one test sent back
+
+- Builder G (brief py-loop-robust-brief.md): G1 tick reads no heap (only `len(gc.get_objects())`
+  was removed; a tick record has no `py.gc_objects`), G2 cut runs are repeated
+  (`MAX_UNIT_REPEATS=2`, `MAX_LOOP_REPEATS=4`, `--continue-on-collection-errors`, summary has
+  `cut_units` and `repeats`), G3 `grown::counts_as_growth` (gate pass, or a non-flat
+  allocation-site column) used by `grown_unmeasured`; view.rs gives a grown finding the reason
+  inconclusive.
+- Builder's real driver check (600000 objects, ticks 100 ms, tuples from generators, 30 s):
+  SystemErrors before 138 (3.13) and 155 (3.12), after 0 and 0.
+- My mutations: Q28 (old tick read restored) fails the tick test on 3.13 and 3.12; Q30 (non-flat
+  clause off) fails one unit test and one CLI test; Q29 (exit code 3 not a cut) SURVIVED: the
+  cut-run tests cut at collection, where no test ran. Sent back to the builder: a test with a
+  run cut after some tests ran.
+- My replay with the fixed binary (copy u95/replay, binary u95/dla-G): final gate has no item
+  whose fix holds `close-rest`; F2's fix is the sibling, test, probe driver, run, trend,
+  alloc-test route; `dla ledger close-rest` closed 0 and left 10 with "its column grew"; a hand
+  close as not_exercised is refused with `growth-not-measured`.
+- Clean test results after the mutations: workload blocks 10 (both interpreters), pytest loop 20
+  (3.12), capture 22 (3.13); CLI py_site_columns 13, pytest_loop 17, gate_flow 13, gate_harness 25,
+  keep_going 31, queue 16, trigger 7, skill_text 20, alloc_test 5; core lib 263.
+- Commit message ready: commit-message-18.txt.
+- Next: builder's extra test, whole suite (u90/suite.sh pattern, static bench command fixed in
+  notes), non-skip snapshot, CI, commit 18, pillow-8, then 0.9.0-preview.6 if it finds the leak.

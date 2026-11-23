@@ -80,7 +80,7 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   the cache and xdist plugins are off, so the run stays in this process. After the first run it drops a
   file none of whose tests passed when another file had one (`dropped test file ...`), stops when no test
   passed (`DLA-PYTEST` line, exit 2) or no test was found (exit 3), drops the slowest files until the series fits
-  the time limit and gives no point when one file alone does not fit. It needs pytest in the harness
+  the time limit and gives no point when one file alone does not fit. A run that pytest ends early (an exit code other than 0 and 1, or no test executed, from the second run on) is made again and is not a unit: at most 2 repeats per unit and 4 in the loop, then it counts as a dead unit and the summary line says `cut_units=`; a test file that fails to import costs its own tests only. It needs pytest in the harness
   interpreter (`python3` on PATH: `python3 -m pip install pytest`, or put the `bin` directory of a virtual
   environment that has pytest and the project first on PATH for the `dla` commands; without it the command
   is refused and the queue goes on with the driver batches) and the project importable in place:

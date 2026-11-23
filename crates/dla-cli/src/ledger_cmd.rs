@@ -1219,7 +1219,7 @@ fn refuse_grown_unmeasured(ctx: &Ctx, id: &FindingId, loaded: Option<&Loaded<'_>
     Err(Failure::refuse(
         core_codes::GROWTH_NOT_MEASURED,
         format!(
-            "{id} cannot be closed: its column {} of {} passed the growth gate, and no alloc-test is bound to it",
+            "{id} cannot be closed: its column {} of {} grew (it passed the growth gate, or it is a non-flat allocation-site column), and no alloc-test is bound to it",
             g.column, g.series
         ),
         if g.pytest_loop {

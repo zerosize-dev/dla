@@ -1180,3 +1180,220 @@ fn a_capture_that_no_stack_of_the_line_came_out_of_is_said_in_the_bundle() {
     let index: Value = serde_json::from_slice(&fs::read(dir.join("index.json")).unwrap()).unwrap();
     assert_eq!(index["stacks_note"], note, "{index}");
 }
+
+/// A prepared run whose series S1 has a flat step in the site column: from the middle point on,
+/// every point holds the value of the point before it, as a series does when one run of the unit
+/// was cut, so the counter gate (a rise of at least one at every step) fails the column while its
+/// shape stays `steady`.
+fn prepared_with_flat_step() -> Run {
+    let r = prepared();
+    let path = r.run_dir.join("series/S1.json");
+    let mut s: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let col = s["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|c| c["name"] == COLUMN)
+        .unwrap();
+    let points = s["points"].as_array_mut().unwrap();
+    let old: Vec<Value> = points.iter().map(|p| p["values"][col].clone()).collect();
+    let mid = old.len() / 2;
+    for (i, p) in points.iter_mut().enumerate().skip(mid) {
+        p["values"][col] = old[i - 1].clone();
+    }
+    fs::write(&path, s.to_string()).unwrap();
+    r
+}
+
+/// Adds the finding at the line of the column from the trend's own growth evidence; returns its id.
+fn add_at_the_line(r: &Run, t: &Value) -> String {
+    let e = t["evidence"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap();
+    let added = ok(
+        &r.project,
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "growth-series",
+            "--evidence",
+            e,
+            "--site",
+            SITE,
+            "--region",
+            "heap",
+            "--holder",
+            "native-handle/global-ref",
+        ],
+    );
+    added["id"].as_str().unwrap().to_owned()
+}
+
+fn resolve_unmeasured(r: &Run, f: &str, reason: &str) -> Out {
+    dla(
+        &r.project,
+        &[
+            "ledger",
+            "resolve",
+            f,
+            "--as",
+            "unresolved",
+            "--reason",
+            reason,
+            "--remedy",
+            "x",
+        ],
+    )
+}
+
+/// A line that grew in a run with one flat step (a cut run counted as a unit) has a column that
+/// the counter gate fails and whose shape is `steady`. A finding at that line is grown all the
+/// same: it cannot be closed unmeasured, `close-rest` leaves it, and the gate's fix is the route
+/// that measures it; after the alloc-test it is closed as before.
+#[test]
+fn a_finding_at_a_steady_line_whose_gate_failed_is_grown_and_cannot_be_closed_as_not_exercised() {
+    if !have_python() {
+        return;
+    }
+    let r = prepared_with_flat_step();
+    let t = r.trend();
+    let f = add_at_the_line(&r, &t);
+    for reason in ["not_exercised", "inconclusive"] {
+        let o = resolve_unmeasured(&r, &f, reason);
+        assert_ne!(o.code, 0, "{reason}: {}", o.text);
+        assert_eq!(o.json["error"]["code"], "growth-not-measured", "{}", o.text);
+        assert!(
+            o.json["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(COLUMN),
+            "{}",
+            o.text
+        );
+    }
+    let out = ok(&r.project, &["ledger", "close-rest"]);
+    let left = out["left"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["id"] == f.as_str())
+        .unwrap_or_else(|| panic!("{out}"));
+    assert!(
+        left["why"].as_str().unwrap().contains("its column grew")
+            && left["why"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("dla alloc-test H1 --finding {f}")),
+        "{left}"
+    );
+    assert_eq!(out["closed"], 0, "{out}");
+    // The final gate's fix for the finding is the route that measures it, not close-rest.
+    let missing = r.final_gate();
+    let item = missing
+        .iter()
+        .find(|m| m["id"] == f.as_str() && m["kind"] == "finding")
+        .unwrap_or_else(|| panic!("{missing:?}"));
+    let fix = item["fix"].as_str().unwrap();
+    assert!(
+        !fix.contains("close-rest") && fix.contains(&format!("dla alloc-test H1 --finding {f}")),
+        "{fix}"
+    );
+    // `dla run status` prints the same fix.
+    let status = ok(&r.project, &["run", "status"]);
+    let listed = status["blocking"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["id"] == f.as_str() && b["kind"] == "finding")
+        .unwrap_or_else(|| panic!("{status}"));
+    assert_eq!(listed["fix"].as_str().unwrap(), fix, "{listed}");
+    // The alloc-test route: the sibling, the test, the alloc-test. The finding is decided by
+    // measurement afterwards and closes as before.
+    let e = t["evidence"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap();
+    ok(
+        &r.project,
+        &[
+            "ledger",
+            "add",
+            "--sibling-of",
+            &f,
+            "--origin",
+            "hypothesis",
+            "--hypothesis",
+            "N-WARM",
+            "--refute-if",
+            "growth continues over the extra cycles",
+            "--evidence",
+            e,
+        ],
+    );
+    let workload = r
+        .ledger()
+        .iter()
+        .filter(|v| v["kind"] == "workload")
+        .filter_map(|v| v["evidence_id"].as_str().map(str::to_owned))
+        .next_back()
+        .unwrap();
+    ok(&r.project, &["ledger", "test", &f, "--evidence", &workload]);
+    let a = ok(&r.project, &["alloc-test", "H1", "--finding", &f]);
+    assert_eq!(a["decided_by"], COLUMN, "{a}");
+    let closed = resolve_unmeasured(&r, &f, "inconclusive");
+    assert_eq!(closed.code, 0, "{}", closed.text);
+}
+
+/// A column that is flat at the finding's line changes nothing: the finding is not grown, the
+/// gate's fix is a plain `resolve` and `close-rest` closes it, as it did.
+#[test]
+fn a_flat_site_column_at_a_finding_changes_nothing() {
+    if !have_python() {
+        return;
+    }
+    let r = prepared();
+    let path = r.run_dir.join("series/S1.json");
+    let mut s: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let col = s["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|c| c["name"] == COLUMN)
+        .unwrap();
+    for p in s["points"].as_array_mut().unwrap() {
+        p["values"][col] = serde_json::json!(7.0);
+    }
+    fs::write(&path, s.to_string()).unwrap();
+    let t = r.trend();
+    let f = add_at_the_line(&r, &t);
+    let missing = r.final_gate();
+    let item = missing
+        .iter()
+        .find(|m| m["id"] == f.as_str() && m["kind"] == "finding")
+        .unwrap_or_else(|| panic!("{missing:?}"));
+    // Not the route of a grown finding: the plain resolve of an open finding, as before.
+    assert!(
+        item["fix"]
+            .as_str()
+            .unwrap()
+            .starts_with("dla ledger resolve ")
+            && !item["fix"].as_str().unwrap().contains("alloc-test"),
+        "{item}"
+    );
+    let out = ok(&r.project, &["ledger", "close-rest"]);
+    assert_eq!(out["closed"], 1, "{out}");
+    assert!(
+        out["left"]
+            .as_array()
+            .is_none_or(|l| l.iter().all(|x| x["id"] != f.as_str())),
+        "{out}"
+    );
+}

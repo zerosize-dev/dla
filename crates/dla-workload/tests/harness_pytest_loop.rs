@@ -867,5 +867,278 @@ fn the_step_is_never_below_one_and_a_step_too_long_for_the_limit_is_lowered() {
     );
 }
 
+// ---------------------------------------------------------------------------------------
+// A run that pytest ends early is not a unit
+// ---------------------------------------------------------------------------------------
+
+/// A `conftest.py` whose collection hook counts the runs in a file next to it and raises from the
+/// run `from_run` on (only that run when `only` is set): pytest ends such a run with an internal
+/// error and no test executed.
+fn cutting_conftest(from_run: u32, only: bool) -> String {
+    let test = if only { "n == FROM" } else { "n >= FROM" };
+    format!(
+        "\
+import os
+
+FROM = {from_run}
+COUNT = os.path.join(os.path.dirname(os.path.abspath(__file__)), \"runs.txt\")
+
+
+def pytest_collection(session):
+    try:
+        n = int(open(COUNT).read()) + 1
+    except OSError:
+        n = 1
+    with open(COUNT, \"w\") as fh:
+        fh.write(str(n))
+    if {test}:
+        raise RuntimeError(\"collection cut in run %d\" % n)
+"
+    )
+}
+
+fn loop_files(extra: &[(&'static str, String)]) -> Vec<(String, String)> {
+    let mut files: Vec<(String, String)> = vec![
+        (
+            "pyproject.toml".into(),
+            "[project]\nname = \"pkg\"\nversion = \"1\"\n".into(),
+        ),
+        ("pkg/__init__.py".into(), String::new()),
+        ("pkg/store.py".into(), STORE.into()),
+        ("tests/test_keeps.py".into(), TEST_KEEPS.into()),
+        ("tests/test_quiet.py".into(), TEST_QUIET.into()),
+    ];
+    files.extend(extra.iter().map(|(p, t)| ((*p).to_owned(), t.clone())));
+    files
+}
+
+fn project_owned(files: &[(String, String)]) -> Fx {
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    project_with(&refs, true)
+}
+
+fn harness_log(fx: &Fx) -> String {
+    fs::read_dir(fx.ctx.run_dir.join("harness/H1/logs"))
+        .unwrap()
+        .flatten()
+        .map(|e| fs::read_to_string(e.path()).unwrap_or_default())
+        .collect::<String>()
+}
+
+fn keep_column(s: &SeriesFile) -> Vec<f64> {
+    let line = line_of(STORE, "# KEEP");
+    column(s, &format!("py.blocks@pkg/store.py:{line}"))
+        .iter()
+        .map(|v| v.unwrap_or(f64::NAN))
+        .collect()
+}
+
+#[test]
+fn a_run_that_pytest_cut_is_made_again_and_the_series_has_no_flat_step() {
+    let _g = lock();
+    if !have_pytest() {
+        return;
+    }
+    let fx = project_owned(&loop_files(&[("conftest.py", cutting_conftest(2, true))]));
+    gen_ok(&fx, &opts());
+    let out = run_ok(&fx, "H1", &RunOptions::default());
+    let s = series_of(&fx, &out);
+    let vals = keep_column(&s);
+    assert_eq!(vals.len(), 9, "{vals:?}");
+    assert!(
+        vals.windows(2).all(|w| w[1] - w[0] == 1.0),
+        "one block more at every step, the cut run is not a step of its own: {vals:?}"
+    );
+    let cut: Vec<&String> = s
+        .limitations
+        .iter()
+        .filter(|l| l.contains("was ended early by pytest"))
+        .collect();
+    assert_eq!(
+        cut.len(),
+        1,
+        "one note for the one cut run: {:?}",
+        s.limitations
+    );
+    assert!(
+        cut[0].starts_with("run 2 of the tests was ended early by pytest (exit code 3")
+            && cut[0].contains("collection cut in run 2")
+            && cut[0].contains("is made again"),
+        "{}",
+        cut[0]
+    );
+    let log = harness_log(&fx);
+    assert!(
+        log.contains("DLA-PYTEST summary: units=9") && log.contains("cut_units=0 repeats=1"),
+        "{log}"
+    );
+    assert!(
+        s.limitations.iter().all(|l| !l.contains("counted as dead")),
+        "no unit was lost: {:?}",
+        s.limitations
+    );
+}
+
+#[test]
+fn a_run_that_pytest_cuts_every_time_is_repeated_within_the_bounds_and_the_cut_units_are_counted() {
+    let _g = lock();
+    if !have_pytest() {
+        return;
+    }
+    let fx = project_owned(&loop_files(&[("conftest.py", cutting_conftest(2, false))]));
+    gen_ok(&fx, &opts());
+    let out = run_ok(&fx, "H1", &RunOptions::default());
+    let s = series_of(&fx, &out);
+    let log = harness_log(&fx);
+    // Run 2 is made again twice, run 3 twice more (4 in the loop); every later run is cut once
+    // and counts as a dead unit at once. Eight of the nine runs are cut.
+    assert!(
+        log.contains("DLA-PYTEST summary: units=9") && log.contains("cut_units=8 repeats=4"),
+        "{log}"
+    );
+    let notes: Vec<&String> = s
+        .limitations
+        .iter()
+        .filter(|l| l.contains("unit(s) of the loop were cut by pytest"))
+        .collect();
+    assert_eq!(notes.len(), 1, "one summary note: {:?}", s.limitations);
+    assert!(
+        notes[0].starts_with("8 unit(s) of the loop were cut by pytest and counted as dead (run 2, 3, 4, 5, 6, 7, 8, 9) after 4 repeat(s)"),
+        "{}",
+        notes[0]
+    );
+    let again = s
+        .limitations
+        .iter()
+        .filter(|l| l.contains("is not a unit and is made again"))
+        .count();
+    assert_eq!(again, 4, "{:?}", s.limitations);
+}
+
+#[test]
+fn a_test_file_that_fails_to_import_costs_its_own_tests_and_is_named_once() {
+    let _g = lock();
+    if !have_pytest() {
+        return;
+    }
+    let bad = "import a_module_that_does_not_exist_anywhere\n\n\ndef test_never():\n    pass\n";
+    let fx = project_owned(&loop_files(&[("tests/test_import.py", bad.into())]));
+    gen_ok(&fx, &opts());
+    let out = run_ok(&fx, "H1", &RunOptions::default());
+    let s = series_of(&fx, &out);
+    let vals = keep_column(&s);
+    assert_eq!(vals.len(), 9, "{vals:?}");
+    assert!(vals.windows(2).all(|w| w[1] - w[0] == 1.0), "{vals:?}");
+    let named: Vec<&String> = s
+        .limitations
+        .iter()
+        .filter(|l| l.contains("tests/test_import.py"))
+        .collect();
+    assert_eq!(named.len(), 1, "named once: {:?}", s.limitations);
+    assert!(
+        named[0].contains("failed to collect")
+            && named[0].contains("a_module_that_does_not_exist_anywhere"),
+        "{}",
+        named[0]
+    );
+    let log = harness_log(&fx);
+    assert!(log.contains("cut_units=0 repeats=0"), "{log}");
+}
+
+/// Run 2 only: after the tests of `test_a.py` have been reported, the session ends with an
+/// internal error (an exception raised from `pytest_runtest_logfinish`, exit code 3), so the
+/// run is cut after some tests ran and before the others.
+const MID_CUT_CONFTEST: &str = "\
+import os
+
+COUNT = os.path.join(os.path.dirname(os.path.abspath(__file__)), \"runs.txt\")
+RUN = [0]
+
+
+def pytest_sessionstart(session):
+    try:
+        n = int(open(COUNT).read()) + 1
+    except OSError:
+        n = 1
+    with open(COUNT, \"w\") as fh:
+        fh.write(str(n))
+    RUN[0] = n
+
+
+def pytest_runtest_logfinish(nodeid, location):
+    if RUN[0] == 2 and \"test_a\" in nodeid:
+        raise RuntimeError(\"session ended after test_a in run 2\")
+";
+
+#[test]
+fn a_run_cut_after_some_tests_ran_is_not_a_unit_and_is_made_again() {
+    let _g = lock();
+    if !have_pytest() {
+        return;
+    }
+    let keep = |name: &str| {
+        format!("KEPT = []\n\n\ndef keep_{name}():\n    KEPT.append(object())  # KEEP\n")
+    };
+    let test = |name: &str| {
+        format!("from pkg import {name}\n\n\ndef test_{name}():\n    {name}.keep_{name}()\n")
+    };
+    let files = vec![
+        (
+            "pyproject.toml".to_owned(),
+            "[project]\nname = \"pkg\"\nversion = \"1\"\n".to_owned(),
+        ),
+        ("pkg/__init__.py".to_owned(), String::new()),
+        ("pkg/a.py".to_owned(), keep("a")),
+        ("pkg/b.py".to_owned(), keep("b")),
+        ("tests/test_a.py".to_owned(), test("a")),
+        ("tests/test_b.py".to_owned(), test("b")),
+        ("conftest.py".to_owned(), MID_CUT_CONFTEST.to_owned()),
+    ];
+    let fx = project_owned(&files);
+    gen_ok(&fx, &opts());
+    let out = run_ok(&fx, "H1", &RunOptions::default());
+    let s = series_of(&fx, &out);
+    let line = line_of(&keep("a"), "# KEEP");
+    let col = |m: &str| -> Vec<f64> {
+        column(&s, &format!("py.blocks@pkg/{m}.py:{line}"))
+            .iter()
+            .map(|v| v.unwrap_or(f64::NAN))
+            .collect()
+    };
+    let (a, b) = (col("a"), col("b"));
+    eprintln!("line a: {a:?}\nline b: {b:?}");
+    assert_eq!(a.len(), 9, "{a:?}");
+    // The second file's line rises by one at every step: the cut run never reached it.
+    assert!(b.windows(2).all(|w| w[1] - w[0] == 1.0), "{b:?}");
+    // The first file's tests ran twice in round 2 (the cut run and the repeat): a double step
+    // there, one at every other step, and the x axis counts one unit per round.
+    let steps: Vec<f64> = a.windows(2).map(|w| w[1] - w[0]).collect();
+    assert_eq!(steps.iter().filter(|d| **d == 2.0).count(), 1, "{a:?}");
+    assert!(steps.iter().all(|d| *d == 1.0 || *d == 2.0), "{a:?}");
+    assert_eq!(s.points.last().map(|p| p.x), Some(9.0));
+    let cut: Vec<&String> = s
+        .limitations
+        .iter()
+        .filter(|l| l.contains("was ended early by pytest"))
+        .collect();
+    assert_eq!(cut.len(), 1, "{:?}", s.limitations);
+    assert!(
+        cut[0].starts_with("run 2 of the tests was ended early by pytest (exit code 3, ")
+            && cut[0].contains("session ended after test_a in run 2")
+            && cut[0].contains("the tests that ran before the cut are in the round's figures"),
+        "{}",
+        cut[0]
+    );
+    let log = harness_log(&fx);
+    assert!(
+        log.contains("DLA-PYTEST summary: units=9") && log.contains("repeats=1 cut_units=0")
+            || log.contains("cut_units=0 repeats=1"),
+        "{log}"
+    );
+}
+
 #[allow(dead_code)]
 fn _unused(_: &Path) {}

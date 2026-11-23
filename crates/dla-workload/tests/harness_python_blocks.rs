@@ -643,3 +643,89 @@ fn the_file_name_rule_of_a_test_file_holds_without_a_test_directory() {
         "only the file that is no test file by its name has a column"
     );
 }
+
+/// The tick thread never walks the heap. Not a race test: the script replaces the three `gc`
+/// functions that return the program's objects with wrappers that record the calling thread's
+/// name, lets several ticks (20 ms) happen, then takes one checkpoint on the main thread. Every
+/// recorded call came from the main thread, the dump holds tick records (the thread did run),
+/// a tick record has no `py.gc_objects` and the checkpoint record has it.
+#[test]
+fn the_tick_thread_reads_no_heap_and_a_tick_record_has_no_gc_object_count() {
+    if !have_python() {
+        return;
+    }
+    let fx = fixture();
+    let out = fx.hdir.join("tick.jsonl");
+    let calls = fx.hdir.join("calls.json");
+    let script = fx.hdir.join("ticks.py");
+    fs::write(
+        &script,
+        r#"import gc, json, os, threading, time
+
+calls = []
+
+
+def wrap(name):
+    real = getattr(gc, name)
+
+    def wrapper(*args, **kwargs):
+        calls.append([name, threading.current_thread().name])
+        return real(*args, **kwargs)
+
+    setattr(gc, name, wrapper)
+
+
+for name in ("get_objects", "get_referrers", "get_referents"):
+    wrap(name)
+time.sleep(0.6)
+import sitecustomize
+
+sitecustomize.checkpoint(1, True)
+with open(os.environ["TEST_CALLS"], "w") as fh:
+    json.dump(calls, fh)
+"#,
+    )
+    .unwrap();
+    let st = Command::new("python3")
+        .arg(&script)
+        .env("PYTHONPATH", &fx.agent)
+        .env("DLA_HARNESS_OUT", &out)
+        .env("DLA_TICK_MS", "20")
+        .env("DLA_PROJECT", &fx.work)
+        .env("TEST_CALLS", &calls)
+        .stdin(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(st.success());
+    let calls: Vec<Vec<String>> =
+        serde_json::from_str(&fs::read_to_string(&calls).unwrap()).unwrap();
+    assert!(
+        !calls.is_empty(),
+        "the checkpoint reads the heap on the main thread"
+    );
+    for c in &calls {
+        assert_eq!(
+            c[1], "MainThread",
+            "{c:?} was called from another thread: {calls:?}"
+        );
+    }
+    let recs: Vec<serde_json::Value> = fs::read_to_string(&out)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let ticks: Vec<_> = recs.iter().filter(|r| r["phase"] == "tick").collect();
+    assert!(ticks.len() >= 3, "the tick thread did not run: {recs:?}");
+    for t in &ticks {
+        assert!(t["values"].get("py.gc_objects").is_none(), "{t}");
+        assert!(t["values"]["py.gc_collections"].is_number(), "{t}");
+    }
+    let cp = recs
+        .iter()
+        .find(|r| r["phase"] == "checkpoint")
+        .expect("a checkpoint record");
+    assert!(
+        cp["values"]["py.gc_objects"].as_f64().unwrap() > 0.0,
+        "{cp}"
+    );
+}
