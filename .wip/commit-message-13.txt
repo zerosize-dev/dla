@@ -1,0 +1,49 @@
+Do not confirm a start-up registration table as a leak
+
+A real unattended run on a Python library confirmed eleven findings. One
+was the documented leak. Ten were module-level tables that the library
+fills at import time through a registration function. The driver called
+that function, or its plural wrapper, with a new key per unit, the table
+grew by one per unit, the warm-up sibling was refuted, and the finding was
+confirmed. That growth is by design.
+
+The tool already reads this case as "grown only by calling the
+registration function itself", but three things kept it from applying.
+
+The trigger matched the driver's calls against the writer function only.
+The census now records the wrappers between a writer and its start-up
+callers in the site field `startup_via`, and a call of one of them is a
+call of the writer.
+
+The reading applied to entry-path harnesses only. The tables were grown by
+batch hook drivers and the report said "Trigger: not checked". Now the
+unit of any hook driver in which the finding grew counts, whether the
+driver declared the finding as a target or not. A test loop never counts,
+and an entry-path harness that grew the finding without the call still
+wins.
+
+A finding with that reading could still be confirmed. `dla ledger confirm`
+now refuses it with `registration-only` and prints the one route that
+decides it: an entry-path harness whose unit uses the public API without
+calling the registration function, then `dla alloc-test` on that harness.
+If the table grows there, the finding is confirmed as before. If it stays
+flat, that alloc-test favors non-leak, the finding is refuted with it, and
+an `N-INTENT` sibling records the reading. `dla alloc-test` no longer
+prints the confirm command for such a finding. The rule follows the census
+facts, so it holds for every runtime that has them.
+
+The census counted callers by bare name, so a same-named function of an
+unrelated module called at run time made a writer not start-up. It now
+drops a call of the name that provably reaches another module.
+
+On the real library six of the seven registration writers are start-up.
+The seventh is not, and that is right: one plugin's save handler calls it
+at run time with a key taken from its argument. Run by hand there: a hook
+driver that calls a registration function with new keys grows its table by
+one per unit, the confirm is refused, an entry-path harness that opens a
+picture leaves the table constant, the alloc-test favors non-leak, the
+finding is refuted and the sibling confirmed.
+
+Also in the texts: the Python test loop runs up to its time limit of
+1800 s, so its run is started in the background and never put under the
+shell's `timeout`. The agent of that run lost nine minutes that way.

@@ -262,8 +262,6 @@ pub struct Triggers {
     /// `(finding, harness)` of a hook driver that is not an entry-path harness whose unit calls
     /// a start-up writer of the finding or a function on the way to one, with the function.
     hook_direct: BTreeMap<(FindingId, String), String>,
-    /// Findings that a hook driver which is not an entry-path harness declared.
-    hook_declared: BTreeSet<FindingId>,
     /// The census facts on the writer sites of each entry-path target that has some: whether
     /// every one runs at start-up (`init` or `startup`). A finding without facts is absent.
     startup: BTreeMap<FindingId, bool>,
@@ -317,19 +315,9 @@ impl Triggers {
                     .collect();
                 t.find_direct_calls(run_dir, &h, &m, &via);
             }
-            if m.is_hook_driver() && !m.is_entry_path() {
-                t.hook_declared.extend(m.targets.iter().cloned());
-                t.find_hook_direct_calls(run_dir, &h, &m, view);
-            }
             manifests.insert(h, m);
         }
-        let declared: BTreeSet<FindingId> = t
-            .entry_declared
-            .keys()
-            .chain(t.hook_declared.iter())
-            .cloned()
-            .collect();
-        for id in &declared {
+        for id in t.entry_declared.keys() {
             let sites = view
                 .ledger
                 .annotation(id)
@@ -401,6 +389,7 @@ impl Triggers {
                 },
             });
         }
+        t.find_hook_direct_calls(run_dir, view);
         t
     }
 
@@ -472,30 +461,51 @@ impl Triggers {
         }
     }
 
-    /// Notes the targets of a hook driver `h` that is not an entry-path harness whose unit calls
-    /// a function of a start-up writer site of the target: the writer's own function, or a
-    /// function the census recorded on the way to it (`startup_via`).
-    fn find_hook_direct_calls(
-        &mut self,
-        run_dir: &std::path::Path,
-        h: &str,
-        m: &HarnessManifest,
-        view: &RunView,
-    ) {
-        let code = driver_code(run_dir, h);
-        for id in &m.targets {
-            let sites = view
-                .ledger
-                .annotation(id)
-                .map(|a| a.facts.writer_sites.as_slice())
-                .unwrap_or_default();
-            let names = sites
-                .iter()
-                .filter(|s| s.startup || s.init)
-                .flat_map(|s| s.function.iter().chain(s.startup_via.iter()));
-            if let Some(w) = names.into_iter().find(|w| calls(&code, w)) {
-                self.hook_direct
-                    .insert((id.clone(), h.to_owned()), w.clone());
+    /// Notes, for every finding that grew in a series of a hook driver that is not an entry-path
+    /// harness (declared as a target or not: the probes cover every container of the module),
+    /// whether its unit calls a function of a start-up writer site of the finding, or a function
+    /// the census recorded on the way to it (`startup_via`). The census facts are read for each
+    /// such finding too.
+    fn find_hook_direct_calls(&mut self, run_dir: &std::path::Path, view: &RunView) {
+        let mut seen: BTreeMap<String, String> = BTreeMap::new();
+        let runs: Vec<(String, Vec<FindingId>)> = self
+            .runs
+            .iter()
+            .filter(|r| r.hook)
+            .map(|r| {
+                let grew = r
+                    .verdicts
+                    .iter()
+                    .filter(|(_, v)| **v == Verdict::Grew)
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                (r.harness.clone(), grew)
+            })
+            .collect();
+        for (h, grew) in runs {
+            let code = seen
+                .entry(h.clone())
+                .or_insert_with(|| driver_code(run_dir, &h))
+                .clone();
+            for id in grew {
+                let sites = view
+                    .ledger
+                    .annotation(&id)
+                    .map(|a| a.facts.writer_sites.as_slice())
+                    .unwrap_or_default();
+                if sites.is_empty() {
+                    continue;
+                }
+                self.startup
+                    .entry(id.clone())
+                    .or_insert_with(|| sites.iter().all(|s| s.startup || s.init));
+                let names = sites
+                    .iter()
+                    .filter(|s| s.startup || s.init)
+                    .flat_map(|s| s.function.iter().chain(s.startup_via.iter()));
+                if let Some(w) = names.into_iter().find(|w| calls(&code, w)) {
+                    self.hook_direct.insert((id, h.clone()), w.clone());
+                }
             }
         }
     }

@@ -1079,28 +1079,6 @@ fn a_registry_grown_only_by_its_own_writer_is_not_confirmed_and_the_non_leak_way
     assert_eq!(r.row(&sibling)["state"], "confirmed");
 }
 
-/// Splits a printed command into words, keeping a double-quoted part as one word.
-fn shell_words(c: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut quoted = false;
-    for ch in c.chars() {
-        match ch {
-            '"' => quoted = !quoted,
-            ' ' if !quoted => {
-                if !cur.is_empty() {
-                    out.push(std::mem::take(&mut cur));
-                }
-            }
-            _ => cur.push(ch),
-        }
-    }
-    if !cur.is_empty() {
-        out.push(cur);
-    }
-    out
-}
-
 #[test]
 fn a_registry_an_entry_path_harness_grew_without_the_direct_call_is_confirmed_as_before() {
     let r = Run::with_project(&["--budget", "3h"], registry_project_with_a_run_time_entry);
