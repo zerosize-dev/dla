@@ -1795,3 +1795,39 @@ flat test-loop readings get only 9 second looks.
   CI waiter on main: task bq7cx398o (logs u99/ci-main-v6). When green: trigger release.yml with
   publish true, then verify with
   `gh api repos/zerosize-dev/dla/releases/tags/v0.9.0-preview.6 --jq '{tag_name, prerelease, assets: [.assets[].name]}'`.
+
+## 23:45 UTC: pillow-10 final
+
+- exit 0, 6688 s, report COMPLETE, 1h50m of 3h. Kept: /root/dla-real/pillow-10-keep (report,
+  state, coverage, ledger, transcript, run.json, bundle/F2, H162 manifest, driver and
+  captures.json, gate). Run directory deleted (16.3 GB free).
+- F2 is the first finding of the report: confirmed; growth `py.blocks@src/PIL/ImageFont.py:580`
+  299 per iteration; writers `src/_imagingft.c:888`; explanation (observed): font_render passes
+  the new reference from PyObject_GetAttrString(image,"id") to PyLong_AsSsize_t and never
+  releases it, one int per render; label UNCLASSIFIED with that note (no Python row fits).
+- The Findings line says "confirmed 0, confirmed but disputed by the verifier (reads N-OBSERVER)
+  1". The verifier had the bundle with the stack and the excerpt (frames ImageFont.py:580,
+  ImageDraw.py:508, :565, ExifTags.py:20; evidence discriminator, alloc-stack, growth,
+  unit-count) and still read it as an observer effect: "nothing in ImageFont, ImageDraw or
+  ExifTags adds to a long-lived container ... most likely test or pytest-held results, or
+  tracemalloc attribution ... I found no library-side holder". It did not read the extension.
+  The worker is right; the report prints the dispute honestly.
+- What would settle the dispute: the holder capture (R1, in wip-notes/r1-holder-capture.patch) as
+  retention evidence in the bundle: "no Python container refers to the blocks: native code holds
+  them or a reference was lost". That is R2 (brief py-holder-rust-brief.md). Also the trigger
+  text still names the loop H2, not the probe driver H162.
+- Refusals the agent met in this run: growth-not-measured (4 mentions); none of leak-favored,
+  harness-not-about, stacks-not-captured, growth-gate-failed: it followed `next`.
+- Waiting: CI on main for the version commit 28979b4 (task bq7cx398o), then release.
+
+## 23:50 UTC 2026-11-23
+
+- main = 28979b4 "Version 0.9.0-preview.6" (pushed to main and dev). CI on main was being waited for
+  (logs in scratch u99/ci-main-v6). When green: trigger release.yml (ref main, publish true),
+  verify the release tag v0.9.0-preview.6. NOT yet released at the time of this note.
+- Working tree = 28979b4 + r1-holder-capture.patch (harness/python/sitecustomize.py, README.md).
+  Checked again under 3.13 and 3.12 (check_cases ALL OK) and on the real library.
+- py-holder-rust-brief.md updated with the lesson of run 10 (verifier disputed the native leak as
+  N-OBSERVER; bundle must carry the holder record and a harness list; verifier text; trigger names
+  the probe driver). Builder for it (Sonnet) is the next step; scratch dir u93.
+- Pillow run 10 (tree b91cbe6): leak at the font line CONFIRMED with mechanism; verifier disputes.

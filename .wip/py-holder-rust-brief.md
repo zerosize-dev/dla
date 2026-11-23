@@ -107,6 +107,44 @@ fixtures.
    `corrected`; no project name). Do NOT touch `skills/detect-leak-anywhere/SKILL.md` (size
    limit). Pins in `crates/dla-cli/tests/skill_text.rs`.
 
+## Added after a later real run (read this first; it sets the order of work)
+
+A later unattended run confirmed the leak in the C extension with the right explanation, and the
+independent verifier still disagreed. Its bundle held the allocation stack and the excerpt of the
+growing line (a call into a function of an extension module), and it answered N-OBSERVER: "nothing
+in the three Python modules adds to a long-lived container ... the retained blocks are most likely
+test or pytest-held results, or tracemalloc attribution ... there is no entry-path run ... I found
+no library-side holder". Two facts were missing from what it was given: that no Python object
+holds the blocks of the line (this capture measures exactly that), and that the growth was
+reproduced by a driver made for the finding, one block per unit, not only by the loop over the
+tests.
+
+Order of work: P1 first (items 1, 2 and 6 and the bundle part of 7), then P2 (item 3), then P3
+(items 4, 5, 7 trigger part). If you run short of budget, finish and verify P1 and say what is
+not done.
+
+6. The bundle and the verifier (P1).
+   - `dla bundle` already takes the `retention-path` records that name the finding
+     (`naming_records` in `crates/dla-cli/src/bundle_cmd.rs`). Check that the record of item 2
+     arrives in the bundle with its chains readable (type names and links are not values; the
+     holder key of a module global is an identifier), and that the native note survives the scrub.
+   - `index.json` of a bundle gets a `harnesses` list for the harnesses behind the bundled
+     evidence: the id, what it is in plain words ("the project's own tests in a loop", "a driver
+     made for this finding", "a driver for other targets", "a command of the project"), the
+     units per round, and the key modes. No finding id, no site.
+   - The verifier's instructions (`agents/verifier.md`; read how it is told to answer): add what
+     the new record means. Blocks of a line that no Python container refers to are held from
+     native code or lost there: the answer is then in the extension function the line calls, and
+     "held by the test runner" or N-OBSERVER does not explain them. A chain that ends at a module
+     global or a class attribute names the holder. Keep the text short and in the style of the
+     file. Pin it in `crates/dla-cli/tests/skill_text.rs` (or the test file that pins agent
+     texts).
+7. The trigger (P3) and the bundle's harness list (P1, above). When a test loop and a driver
+   made for the finding both grew it, the trigger of the report names the driver and its
+   VARIES text, not the loop (`crates/dla-core/src/trigger.rs`; today the report says
+   "reproduced through the public API in <loop> (the project's own tests ...)" although a probe
+   driver reproduced it). One test.
+
 ## Tests (each seen failing under a mutation you apply and revert)
 
 - `crates/dla-workload/tests/harness_capture_python.rs` (read its helpers): a run with
