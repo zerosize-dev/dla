@@ -350,6 +350,15 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
             ));
             continue;
         }
+        // An alloc-test that favors leak decided it: it is confirmed (or refuted by a newer
+        // alloc-test), never closed. The same commands `ledger resolve` prints in its refusal.
+        if let Some(route) = dla_core::grown::route_for(&view, &f.id) {
+            left.push((
+                f.id.to_string(),
+                format!("{}. Fix: {}", route.refusal_message(&f.id), route.fix()),
+            ));
+            continue;
+        }
         // Pending in an open queue: it waits for a measurement.
         if q.is_some_and(|q| q.open() && q.pending.contains(&f.id)) {
             let cmd = q.map(|q| q.command_for(&f.id)).unwrap_or_default();
@@ -428,6 +437,11 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
                     reason,
                 });
             }
+            // A finding an alloc-test decided for leak is left with the commands that confirm it.
+            Err(e) if e.refusal.code == dla_core::error::codes::LEAK_FAVORED => left.push((
+                f.id.to_string(),
+                format!("{} Fix: {}", e.refusal.message, e.refusal.fix),
+            )),
             Err(e) => left.push((f.id.to_string(), e.refusal.message.clone())),
         }
     }

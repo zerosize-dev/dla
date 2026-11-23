@@ -24,7 +24,7 @@ use dla_core::{
     runtime::Runtime,
     series::{ColumnKind, ColumnScope, KeyMode, SeriesFile, SeriesSourceKind, Unit},
     toolctx::{EvidenceSpec, ToolCtx},
-    trend::{ColumnTrend, GrowthSummary, TREND_SCHEMA_VERSION, TrendReport},
+    trend::{ColumnTrend, TREND_SCHEMA_VERSION, TrendReport},
 };
 use dla_stats::{GateThresholds, GateVerdict, analyze};
 use dla_workload::harness::run::{RunOptions, run_points};
@@ -1718,52 +1718,6 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     Ok(Value::Object(out))
 }
 
-/// The growth evidence a `confirm` of `root` should cite: the newest passing one tied to it.
-fn growth_evidence(ledger: &Ledger, root: &Finding) -> Option<EvidenceId> {
-    let growth = || {
-        ledger.evidence().filter(|e| {
-            matches!(
-                e.kind,
-                EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries
-            )
-        })
-    };
-    // The newest one `ledger confirm` accepts: a passing column tied to the finding by the
-    // predicate the ledger uses (`tied_to_owner`).
-    let tied = growth()
-        .filter_map(|e| {
-            let g = GrowthSummary::from_result(&e.result)?;
-            (g.passed_gate()
-                && g.passed.iter().any(|c| {
-                    c.tied_to_owner(&root.id, root.site.as_deref(), root.owner.as_deref())
-                }))
-            .then(|| e.evidence_id.clone())
-        })
-        .last();
-    // Else the newest passing one, as before (its first column stands in for the tie).
-    tied.or_else(|| {
-        growth()
-            .filter_map(|e| {
-                let g = GrowthSummary::from_result(&e.result)?;
-                (g.passed_gate()
-                    && g.best_column_for(&root.id, root.site.as_deref(), root.owner.as_deref())
-                        .is_some())
-                .then(|| e.evidence_id.clone())
-            })
-            .last()
-    })
-}
-
-/// The newest `workload` evidence of harness `harness`.
-fn workload_evidence(ledger: &Ledger, harness: &str) -> Option<EvidenceId> {
-    ledger
-        .evidence()
-        .filter(|e| e.kind == EvidenceKind::Workload)
-        .filter(|e| e.result.get("harness").and_then(Value::as_str) == Some(harness))
-        .last()
-        .map(|e| e.evidence_id.clone())
-}
-
 /// When a voting plateau was held back only because its window was too short to have shown
 /// another rise (see [`judge::combine`]), the doubled `--extra` of the printed command says how
 /// many extra points would reach the expectation.
@@ -1910,7 +1864,7 @@ fn next_commands(
             }
             for s in matching.iter().filter(|s| !s.state.is_dispositioned()) {
                 if s.state == FindingState::Candidate
-                    && let Some(w) = workload_evidence(ledger, harness)
+                    && let Some(w) = dla_core::grown::workload_evidence(ledger, harness)
                 {
                     next.push(format!("dla ledger test {} --evidence {w}", s.id));
                 }
@@ -1927,40 +1881,9 @@ fn next_commands(
                 "dla alloc-test <H> --finding {root}   (on that harness; if the table grows there: dla ledger confirm {root}; if it stays flat the alloc-test favors non-leak: dla ledger refute {root} --evidence <that alloc-test>)"
             ));
         }
-        Favors::Leak => {
-            for s in siblings.iter().filter(|s| !s.state.is_dispositioned()) {
-                next.push(format!("dla ledger refute {} --evidence {evidence}", s.id));
-            }
-            if siblings.is_empty() {
-                next.push(format!(
-                    "dla ledger add --sibling-of {root} --origin hypothesis --hypothesis N-WARM --refute-if \"growth continues over the extra cycles\" --evidence {evidence}   (a leak needs a refuted non-leak sibling)"
-                ));
-                // The sibling that add creates is refuted by this same result; without that
-                // step the confirm below is refused.
-                next.push(format!(
-                    "dla ledger refute {root}.n1 --evidence {evidence}   (the sibling the add creates: use the id it prints)"
-                ));
-            }
-            // A root that is open, or closed in a state the ledger lets go to `under_test`
-            // (`suspected_static_only`, `unresolved`), still gets its test and confirm.
-            let can_test = dla_core::machine::is_allowed(root_f.state, FindingState::UnderTest);
-            if !root_f.state.is_dispositioned() || can_test {
-                let growth = growth_evidence(ledger, root_f).map_or_else(
-                    || "<growth evidence from dla trend>".to_owned(),
-                    |e| e.to_string(),
-                );
-                if can_test && let Some(w) = workload_evidence(ledger, harness) {
-                    next.push(format!("dla ledger test {root} --evidence {w}"));
-                }
-                if root_f.holder.is_none() {
-                    next.push(format!("dla ledger annotate {root} --holder <holder>"));
-                }
-                if root_f.site.is_none() {
-                    next.push(format!("dla ledger annotate {root} --site <file:line>"));
-                }
-                next.push(format!("dla ledger confirm {root} --evidence {growth}"));
-            }
-        }
+        Favors::Leak => next.extend(dla_core::grown::confirm_commands(
+            ledger, root_f, harness, evidence,
+        )),
         Favors::Inconclusive => next.push(format!(
             "dla alloc-test {harness} --finding {} --extra {}",
             f.id,
@@ -1989,6 +1912,11 @@ fn next_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn growth_evidence(ledger: &Ledger, root: &Finding) -> Option<EvidenceId> {
+        let all: Vec<&dla_core::evidence::EvidenceRecord> = ledger.evidence().collect();
+        dla_core::grown::growth_evidence(&all, root, &[])
+    }
     use dla_core::series::{
         Axis, Column, ColumnScope, Point, SeriesRegion, SeriesSource, SeriesSourceKind,
     };
@@ -2015,7 +1943,9 @@ mod tests {
                 name: "t".into(),
                 version: "1".into(),
             },
-            authority: Authority::Static,
+            // What `dla trend` writes: the confirm rule accepts no growth record with static
+            // authority, so the chooser does not name one.
+            authority: Authority::Test,
             kind: EvidenceKind::GrowthSeries,
             result,
             raw: None,
@@ -2072,7 +2002,13 @@ mod tests {
                 name: "t".into(),
                 version: "1".into(),
             },
-            authority: Authority::Static,
+            // A growth record is what `dla trend` writes (authority test); the census and the
+            // workload records are static.
+            authority: if kind == EvidenceKind::GrowthSeries {
+                Authority::Test
+            } else {
+                Authority::Static
+            },
             kind,
             result,
             raw: None,

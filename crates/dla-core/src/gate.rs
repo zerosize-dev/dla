@@ -1403,10 +1403,13 @@ fn confirm(view: &RunView, out: &mut Out) {
                 "finding",
                 f.id.to_string(),
                 format!("finding {} is under test and has no result", f.id),
-                format!(
-                    "dla ledger confirm {}   or   dla ledger refute {}   (with --evidence)",
-                    f.id, f.id
-                ),
+                match crate::grown::route_for(view, &f.id) {
+                    Some(route) => route.fix(),
+                    None => format!(
+                        "dla ledger confirm {}   or   dla ledger refute {}   (with --evidence)",
+                        f.id, f.id
+                    ),
+                },
             );
         }
     }
@@ -1426,9 +1429,13 @@ fn confirm(view: &RunView, out: &mut Out) {
                             t.id
                         ),
                         // Growth the run measured is decided by an alloc-test, not closed.
-                        match grown.iter().find(|g| g.finding == f.id) {
-                            Some(g) => g.commands().join("   then   "),
-                            None => format!(
+                        match (
+                            crate::grown::route_for(view, &f.id),
+                            grown.iter().find(|g| g.finding == f.id),
+                        ) {
+                            (Some(route), _) => route.fix(),
+                            (None, Some(g)) => g.commands().join("   then   "),
+                            (None, None) => format!(
                                 "dla ledger test {}   or   dla ledger resolve {} --as unresolved --reason not_exercised --remedy \"<text>\"",
                                 f.id, f.id
                             ),

@@ -276,7 +276,24 @@ fn confirm_leak_growth_gate_table() {
             Some(code) => {
                 let r = refusal(got);
                 assert_eq!(r.code, code, "{name}");
-                assert!(r.fix.starts_with("dla trend "), "{name}: {}", r.fix);
+                if ev.contains(&E_STATIC) || ev.contains(&E_DISC_NONLEAK) {
+                    // A cited record that is not growth evidence: the fix names growth
+                    // evidence of the finding, and the command it gives is accepted (a record
+                    // with static authority passes its gate and would be refused again).
+                    let prefix = format!("dla ledger confirm {f} --evidence E");
+                    let named: u32 = r
+                        .fix
+                        .strip_prefix(&prefix)
+                        .unwrap_or_else(|| panic!("{name}: {}", r.fix))
+                        .parse()
+                        .unwrap_or_else(|_| panic!("{name}: {}", r.fix));
+                    assert_ne!(named, E_GROWTH_STATIC_AUTH, "{name}: {}", r.fix);
+                    let (mut again, g, _) = ready();
+                    mv(&mut again, &g, S::Confirmed, &[named])
+                        .unwrap_or_else(|e| panic!("{name}: the fix {} is refused: {e}", r.fix));
+                } else {
+                    assert!(r.fix.starts_with("dla trend "), "{name}: {}", r.fix);
+                }
                 if ev.contains(&E_GROWTH_FAIL) {
                     assert!(r.fix.starts_with("dla trend S1 "), "{name}: {}", r.fix);
                 }

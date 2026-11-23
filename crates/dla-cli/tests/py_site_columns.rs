@@ -953,10 +953,16 @@ fn the_final_gate_lists_the_untied_site_columns_largest_slope_first() {
 
 // ------------------------------------------------------------------------- the stacks at the line
 
-/// The finding at the growing line, its refuted N-WARM sibling and an alloc-test that favors
-/// leak, as the route of the real run did it: returns the finding, the trend evidence and the
-/// alloc-test result. The finding is not confirmed yet.
-fn leak_at_the_line(r: &Run) -> (String, String, Value) {
+/// The finding at the growing line, its N-WARM sibling (not refuted) and an alloc-test that
+/// favors leak, none of the ledger commands of `next` run: returns the finding, the trend evidence
+/// and the alloc-test result. With `test` the finding went under test before the alloc-test.
+fn leak_favored_unrefuted(r: &Run, test: bool) -> (String, String, Value) {
+    leak_favored(r, test, true)
+}
+
+/// [`leak_favored_unrefuted`] with the alloc-test on a probe driver made for the finding
+/// (`for_it`) or on H1, the loop of the series the line came from, which targets nothing.
+fn leak_favored(r: &Run, test: bool, for_it: bool) -> (String, String, Value) {
     let t = r.trend();
     let e = evidence_of(&Run::next_of(&t, ADD_PREFIX).unwrap());
     let added = ok(
@@ -994,16 +1000,33 @@ fn leak_at_the_line(r: &Run) -> (String, String, Value) {
             &e,
         ],
     );
-    let workload = r
-        .ledger()
-        .iter()
-        .filter(|v| v["kind"] == "workload")
-        .filter_map(|v| v["evidence_id"].as_str().map(str::to_owned))
-        .next_back()
-        .unwrap();
-    ok(&r.project, &["ledger", "test", &f, "--evidence", &workload]);
-    let a = ok(&r.project, &["alloc-test", "H1", "--finding", &f]);
+    if test {
+        let workload = r
+            .ledger()
+            .iter()
+            .filter(|v| v["kind"] == "workload")
+            .filter_map(|v| v["evidence_id"].as_str().map(str::to_owned))
+            .next_back()
+            .unwrap();
+        ok(&r.project, &["ledger", "test", &f, "--evidence", &workload]);
+    }
+    let h = if for_it {
+        let h = second_driver(r, &f, STORE_SETUP, "    _state[\"store\"].pin(i)");
+        ok(&r.project, &["harness", "run", &h, "--mode", "fresh"]);
+        h
+    } else {
+        "H1".to_owned()
+    };
+    let a = ok(&r.project, &["alloc-test", &h, "--finding", &f]);
     assert_eq!(a["favors"], "leak", "{a}");
+    (f, e, a)
+}
+
+/// The finding at the growing line, its refuted N-WARM sibling and an alloc-test that favors
+/// leak, as the route of the real run did it: returns the finding, the trend evidence and the
+/// alloc-test result. The finding is not confirmed yet.
+fn leak_at_the_line(r: &Run) -> (String, String, Value) {
+    let (f, e, a) = leak_favored(r, true, false);
     ok(
         &r.project,
         &[
@@ -1579,4 +1602,382 @@ fn a_probe_driver_whose_unit_keeps_the_object_is_a_leak_by_the_site_column() {
     let (_r, _h, a) = probe_driver_alloc_test("    _state[\"store\"].pin(i)");
     assert_eq!(a["favors"], "leak", "{a}");
     assert_eq!(a["decided_by"], COLUMN, "{a}");
+}
+
+/// The ids of the growth evidence of the ledger (growth-series and unit-count-series records).
+fn growth_ids(r: &Run) -> Vec<String> {
+    r.ledger()
+        .iter()
+        .filter(|v| v["kind"] == "growth-series" || v["kind"] == "unit-count-series")
+        .filter_map(|v| v["evidence_id"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// The commands of a fix joined by "then", each split into its words.
+fn steps(fix: &str) -> Vec<&str> {
+    fix.split("   then   ").collect()
+}
+
+fn run_step(r: &Run, step: &str) -> Value {
+    let words: Vec<&str> = step.split_whitespace().collect();
+    assert_eq!(&words[..1], ["dla"], "{step}");
+    ok(&r.project, &words[1..])
+}
+
+fn close_unresolved(r: &Run, f: &str, reason: &str) -> Out {
+    resolve_unmeasured(r, f, reason)
+}
+
+/// An alloc-test that favored leak decides the finding: it is not closed unresolved, whatever the
+/// reason, before the commands of its `next` ran; `close-rest` leaves it; the gate and the status
+/// print the route; the route as printed confirms the finding.
+#[test]
+fn a_finding_whose_alloc_test_favored_leak_cannot_be_closed_and_the_route_confirms_it() {
+    if !have_python() {
+        return;
+    }
+    let r = prepared();
+    let (f, _e, a) = leak_favored_unrefuted(&r, true);
+    let d = a["evidence"].as_str().unwrap().to_owned();
+    let h = r
+        .ledger()
+        .iter()
+        .find(|v| v["evidence_id"] == d.as_str())
+        .unwrap()["result"]["harness"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(
+        h, "H1",
+        "the alloc-test ran on a driver made for the finding"
+    );
+    let sibling = format!("{f}.n1");
+    let refused = close_unresolved(&r, &f, "inconclusive");
+    assert_ne!(refused.code, 0, "{}", refused.text);
+    let err = &refused.json["error"];
+    assert_eq!(err["code"], "leak-favored", "{}", refused.text);
+    assert_eq!(
+        err["message"],
+        format!(
+            "{f} cannot be closed unresolved: the alloc-test {d} on {h} favors leak (decided by {COLUMN}) and nothing measured since says otherwise."
+        ),
+        "{}",
+        refused.text
+    );
+    let fix = err["fix"].as_str().unwrap().to_owned();
+    let route = steps(&fix);
+    assert_eq!(route.len(), 2, "{fix}");
+    assert_eq!(
+        route[0],
+        format!("dla ledger refute {sibling} --evidence {d}")
+    );
+    let prefix = format!("dla ledger confirm {f} --evidence ");
+    let growth = route[1]
+        .strip_prefix(&prefix)
+        .unwrap_or_else(|| panic!("{fix}"));
+    assert!(growth_ids(&r).iter().any(|g| g == growth), "{fix}");
+    // Every reason is held to it, the sibling too, and so is suspected_static_only.
+    for reason in ["not_exercised", "time_budget", "env_unavailable"] {
+        let o = close_unresolved(&r, &f, reason);
+        assert_eq!(
+            o.json["error"]["code"], "leak-favored",
+            "{reason}: {}",
+            o.text
+        );
+        assert_eq!(o.json["error"]["fix"], fix.as_str(), "{reason}");
+    }
+    let o = close_unresolved(&r, &sibling, "inconclusive");
+    assert_eq!(o.json["error"]["code"], "leak-favored", "{}", o.text);
+    assert_eq!(o.json["error"]["fix"], fix.as_str(), "{}", o.text);
+    // close-rest leaves the sibling (the finding is under test) with the same commands.
+    let out = ok(&r.project, &["ledger", "close-rest"]);
+    let left = out["left"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["id"] == sibling.as_str())
+        .unwrap_or_else(|| panic!("{out}"));
+    assert!(left["why"].as_str().unwrap().contains(&fix), "{left}");
+    assert_eq!(out["closed"], 0, "{out}");
+    // The final gate and the status print the route as the fix of the finding.
+    let missing = r.final_gate();
+    let items: Vec<&Value> = missing
+        .iter()
+        .filter(|m| m["id"] == f.as_str() && m["kind"] == "finding")
+        .collect();
+    assert!(!items.is_empty(), "{missing:?}");
+    for item in items {
+        assert_eq!(item["fix"], fix.as_str(), "{item}");
+    }
+    let status = ok(&r.project, &["run", "status"]);
+    let listed = status["blocking"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["id"] == f.as_str() && b["kind"] == "finding")
+        .unwrap_or_else(|| panic!("{status}"));
+    assert_eq!(listed["fix"], fix.as_str(), "{listed}");
+    // The commands as printed, in order, confirm it.
+    let mut last = Value::Null;
+    for step in route {
+        last = run_step(&r, step);
+    }
+    assert_eq!(last["to"], "confirmed", "{last}");
+}
+
+/// The same for a finding that is still a candidate: close-rest leaves it and its sibling, and the
+/// route starts with the test.
+#[test]
+fn close_rest_leaves_a_candidate_whose_alloc_test_favored_leak_with_the_route() {
+    if !have_python() {
+        return;
+    }
+    let r = prepared();
+    let (f, _e, a) = leak_favored_unrefuted(&r, false);
+    let d = a["evidence"].as_str().unwrap().to_owned();
+    let out = ok(&r.project, &["ledger", "close-rest"]);
+    assert_eq!(out["closed"], 0, "{out}");
+    let why = out["left"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["id"] == f.as_str())
+        .unwrap_or_else(|| panic!("{out}"))["why"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let o = close_unresolved(&r, &f, "inconclusive");
+    let fix = o.json["error"]["fix"].as_str().unwrap().to_owned();
+    assert!(why.contains(&fix), "{why}");
+    // The final gate's items for the candidate carry the same route.
+    let missing = r.final_gate();
+    let items: Vec<&Value> = missing
+        .iter()
+        .filter(|m| m["id"] == f.as_str() && m["kind"] == "finding")
+        .collect();
+    assert!(!items.is_empty(), "{missing:?}");
+    for item in items {
+        assert_eq!(item["fix"], fix.as_str(), "{item}");
+    }
+    let route = steps(&fix);
+    assert_eq!(route.len(), 3, "{fix}");
+    assert_eq!(route[0], format!("dla ledger refute {f}.n1 --evidence {d}"));
+    assert!(
+        route[1].starts_with(&format!("dla ledger test {f} --evidence E")),
+        "{fix}"
+    );
+    for step in route {
+        run_step(&r, step);
+    }
+    let again = dla(
+        &r.project,
+        &[
+            "ledger",
+            "resolve",
+            &f,
+            "--as",
+            "unresolved",
+            "--reason",
+            "inconclusive",
+            "--remedy",
+            "x",
+        ],
+    );
+    assert_ne!(
+        again.code, 0,
+        "a confirmed finding is not closed: {}",
+        again.text
+    );
+    assert_ne!(
+        again.json["error"]["code"], "leak-favored",
+        "{}",
+        again.text
+    );
+}
+
+/// A leak the census listed (the table of `shop/cache.py`, F1), measured by a driver of its own,
+/// whose alloc-test favors leak, and whose own record cites no growth evidence: returns the finding,
+/// the sibling's id and the discriminator.
+fn table_leak_favored(r: &Run) -> (String, String, String) {
+    let h = second_driver(r, "F1", CACHE_HOOKS.0, CACHE_HOOKS.1);
+    let run = ok(&r.project, &["harness", "run", &h, "--mode", "fresh"]);
+    let series = run["summary"]["series"][0].as_str().unwrap().to_owned();
+    let t = ok(&r.project, &["trend", &series]);
+    let e = t["evidence"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &r.project,
+        &[
+            "ledger",
+            "add",
+            "--sibling-of",
+            "F1",
+            "--origin",
+            "hypothesis",
+            "--hypothesis",
+            "N-WARM",
+            "--refute-if",
+            "growth continues over the extra cycles",
+            "--evidence",
+            &e,
+        ],
+    );
+    let workload = r
+        .ledger()
+        .iter()
+        .filter(|v| v["kind"] == "workload")
+        .filter_map(|v| v["evidence_id"].as_str().map(str::to_owned))
+        .next_back()
+        .unwrap();
+    ok(
+        &r.project,
+        &["ledger", "test", "F1", "--evidence", &workload],
+    );
+    let a = ok(&r.project, &["alloc-test", &h, "--finding", "F1"]);
+    assert_eq!(a["favors"], "leak", "{a}");
+    (
+        "F1".to_owned(),
+        "F1.n1".to_owned(),
+        a["evidence"].as_str().unwrap().to_owned(),
+    )
+}
+
+/// Citing the discriminator as the growth evidence names the growth evidence and the complete
+/// confirm command; that command asks for the sibling's refutation with the exact command, and
+/// the confirm then succeeds.
+#[test]
+fn the_two_confirm_refusals_name_real_ids() {
+    if !have_python() {
+        return;
+    }
+    let r = prepare(STORE_SWITCH, true);
+    let (f, sibling, d) = table_leak_favored(&r);
+    let o = dla(&r.project, &["ledger", "confirm", &f, "--evidence", &d]);
+    let err = &o.json["error"];
+    assert_eq!(err["code"], "growth-gate-failed", "{}", o.text);
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("{d} is a discriminator, not growth evidence")),
+        "{}",
+        o.text
+    );
+    let fix = err["fix"].as_str().unwrap().to_owned();
+    let growth = fix
+        .strip_prefix(&format!("dla ledger confirm {f} --evidence "))
+        .unwrap_or_else(|| panic!("{fix}"));
+    assert!(growth_ids(&r).iter().any(|g| g == growth), "{fix}");
+    let o = dla(
+        &r.project,
+        &fix.split_whitespace().skip(1).collect::<Vec<_>>(),
+    );
+    let err = &o.json["error"];
+    assert_eq!(err["code"], "nonleak-refutation-required", "{}", o.text);
+    assert_eq!(
+        err["fix"],
+        format!("dla ledger refute {sibling} --evidence {d}   then   {fix}"),
+        "{}",
+        o.text
+    );
+    let mut last = Value::Null;
+    for step in steps(err["fix"].as_str().unwrap()) {
+        last = run_step(&r, step);
+    }
+    assert_eq!(last["to"], "confirmed", "{last}");
+}
+
+/// A newer alloc-test that favors non-leak, or says inconclusive, lifts the rule.
+#[test]
+fn a_newer_alloc_test_that_does_not_favor_leak_lifts_the_rule() {
+    if !have_python() {
+        return;
+    }
+    for (unit, favors) in [
+        ("    _state[\"store\"].pin(i, False)", "non-leak"),
+        ("    pass", "inconclusive"),
+    ] {
+        let r = prepare(STORE_SWITCH, true);
+        let (f, _e, _a) = leak_favored_unrefuted(&r, true);
+        let blocked = close_unresolved(&r, &f, "inconclusive");
+        assert_eq!(
+            blocked.json["error"]["code"], "leak-favored",
+            "{}",
+            blocked.text
+        );
+        let h = second_driver(&r, &f, STORE_SETUP, unit);
+        let b = ok(&r.project, &["alloc-test", &h, "--finding", &f]);
+        assert_eq!(b["favors"], favors, "{b}");
+        let closed = close_unresolved(&r, &f, "inconclusive");
+        assert_eq!(closed.code, 0, "{favors}: {}", closed.text);
+    }
+}
+
+/// A candidate whose probe driver grew (the trend gives it the verdict `grew`) and whose alloc-test
+/// favored leak is left with the route, not with the older "its column grew" commands.
+#[test]
+fn close_rest_names_the_route_for_a_candidate_a_trend_gave_the_verdict_grew() {
+    if !have_python() {
+        return;
+    }
+    let r = prepare(STORE_SWITCH, true);
+    let (f, _e, a) = leak_favored_unrefuted(&r, false);
+    let h = second_driver(&r, &f, STORE_SETUP, "    _state[\"store\"].pin(i)");
+    let run = ok(&r.project, &["harness", "run", &h, "--mode", "fresh"]);
+    let series = run["summary"]["series"][0].as_str().unwrap().to_owned();
+    let t = ok(&r.project, &["trend", &series]);
+    assert!(
+        t["targets"].as_array().is_some_and(|ts| ts
+            .iter()
+            .any(|v| v["finding"] == f.as_str() && v["verdict"] == "grew")),
+        "{t}"
+    );
+    let d = a["evidence"].as_str().unwrap();
+    let out = ok(&r.project, &["ledger", "close-rest"]);
+    let why = out["left"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["id"] == f.as_str())
+        .unwrap_or_else(|| panic!("{out}"))["why"]
+        .as_str()
+        .unwrap();
+    assert!(
+        why.contains(&format!("dla ledger refute {f}.n1 --evidence {d}")),
+        "{why}"
+    );
+    assert_eq!(out["closed"], 0, "{out}");
+}
+
+/// An alloc-test on the loop the line came from (H1 targets nothing) favors leak: the growth is
+/// the whole workload's, not isolated, so the finding can still be closed unresolved, `close-rest`
+/// leaves no route behind, and the gate's fix is not the route.
+#[test]
+fn an_alloc_test_of_a_loop_that_targets_nothing_does_not_hold_the_close() {
+    if !have_python() {
+        return;
+    }
+    let r = prepared();
+    let (f, _e, a) = leak_favored(&r, true, false);
+    assert_eq!(a["favors"], "leak", "{a}");
+    let d = a["evidence"].as_str().unwrap();
+    for m in r.final_gate().iter().filter(|m| m["id"] == f.as_str()) {
+        assert!(
+            !m["fix"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("--evidence {d}")),
+            "{m}"
+        );
+    }
+    let out = ok(&r.project, &["ledger", "close-rest"]);
+    assert!(!out.to_string().contains("leak-favored"), "{out}");
+    let closed = resolve_unmeasured(&r, &f, "inconclusive");
+    assert_eq!(closed.code, 0, "{}", closed.text);
 }

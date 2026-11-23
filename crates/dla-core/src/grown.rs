@@ -11,10 +11,10 @@
 //! Whole-process columns tie to no finding and stay with the residual rows.
 
 use crate::{
-    evidence::EvidenceKind,
+    evidence::{EvidenceKind, EvidenceRecord},
     finding::{FindingState, Polarity},
     gate::is_whole_process,
-    ids::FindingId,
+    ids::{EvidenceId, FindingId},
     series::Unit,
     trend::Verdict,
     view::{BlockingItem, BlockingKind, RunView},
@@ -471,6 +471,288 @@ fn same_leak_as(view: &RunView, f: &FindingId, harness: &str) -> Option<(Finding
                 .ok()
                 .map(|by| (g, by.describe()))
         })
+}
+
+/// The series of harness `harness` that the evidence of the run names: the `series` list of each
+/// of its `workload` records (what `dla harness run` wrote), then `extra`.
+pub(crate) fn series_of_harness(
+    records: &[&EvidenceRecord],
+    harness: &str,
+    extra: Option<&str>,
+) -> Vec<String> {
+    let mut out: Vec<String> = records
+        .iter()
+        .filter(|e| e.kind == EvidenceKind::Workload)
+        .filter(|e| e.result.get("harness").and_then(|h| h.as_str()) == Some(harness))
+        .flat_map(|e| {
+            e.result
+                .get("series")
+                .and_then(|s| s.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|s| s.as_str().map(str::to_owned))
+        })
+        .collect();
+    out.extend(extra.map(str::to_owned));
+    out
+}
+
+/// The growth evidence a `confirm` of `root` should cite: the newest passing one tied to it
+/// (`tied_to_owner`, the predicate the ledger uses), else the newest passing one a column of
+/// which is the best for it. Among equals the ones of a series in `prefer` come first: the
+/// series of the harness that was measured last.
+pub fn growth_evidence(
+    records: &[&EvidenceRecord],
+    root: &crate::finding::Finding,
+    prefer: &[String],
+) -> Option<EvidenceId> {
+    // Only what the confirm rule accepts: a growth record obtained by a test, a live observation
+    // or a dump whose gate passed (`machine::is_passing_growth`). A record with static authority
+    // can pass its gate and still be refused by `dla ledger confirm`.
+    let growth = || {
+        records
+            .iter()
+            .copied()
+            .filter(|e| crate::machine::is_passing_growth(e))
+    };
+    let newest = |hits: Vec<&EvidenceRecord>| -> Option<EvidenceId> {
+        hits.iter()
+            .rev()
+            .find(|e| {
+                e.result
+                    .get("series")
+                    .and_then(|s| s.as_str())
+                    .is_some_and(|s| prefer.iter().any(|p| p == s))
+            })
+            .or(hits.last())
+            .map(|e| e.evidence_id.clone())
+    };
+    let tied = newest(
+        growth()
+            .filter(|e| {
+                crate::trend::GrowthSummary::from_result(&e.result).is_some_and(|g| {
+                    g.passed_gate()
+                        && g.passed.iter().any(|c| {
+                            c.tied_to_owner(&root.id, root.site.as_deref(), root.owner.as_deref())
+                        })
+                })
+            })
+            .collect(),
+    );
+    // Else the newest passing one, as before (its first column stands in for the tie).
+    tied.or_else(|| {
+        newest(
+            growth()
+                .filter(|e| {
+                    crate::trend::GrowthSummary::from_result(&e.result).is_some_and(|g| {
+                        g.passed_gate()
+                            && g.best_column_for(
+                                &root.id,
+                                root.site.as_deref(),
+                                root.owner.as_deref(),
+                            )
+                            .is_some()
+                    })
+                })
+                .collect(),
+        )
+    })
+}
+
+/// The newest `workload` evidence of harness `harness`.
+pub fn workload_evidence(ledger: &crate::ledger::Ledger, harness: &str) -> Option<EvidenceId> {
+    ledger
+        .evidence()
+        .filter(|e| e.kind == EvidenceKind::Workload)
+        .filter(|e| e.result.get("harness").and_then(|h| h.as_str()) == Some(harness))
+        .last()
+        .map(|e| e.evidence_id.clone())
+}
+
+/// The alloc-test discriminators (`plateau+purge`) bound to a finding of `family`, oldest first,
+/// each with what it favors.
+pub fn bound_alloc_tests<'a>(
+    records: &[&'a EvidenceRecord],
+    family: &[FindingId],
+) -> Vec<(&'a EvidenceRecord, crate::discriminator::Favors)> {
+    records
+        .iter()
+        .copied()
+        .filter(|e| {
+            e.kind == EvidenceKind::Discriminator
+                && e.result.get("test").and_then(|t| t.as_str()) == Some("plateau+purge")
+                && crate::discriminator::finding_of(e).is_some_and(|f| family.contains(&f))
+        })
+        .filter_map(|e| crate::discriminator::favors_of(e).map(|f| (e, f)))
+        .collect()
+}
+
+/// The ledger commands that decide a leak-side root `root_f` after an alloc-test of `harness`
+/// whose discriminator `evidence` favors leak: the refute of each open non-leak sibling (or the
+/// add of the sibling and its refute, when there is none), the test when the root is still a
+/// candidate, the annotations it lacks and the confirm with the growth evidence the ledger
+/// accepts. `dla alloc-test` prints these as `next`; the gate, `dla run status` and the refusal
+/// of a close print them too.
+pub fn confirm_commands(
+    ledger: &crate::ledger::Ledger,
+    root_f: &crate::finding::Finding,
+    harness: &str,
+    evidence: &EvidenceId,
+) -> Vec<String> {
+    let root = &root_f.id;
+    let mut next: Vec<String> = Vec::new();
+    let siblings: Vec<&crate::finding::Finding> = ledger
+        .findings()
+        .filter(|s| s.parent.as_ref() == Some(root) && s.polarity() == Polarity::NonLeak)
+        .collect();
+    for s in siblings.iter().filter(|s| !s.state.is_dispositioned()) {
+        next.push(format!("dla ledger refute {} --evidence {evidence}", s.id));
+    }
+    if siblings.is_empty() {
+        next.push(format!(
+            "dla ledger add --sibling-of {root} --origin hypothesis --hypothesis N-WARM --refute-if \"growth continues over the extra cycles\" --evidence {evidence}   (a leak needs a refuted non-leak sibling)"
+        ));
+        // The sibling that add creates is refuted by this same result; without that step the
+        // confirm below is refused.
+        next.push(format!(
+            "dla ledger refute {root}.n1 --evidence {evidence}   (the sibling the add creates: use the id it prints)"
+        ));
+    }
+    // A root that is open, or closed in a state the ledger lets go to `under_test`
+    // (`suspected_static_only`, `unresolved`), still gets its test and confirm.
+    let can_test = crate::machine::is_allowed(root_f.state, FindingState::UnderTest);
+    if !root_f.state.is_dispositioned() || can_test {
+        let records: Vec<&EvidenceRecord> = ledger.evidence().collect();
+        let prefer = series_of_harness(
+            &records,
+            harness,
+            ledger
+                .evidence_by_id(evidence)
+                .and_then(|e| e.result.get("series"))
+                .and_then(|s| s.as_str()),
+        );
+        let growth = growth_evidence(&records, root_f, &prefer).map_or_else(
+            || "<growth evidence from dla trend>".to_owned(),
+            |e| e.to_string(),
+        );
+        if can_test && let Some(w) = workload_evidence(ledger, harness) {
+            next.push(format!("dla ledger test {root} --evidence {w}"));
+        }
+        if root_f.holder.is_none() {
+            next.push(format!("dla ledger annotate {root} --holder <holder>"));
+        }
+        if root_f.site.is_none() {
+            next.push(format!("dla ledger annotate {root} --site <file:line>"));
+        }
+        next.push(format!("dla ledger confirm {root} --evidence {growth}"));
+    }
+    next
+}
+
+/// The way from the present state of a leak-side finding to its confirmation, when an alloc-test
+/// decided it: see [`route_to_confirm`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfirmRoute {
+    /// The leak-side root the route confirms.
+    pub finding: FindingId,
+    /// The discriminator of the newest alloc-test bound to it, which favors leak.
+    pub discriminator: EvidenceId,
+    /// The harness that alloc-test ran on.
+    pub harness: String,
+    /// The column that decided it, when the record names one.
+    pub column: Option<String>,
+    /// The ledger commands, in order, each accepted as printed.
+    pub commands: Vec<String>,
+}
+
+impl ConfirmRoute {
+    /// The commands as one fix line.
+    pub fn fix(&self) -> String {
+        self.commands.join("   then   ")
+    }
+
+    /// Why `id` (the finding or one of its siblings) is not closed unresolved.
+    pub fn refusal_message(&self, id: &FindingId) -> String {
+        let by = self
+            .column
+            .as_deref()
+            .map_or(String::new(), |c| format!(" (decided by {c})"));
+        format!(
+            "{id} cannot be closed unresolved: the alloc-test {} on {} favors leak{by} and nothing measured since says otherwise",
+            self.discriminator, self.harness
+        )
+    }
+}
+
+/// The route to confirm the leak-side root `root`, when it has one: an alloc-test bound to its
+/// family, run on a hook driver made for it (the finding is among its targets, or it is the
+/// entry-path harness of the finding: `Target` and `EntryPath` of [`harness_about`]), whose
+/// discriminator favors leak and is the newest alloc-test on a harness about the finding (a newer
+/// one on any such harness that favors non-leak, or says inconclusive, lifts it). An alloc-test of
+/// the project's whole workload, of a test loop, or on a harness about the finding only through a
+/// probe, a column, cited evidence or a capture gives no route: the growth there may be kept alive
+/// by another holder, and closing the finding unresolved stays possible. The root has to be still
+/// open (a candidate or under test) and its trigger not `direct` (a confirm of that is refused for another reason, and its fix is the entry-path
+/// route). The commands are [`confirm_commands`].
+pub fn route_to_confirm(view: &RunView, root: &FindingId) -> Option<ConfirmRoute> {
+    let ledger = &view.ledger;
+    let dir = view.run_dir.as_deref()?;
+    let rf = ledger.finding(root)?;
+    if rf.polarity() != Polarity::Leak
+        || root.is_sibling()
+        || ledger.merged_into(root).is_some()
+        || !matches!(rf.state, FindingState::Candidate | FindingState::UnderTest)
+    {
+        return None;
+    }
+    let family: Vec<FindingId> = ledger
+        .findings()
+        .filter(|f| &f.id == root || f.parent.as_ref() == Some(root))
+        .map(|f| f.id.clone())
+        .collect();
+    let records: Vec<&EvidenceRecord> = ledger.evidence().collect();
+    // The newest alloc-test on any harness about the finding decides (a newer one that does not
+    // favor leak lifts the route); the route needs it to have run on a driver made for the finding.
+    let (disc, favors, made_for_it) = bound_alloc_tests(&records, &family)
+        .into_iter()
+        .rev()
+        .find_map(|(e, f)| {
+            let m = e
+                .result
+                .get("harness")
+                .and_then(|h| h.as_str())
+                .and_then(|h| crate::harness::HarnessManifest::load(dir, h).ok())?;
+            let about = harness_about(view, &m, root)?;
+            let made = m.is_hook_driver()
+                && matches!(about, HarnessAbout::Target | HarnessAbout::EntryPath);
+            Some((e, f, made))
+        })?;
+    if favors != crate::discriminator::Favors::Leak || !made_for_it {
+        return None;
+    }
+    if matches!(
+        crate::trigger::Triggers::of(view).trigger(root),
+        crate::trigger::Trigger::Direct { .. }
+    ) {
+        return None;
+    }
+    let harness = disc.result.get("harness")?.as_str()?.to_owned();
+    Some(ConfirmRoute {
+        finding: root.clone(),
+        discriminator: disc.evidence_id.clone(),
+        column: disc
+            .result
+            .get("column")
+            .and_then(|c| c.as_str())
+            .map(str::to_owned),
+        commands: confirm_commands(ledger, rf, &harness, &disc.evidence_id),
+        harness,
+    })
+}
+
+/// [`route_to_confirm`] for a finding or a sibling of one: the route of its root.
+pub fn route_for(view: &RunView, id: &FindingId) -> Option<ConfirmRoute> {
+    route_to_confirm(view, &root_of(&view.ledger, id))
 }
 
 /// True when a trend column is growth the run measured and nobody decided: its gate passed, or
@@ -1252,5 +1534,214 @@ mod tests {
         let (_d, view) = with_capture_summary("H1", "something else");
         let m = manifest("H1", serde_json::json!({"targets": ["F1"]}));
         assert_eq!(about(&view, &m, 3), None);
+    }
+
+    fn add_ev(l: &mut Ledger, kind: EvidenceKind, result: serde_json::Value) -> EvidenceId {
+        l.add_evidence(NewEvidence {
+            source: Source::Repo {
+                commit: "c".into(),
+                path: None,
+            },
+            tool: Tool {
+                name: "t".into(),
+                version: "1".into(),
+            },
+            authority: Authority::Test,
+            kind,
+            result,
+            raw: None,
+            coverage: EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        })
+        .unwrap();
+        l.evidence().last().unwrap().evidence_id.clone()
+    }
+
+    fn alloc_test(l: &mut Ledger, favors: &str, harness: &str) -> EvidenceId {
+        add_ev(
+            l,
+            EvidenceKind::Discriminator,
+            serde_json::json!({"test": "plateau+purge", "favors": favors, "finding": "F1",
+                "harness": harness, "series": "S9", "column": "py.blocks@a.py:1"}),
+        )
+    }
+
+    fn growth(l: &mut Ledger, series: &str) -> EvidenceId {
+        add_ev(
+            l,
+            EvidenceKind::UnitCountSeries,
+            serde_json::json!({"gate": "pass", "series": series, "passed": [
+                {"column": "py.blocks@a.py:1", "site": "a.py:1", "candidates": ["F1"]}]}),
+        )
+    }
+
+    /// A view over [`scene`] (F1 a candidate with the sibling F1.n1) whose run directory holds
+    /// the harness H1, which targets F1 (`about`) or no finding.
+    fn routed(l: Ledger, about: bool) -> (tempfile::TempDir, RunView) {
+        let dir = tempfile::tempdir().unwrap();
+        let m = manifest(
+            "H1",
+            serde_json::json!({ "targets": if about { vec!["F1"] } else { vec![] } }),
+        );
+        m.save(dir.path()).unwrap();
+        let mut view = view_with(l, serde_json::json!({"name": "py.traced", "unit": "bytes"}));
+        view.run_dir = Some(dir.path().to_path_buf());
+        (dir, view)
+    }
+
+    fn f1() -> FindingId {
+        FindingId::new(1)
+    }
+
+    #[test]
+    fn the_route_is_the_refute_of_the_open_sibling_and_the_confirm_with_growth_evidence() {
+        let (_d, mut l) = scene();
+        let g = growth(&mut l, "S2");
+        let d = alloc_test(&mut l, "leak", "H1");
+        let (_r, view) = routed(l, true);
+        let route = route_to_confirm(&view, &f1()).unwrap();
+        assert_eq!(route.discriminator, d);
+        assert_eq!(route.harness, "H1");
+        assert_eq!(route.column.as_deref(), Some("py.blocks@a.py:1"));
+        assert_eq!(
+            route.commands,
+            [
+                format!("dla ledger refute F1.n1 --evidence {d}"),
+                "dla ledger annotate F1 --holder <holder>".to_owned(),
+                format!("dla ledger confirm F1 --evidence {g}"),
+            ]
+        );
+        // A sibling reads the route of its root.
+        assert_eq!(route_for(&view, &"F1.n1".parse().unwrap()), Some(route));
+    }
+
+    #[test]
+    fn only_the_newest_alloc_test_decides_and_it_has_to_favor_leak() {
+        for (later, lifted) in [("non-leak", true), ("inconclusive", true), ("leak", false)] {
+            let (_d, mut l) = scene();
+            growth(&mut l, "S2");
+            alloc_test(&mut l, "leak", "H1");
+            alloc_test(&mut l, later, "H1");
+            let (_r, view) = routed(l, true);
+            assert_eq!(route_to_confirm(&view, &f1()).is_none(), lifted, "{later}");
+        }
+        // A leak-favoring one after a non-leak one is a route again.
+        let (_d, mut l) = scene();
+        growth(&mut l, "S2");
+        alloc_test(&mut l, "non-leak", "H1");
+        let newest = alloc_test(&mut l, "leak", "H1");
+        let (_r, view) = routed(l, true);
+        assert_eq!(
+            route_to_confirm(&view, &f1()).unwrap().discriminator,
+            newest
+        );
+    }
+
+    #[test]
+    fn an_alloc_test_on_a_harness_that_is_not_about_the_finding_makes_no_route() {
+        let (_d, mut l) = scene();
+        growth(&mut l, "S2");
+        alloc_test(&mut l, "leak", "H1");
+        let (_r, view) = routed(l, false);
+        assert_eq!(route_to_confirm(&view, &f1()), None);
+    }
+
+    /// [`routed`] with H1 built from `extra` and the trend column `column`.
+    fn routed_with(
+        l: Ledger,
+        extra: serde_json::Value,
+        column: serde_json::Value,
+    ) -> (tempfile::TempDir, RunView) {
+        let dir = tempfile::tempdir().unwrap();
+        manifest("H1", extra).save(dir.path()).unwrap();
+        let mut view = view_with(l, column);
+        view.run_dir = Some(dir.path().to_path_buf());
+        (dir, view)
+    }
+
+    #[test]
+    fn only_a_driver_made_for_the_finding_gives_a_route() {
+        let untied = serde_json::json!({"name": "py.traced", "unit": "bytes"});
+        let tied = serde_json::json!({"name": "py.blocks@a.py:1", "site": "a.py:1"});
+        let cases = [
+            // A hook driver that targets the finding.
+            (serde_json::json!({"targets": ["F1"]}), untied.clone(), true),
+            // The whole workload of the project, a test loop, a driver about it only through a
+            // column or a probe: no route.
+            (
+                serde_json::json!({"mode": "command", "workload": "w"}),
+                untied.clone(),
+                false,
+            ),
+            (
+                serde_json::json!({"tools": [crate::harness::PYTEST_TOOL]}),
+                untied.clone(),
+                false,
+            ),
+            (serde_json::json!({}), tied, false),
+            (
+                serde_json::json!({"probes": [{"id": "P1", "finding": "F1", "target": {"kind": "py-module", "module": "m"}}]}),
+                untied,
+                false,
+            ),
+        ];
+        for (extra, column, route) in cases {
+            let (_d, mut l) = scene();
+            growth(&mut l, "S2");
+            alloc_test(&mut l, "leak", "H1");
+            let (_r, view) = routed_with(l, extra.clone(), column);
+            assert_eq!(route_to_confirm(&view, &f1()).is_some(), route, "{extra}");
+        }
+    }
+
+    #[test]
+    fn a_finding_that_is_decided_or_has_no_alloc_test_has_no_route() {
+        let (_d, mut l) = scene();
+        growth(&mut l, "S2");
+        let (_r, view) = routed(l, true);
+        assert_eq!(route_to_confirm(&view, &f1()), None);
+        // The alloc-test is bound to F2's family, not F1's.
+        let (_d, mut l) = scene();
+        growth(&mut l, "S2");
+        add_ev(
+            &mut l,
+            EvidenceKind::Discriminator,
+            serde_json::json!({"test": "plateau+purge", "favors": "leak", "finding": "F2",
+                "harness": "H1"}),
+        );
+        let (_r, view) = routed(l, true);
+        assert_eq!(route_to_confirm(&view, &f1()), None);
+        // Refuted, it needs no route.
+        let (_d, mut l) = scene();
+        growth(&mut l, "S2");
+        let d = alloc_test(&mut l, "non-leak", "H1");
+        l.transition(&f1(), FindingState::Refuted, None, None, vec![d], "t")
+            .unwrap();
+        alloc_test(&mut l, "leak", "H1");
+        let (_r, view) = routed(l, true);
+        assert_eq!(route_to_confirm(&view, &f1()), None);
+    }
+
+    #[test]
+    fn the_growth_evidence_prefers_the_series_of_the_harness_that_was_measured() {
+        let (_d, mut l) = scene();
+        let on_h1 = growth(&mut l, "S2");
+        add_ev(
+            &mut l,
+            EvidenceKind::Workload,
+            serde_json::json!({"harness": "H1", "series": ["S2", "S3"]}),
+        );
+        let other = growth(&mut l, "S7");
+        let d = alloc_test(&mut l, "leak", "H1");
+        let root = l.finding(&f1()).unwrap().clone();
+        let all: Vec<&EvidenceRecord> = l.evidence().collect();
+        // Without a preference the newest one wins; with the harness of the alloc-test its own.
+        assert_eq!(growth_evidence(&all, &root, &[]), Some(other));
+        let cmds = confirm_commands(&l, &root, "H1", &d);
+        assert_eq!(
+            cmds.last().unwrap(),
+            &format!("dla ledger confirm F1 --evidence {on_h1}")
+        );
     }
 }

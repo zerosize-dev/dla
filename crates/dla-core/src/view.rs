@@ -528,7 +528,10 @@ pub fn status_for(view: &RunView, worker: Option<&str>) -> ReportStatus {
                 .and_then(|r| r.runtime.as_ref())
                 .and_then(|rt| queues.iter().find(|q| &q.runtime == rt && q.open()))
                 .filter(|q| q.pending.contains(&f.id));
-            let fix = if let Some(g) = grown.iter().find(|g| g.finding == f.id) {
+            // An alloc-test that favors leak decided it: the fix is the route to confirm.
+            let fix = if let Some(route) = crate::grown::route_for(view, &f.id) {
+                route.fix()
+            } else if let Some(g) = grown.iter().find(|g| g.finding == f.id) {
                 g.commands().join("   then   ")
             } else if let Some(q) = pending_in {
                 // A candidate with no test class waits for a driver while the test loop runs.

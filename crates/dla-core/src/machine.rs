@@ -1166,19 +1166,106 @@ fn owner_stands_in_for_site(ctx: &TransitionContext<'_>) -> bool {
             .all(|e| e.authority == Authority::Dump)
 }
 
+/// What the ledger knows that makes the refusals of a leak-side confirm name real ids: the
+/// newest alloc-test discriminator bound to the family of the finding that favors leak, and the
+/// growth evidence of the finding that the confirm rule accepts (preferring the series of the
+/// harness of that alloc-test).
+struct ConfirmHints {
+    /// The newest leak-favoring alloc-test bound to the family.
+    discriminator: Option<EvidenceId>,
+    /// The growth evidence to cite.
+    growth: Option<EvidenceId>,
+}
+
+fn confirm_hints(ctx: &TransitionContext<'_>) -> ConfirmHints {
+    let root_id = ctx.finding.root_id();
+    let root = ctx.findings.finding(&root_id).unwrap_or(ctx.finding);
+    let family: Vec<FindingId> = ctx
+        .findings
+        .family(&ctx.finding.id)
+        .iter()
+        .map(|f| f.id.clone())
+        .collect();
+    let all: Vec<EvidenceRecord> = ctx
+        .lookup
+        .evidence_ids()
+        .iter()
+        .filter_map(|i| ctx.lookup.evidence(i).cloned())
+        .collect();
+    let records: Vec<&EvidenceRecord> = all.iter().collect();
+    let newest = crate::grown::bound_alloc_tests(&records, &family)
+        .into_iter()
+        .rev()
+        .find(|(_, f)| *f == Favors::Leak)
+        .map(|(e, _)| e);
+    let prefer = newest
+        .map(|e| {
+            crate::grown::series_of_harness(
+                &records,
+                e.result
+                    .get("harness")
+                    .and_then(|h| h.as_str())
+                    .unwrap_or(""),
+                e.result.get("series").and_then(|s| s.as_str()),
+            )
+        })
+        .unwrap_or_default();
+    ConfirmHints {
+        discriminator: newest.map(|e| e.evidence_id.clone()),
+        growth: crate::grown::growth_evidence(&records, root, &prefer),
+    }
+}
+
 fn confirm_leak(ctx: &TransitionContext<'_>, artifact: bool) -> Result<(), Refusal> {
     let id = &ctx.finding.id;
     if !judged(ctx).any(is_passing_growth) {
+        // A cited record that is not growth evidence at all (a discriminator is the usual one):
+        // say so, and name the growth evidence of the finding that passed.
+        let not_growth: Vec<String> = ctx
+            .evidence
+            .iter()
+            .filter_map(|e| ctx.lookup.evidence(e))
+            .filter(|e| {
+                !matches!(
+                    e.kind,
+                    EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries
+                )
+            })
+            .map(|e| {
+                if e.kind == EvidenceKind::Discriminator {
+                    format!("{} is a discriminator, not growth evidence", e.evidence_id)
+                } else {
+                    format!(
+                        "{} is a {} record, not growth evidence",
+                        e.evidence_id,
+                        e.kind.as_str()
+                    )
+                }
+            })
+            .collect();
+        let named = if not_growth.is_empty() {
+            None
+        } else {
+            confirm_hints(ctx).growth
+        };
+        let said = if not_growth.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", not_growth.join("; "))
+        };
         return Err(Refusal::new(
             codes::GROWTH_GATE_FAILED,
             format!(
-                "{id} cannot be confirmed: no cited growth-series or unit-count-series evidence (authority test, live or dump) has a passing gate"
+                "{id} cannot be confirmed: no cited growth-series or unit-count-series evidence (authority test, live or dump) has a passing gate{said}"
             ),
             "growth evidence with result.gate = pass",
-            format!(
-                "dla trend {}   then   dla ledger confirm {id} --evidence <trend evidence id>",
-                series_hint(ctx)
-            ),
+            match named {
+                Some(g) => format!("dla ledger confirm {id} --evidence {g}"),
+                None => format!(
+                    "dla trend {}   then   dla ledger confirm {id} --evidence <trend evidence id>",
+                    series_hint(ctx)
+                ),
+            },
         ));
     }
     if artifact && let Some(site) = &ctx.finding.site {
@@ -1231,15 +1318,53 @@ fn confirm_leak(ctx: &TransitionContext<'_>, artifact: bool) -> Result<(), Refus
         let sibling = nonleak
             .first()
             .map_or_else(|| format!("{root}.n1"), |f| f.id.to_string());
+        let generic = format!(
+            "dla alloc-test <harness> --finding {root}   then   dla ledger refute {sibling} --evidence <discriminator id>"
+        );
+        // An alloc-test bound to the finding that favors leak already rules the siblings out:
+        // the fix is the refutes with its id, then the confirm with the growth evidence.
+        let hints = confirm_hints(ctx);
+        let fix = match (&hints.discriminator, &hints.growth) {
+            (Some(d), growth) => {
+                let growth = judged(ctx)
+                    .find(|e| is_passing_growth(e))
+                    .map(|e| e.evidence_id.clone())
+                    .or_else(|| growth.clone());
+                let confirm = growth.map_or_else(
+                    || {
+                        format!(
+                            "dla ledger confirm {id} --evidence <growth evidence from dla trend>"
+                        )
+                    },
+                    |g| format!("dla ledger confirm {id} --evidence {g}"),
+                );
+                let mut steps: Vec<String> = nonleak
+                    .iter()
+                    .filter(|f| !f.state.is_dispositioned())
+                    .map(|f| format!("dla ledger refute {} --evidence {d}", f.id))
+                    .collect();
+                if nonleak.is_empty() {
+                    steps.push(format!(
+                        "dla ledger add --sibling-of {root} --origin hypothesis --hypothesis N-WARM --refute-if \"growth continues over the extra cycles\" --evidence {d}"
+                    ));
+                    steps.push(format!("dla ledger refute {root}.n1 --evidence {d}"));
+                }
+                if steps.is_empty() {
+                    generic
+                } else {
+                    steps.push(confirm);
+                    steps.join("   then   ")
+                }
+            }
+            (None, _) => generic,
+        };
         return Err(Refusal::new(
             codes::NONLEAK_REFUTATION_REQUIRED,
             format!(
                 "{id} cannot be confirmed while no non-leak sibling is refuted: the alternatives (N-*) must be ruled out first"
             ),
             format!("a refuted N-* sibling of {root}"),
-            format!(
-                "dla alloc-test <harness> --finding {root}   then   dla ledger refute {sibling} --evidence <discriminator id>"
-            ),
+            fix,
         ));
     }
     Ok(())
