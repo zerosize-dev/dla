@@ -979,6 +979,7 @@ fn test_loop_files(
     Ok(out)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build(
     tc: &ToolCtx,
     ledger: &dla_core::Ledger,

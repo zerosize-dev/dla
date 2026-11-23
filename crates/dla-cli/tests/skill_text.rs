@@ -611,6 +611,41 @@ fn the_references_teach_the_python_allocation_site_columns_and_their_route() {
 }
 
 #[test]
+fn the_references_teach_the_stack_capture_after_an_alloc_test_at_a_growing_line() {
+    // Line breaks do not matter: every text is read with its whitespace collapsed.
+    let read = |p: &str| {
+        fs::read_to_string(root().join(p))
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let python = read("skills/detect-leak-anywhere/references/python.md");
+    let report = read("skills/detect-leak-anywhere/references/evidence-and-report.md");
+    let verify = read("docs/VERIFY.md");
+    for want in [
+        "After `dla alloc-test` favors leak, capture the stacks that lead to the line",
+        "run the `dla harness run H --mode <m> --capture alloc` command it prints first, then the `dla summarize alloc-stack-diff` command that run prints",
+        "then label, `dla bundle` and explain",
+        "`stacks-not-captured`",
+        "The frame above the growing line shows who receives the object",
+        "read that module's source for the reference it keeps",
+    ] {
+        assert!(python.contains(want), "python.md lacks: {want}");
+    }
+    assert!(
+        report.contains("| `stacks-not-captured` |"),
+        "evidence-and-report.md does not list the stacks-not-captured refusal"
+    );
+    assert!(
+        verify.contains(
+            "| A finding at a growing line reached the verifier without a stack | corrected |"
+        ),
+        "VERIFY.md has no row for the finding that reached the verifier without a stack"
+    );
+}
+
+#[test]
 fn the_references_teach_the_pytest_loop_as_the_first_pass_of_a_python_queue() {
     // Line breaks do not matter: every text is read with its whitespace collapsed.
     let read = |p: &str| {

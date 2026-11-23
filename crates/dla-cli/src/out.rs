@@ -270,6 +270,30 @@ mod tests {
     }
 
     #[test]
+    fn the_stacks_hint_of_an_alloc_test_is_never_cut() {
+        let hint = crate::alloc_cmd::stacks_hint("H1", "fresh", "F1");
+        assert!(hint.len() > PROTECTED_STR, "{}", hint.len());
+        let v = json!({
+            "ok": true,
+            "stacks_hint": hint,
+            "columns": vec!["a long text ".repeat(20); 40],
+        });
+        let b = bound(v);
+        assert!(serde_json::to_string(&b).unwrap().len() < MAX_OUTPUT_BYTES);
+        assert_eq!(b["truncated"], true);
+        assert_eq!(b["stacks_hint"], hint);
+        let mut o = Map::new();
+        o.insert("ok".into(), json!(true));
+        o.insert("stacks_hint".into(), json!(hint));
+        for i in 0..400 {
+            o.insert(format!("key{i}"), json!(i));
+        }
+        let b = bound(Value::Object(o));
+        assert!(serde_json::to_string(&b).unwrap().len() < MAX_OUTPUT_BYTES);
+        assert_eq!(b["stacks_hint"], hint);
+    }
+
+    #[test]
     fn the_last_resort_keeps_the_sentences_that_name_the_next_step() {
         let hint = format!("this project has JUnit 5 tests: {} END", "x ".repeat(150));
         let py = format!(
