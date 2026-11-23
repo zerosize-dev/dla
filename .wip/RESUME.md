@@ -1310,3 +1310,13 @@ flat test-loop readings get only 9 second looks.
   -> Version 0.9.0-preview.6 -> release.yml with publish.
 - pillow-6 started 06:10 with the plugin and binary of 5e2c003 (waiter be591kayr). target/ is empty again.
 - Seen and not fixed: `dla run status` lists a killed harness process under `running` (no liveness check).
+
+## State at about 06:22 UTC 2026-11-23
+
+- main = f30f050 "Only the loop over all test files ends the queue's first step" (tree of 6986215, CI round 5 run
+  45114653843 all green), on top of bd1fc84. Pushed to main and the dev branch.
+- Fifteenth frozen snapshot 9371823e466ff13e48df12fa6ee73764b9f02810 = f30f050 + builder M (cut loop is no blocker,
+  texts say plain foreground). CI round 6 running (waiter bv1lwx79c, output u79/ci15). When green:
+  commit-snapshot-tree.sh 9371823 commit-message-15.txt, push main + dev, wait for CI on main, then
+  Version 0.9.0-preview.6 and release.yml with publish.
+- pillow-6 running since 06:10 with the plugin of the same tree (waiter be591kayr).
