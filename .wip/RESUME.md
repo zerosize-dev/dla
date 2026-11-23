@@ -1167,3 +1167,17 @@ flat test-loop readings get only 9 second looks.
 - The disk filled during pillow-3 (34 harness copies of the project, 3 GB); freed. Delete a real run's work directory
   after keeping its small files.
 - Real-project score: aiohttp, grpc-go, axios, tokio-util, spring-data-commons, Pillow found; Jetty not run.
+
+## State at about 00:40 UTC 2026-11-23
+
+- main = a2210bd "Version 0.9.0-preview.5" on top of bce0d30 "Size the automatic budget in a run with workers"
+  (tree of the twelfth frozen snapshot 264e93d, CI round 3 run 45083449055 all green). Both pushed to main and
+  dev/wonderful-mccarthy-algc5s. The working tree is clean.
+- CI on main at a2210bd is running (waiter b950s9akm writes u79/ci-main-v5). When green: trigger release.yml on main
+  with inputs {"publish": true} (MCP tool mcp__github__actions_run_trigger, run_workflow), then check the release
+  0.9.0-preview.5 exists. Previews are pre-authorized by the owner.
+- Next work (task 81): registries fed by the driver's own new keys are confirmed as leaks in Python (pillow-3: 10 of
+  them). The trigger machinery has `Trigger::Direct` ("grown only by calling the registration function itself") but
+  the Python census has no writer facts (start-up registration or not), and a thin public wrapper around the writer
+  is not seen as direct. Also say in the texts: run the pytest loop in the background, never under `timeout`.
+- Then Jetty 12.0.31 (large Maven build; free disk first; add the repository with add_repo before cloning).
