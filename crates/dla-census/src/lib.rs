@@ -40,6 +40,7 @@ pub mod jvm_class;
 pub mod lang;
 pub mod model;
 pub mod parse;
+mod pyimports;
 pub mod sites;
 pub mod statement;
 pub mod usage;

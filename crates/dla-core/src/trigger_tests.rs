@@ -148,6 +148,37 @@ impl Run {
         }
     }
 
+    /// Adds to the trend of series `series` a passing column tied to finding `n` (no target
+    /// verdict is given for it).
+    fn tie_a_passing_column(&self, series: &str, n: u32) {
+        use crate::{
+            series::{ColumnKind, SeriesRegion, Unit},
+            trend::ColumnTrend,
+        };
+        use dla_stats::TrendShape;
+        let mut r = TrendReport::load(self.dir.path(), &format!("T{}", &series[1..])).unwrap();
+        r.columns.push(ColumnTrend {
+            name: "probe:pkg.tables.MIMES.size".into(),
+            unit: Unit::Count,
+            kind: ColumnKind::Counter,
+            region: SeriesRegion::Heap,
+            site: None,
+            finding: None,
+            candidates: vec![f(n)],
+            n: 8,
+            mk: None,
+            sen: None,
+            halves: None,
+            every_delta: None,
+            noise: 0.0,
+            rise: 8.0,
+            shape: TrendShape::Steady,
+            gate: dla_stats::GateVerdict::Pass,
+            gate_failed: vec![],
+        });
+        r.save(self.dir.path()).unwrap();
+    }
+
     fn triggers(&self) -> Triggers {
         Triggers::of(&RunView::load(self.dir.path()).unwrap())
     }
@@ -526,28 +557,54 @@ fn driver_calling(run: &Run, h: &str, text: &str, writers: &[&str]) {
 
 /// Records the census facts of F1's one writer site.
 fn writer_facts(run: &Run, init: bool, startup: bool, param: bool, constant: bool) {
+    writer_facts_via(run, init, startup, param, constant, &[]);
+}
+
+/// The same, with the functions the census recorded between the writer and its start-up callers.
+fn writer_facts_via(
+    run: &Run,
+    init: bool,
+    startup: bool,
+    param: bool,
+    constant: bool,
+    via: &[&str],
+) {
+    writer_facts_for(run, 1, init, startup, param, constant, via);
+}
+
+/// The same for finding `n`.
+fn writer_facts_for(
+    run: &Run,
+    n: u32,
+    init: bool,
+    startup: bool,
+    param: bool,
+    constant: bool,
+    via: &[&str],
+) {
     use crate::{
         FindingAnnotation,
         census::{HolderFacts, SiteFact, SiteKind},
     };
     let mut l = Ledger::load(run.dir.path()).unwrap();
     l.annotate_record(FindingAnnotation {
-        writers: vec!["pkg/m1.go:9".into()],
+        writers: vec![format!("pkg/m{n}.go:9")],
         facts: HolderFacts {
             writer_sites: vec![SiteFact {
-                site: "pkg/m1.go:9".into(),
+                site: format!("pkg/m{n}.go:9"),
                 kind: SiteKind::Insert,
                 depth: 0,
                 function: Some("Register".into()),
                 init,
                 startup,
+                startup_via: via.iter().map(|v| (*v).to_owned()).collect(),
                 param,
                 constant,
                 exported: true,
             }],
             ..Default::default()
         },
-        ..FindingAnnotation::new(f(1))
+        ..FindingAnnotation::new(f(n))
     })
     .unwrap();
 }
@@ -593,6 +650,218 @@ fn a_start_up_registry_the_unit_feeds_directly_is_the_direct_reading() {
         run.triggers().trigger(&f(1)),
         Trigger::Direct { .. }
     ));
+}
+
+/// A run whose unit calls the wrapper `register_all` of the writer `register` and made F1 grow.
+fn a_unit_that_calls_the_wrapper() -> Run {
+    let run = Run::new(1);
+    run.harness("H1", Kind::Entry, &[1]);
+    run.run(
+        "S1",
+        "H1",
+        "aa",
+        Some("the name"),
+        Some(&[(1, Verdict::Grew)]),
+    );
+    driver_calling(
+        &run,
+        "H1",
+        "def unit(i):\n    core.register_all(str(i), [str(i)])\n",
+        &["register"],
+    );
+    run
+}
+
+#[test]
+fn a_unit_that_calls_the_wrapper_of_a_start_up_writer_calls_the_registration_function_itself() {
+    // The census read the writer as start-up through the wrapper `register_all`.
+    let run = a_unit_that_calls_the_wrapper();
+    writer_facts_via(&run, false, true, true, false, &["register_all"]);
+    let t = run.triggers();
+    match t.trigger(&f(1)) {
+        Trigger::Direct {
+            harness, writer, ..
+        } => assert_eq!((harness.as_str(), writer.as_str()), ("H1", "register_all")),
+        other => panic!("{other:?}"),
+    }
+    // The wrapper is only a way to the writer when the census records it: without it the
+    // call of a function that is not the writer's is not the writer's call.
+    let run = a_unit_that_calls_the_wrapper();
+    writer_facts_via(&run, false, true, true, false, &[]);
+    assert!(matches!(
+        run.triggers().trigger(&f(1)),
+        Trigger::Reproduced { .. }
+    ));
+}
+
+#[test]
+fn a_wrapper_of_a_writer_that_a_run_time_caller_also_reaches_is_reproduced() {
+    // A run-time caller makes the writer not start-up, and no wrapper is recorded.
+    let run = a_unit_that_calls_the_wrapper();
+    writer_facts_via(&run, false, false, true, false, &[]);
+    assert!(matches!(
+        run.triggers().trigger(&f(1)),
+        Trigger::Reproduced { .. }
+    ));
+}
+
+/// The driver of a hook driver that is not entry-path (no `targets.json`: the writer functions
+/// come from the census facts).
+fn hook_driver_calling(run: &Run, h: &str, text: &str) {
+    let dir = run.dir.path().join("harness").join(h);
+    std::fs::create_dir_all(dir.join("driver")).unwrap();
+    std::fs::write(dir.join("driver/zz_driver.py"), text).unwrap();
+}
+
+/// A run with a hook driver H2 (not entry-path) that made F1 grow with a unit that calls `call`.
+fn a_hook_driver_calling(call: &str) -> Run {
+    let run = Run::new(1);
+    run.harness("H2", Kind::Hooks, &[1]);
+    run.run(
+        "S2",
+        "H2",
+        "bb",
+        Some("the key"),
+        Some(&[(1, Verdict::Grew)]),
+    );
+    hook_driver_calling(
+        &run,
+        "H2",
+        &format!("# register_all would be the wrapper\ndef unit(i):\n    {call}\n"),
+    );
+    run
+}
+
+#[test]
+fn a_hook_driver_whose_unit_calls_a_start_up_writer_is_the_direct_reading() {
+    let run = a_hook_driver_calling("core.Register(str(i), 1)");
+    writer_facts(&run, false, true, true, false);
+    match run.triggers().trigger(&f(1)) {
+        Trigger::Direct {
+            harness, writer, ..
+        } => assert_eq!((harness.as_str(), writer.as_str()), ("H2", "Register")),
+        other => panic!("{other:?}"),
+    }
+    // A wrapper the census recorded on the way to the writer is the same call.
+    let run = a_hook_driver_calling("core.register_all(str(i), [str(i)])");
+    writer_facts_via(&run, false, true, true, false, &["register_all"]);
+    match run.triggers().trigger(&f(1)) {
+        Trigger::Direct {
+            harness, writer, ..
+        } => assert_eq!((harness.as_str(), writer.as_str()), ("H2", "register_all")),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_finding_that_grew_in_a_hook_driver_without_being_its_target_is_read_the_same_way() {
+    // H2 declares F1 only; its unit calls the writer F1 and F2 share, and F3 (a run-time
+    // writer) grew there too.
+    let run = Run::new(3);
+    run.harness("H2", Kind::Hooks, &[1]);
+    run.run(
+        "S2",
+        "H2",
+        "bb",
+        Some("the key"),
+        Some(&[(1, Verdict::Grew), (2, Verdict::Grew), (3, Verdict::Grew)]),
+    );
+    hook_driver_calling(&run, "H2", "def unit(i):\n    core.Register(str(i), 1)\n");
+    writer_facts_for(&run, 1, false, true, true, false, &[]);
+    writer_facts_for(&run, 2, false, true, true, false, &[]);
+    writer_facts_for(&run, 3, false, false, true, false, &[]);
+    let t = run.triggers();
+    for n in [1, 2] {
+        match t.trigger(&f(n)) {
+            Trigger::Direct {
+                harness, writer, ..
+            } => assert_eq!((harness.as_str(), writer.as_str()), ("H2", "Register")),
+            other => panic!("F{n}: {other:?}"),
+        }
+    }
+    // Its writer is a run-time one: nothing is said, as before.
+    assert_eq!(t.trigger(&f(3)), Trigger::Unchecked);
+}
+
+#[test]
+fn a_finding_a_passing_column_of_a_hook_drivers_trend_is_tied_to_is_read_the_same_way() {
+    // H2 declares F1 only and the trend gives F1 a verdict; the column of a second table passes
+    // and is tied to F2, which has no verdict there.
+    let run = Run::new(2);
+    run.harness("H2", Kind::Hooks, &[1]);
+    run.run(
+        "S2",
+        "H2",
+        "bb",
+        Some("the key"),
+        Some(&[(1, Verdict::Grew)]),
+    );
+    run.tie_a_passing_column("S2", 2);
+    hook_driver_calling(&run, "H2", "def unit(i):\n    core.Register(str(i), 1)\n");
+    writer_facts_for(&run, 1, false, true, true, false, &[]);
+    writer_facts_for(&run, 2, false, true, true, false, &[]);
+    let t = run.triggers();
+    for n in [1, 2] {
+        assert!(
+            matches!(t.trigger(&f(n)), Trigger::Direct { .. }),
+            "F{n}: {:?}",
+            t.trigger(&f(n))
+        );
+    }
+}
+
+#[test]
+fn a_hook_driver_that_does_not_call_the_writer_or_a_writer_that_runs_at_run_time_is_not_direct() {
+    // The unit calls something else: as before, nothing says how a caller reaches the holder.
+    let run = a_hook_driver_calling("core.other(str(i))");
+    writer_facts_via(&run, false, true, true, false, &["register_all"]);
+    assert_eq!(run.triggers().trigger(&f(1)), Trigger::Unchecked);
+    // The writer is called but the census has it at run time: not a start-up registration.
+    let run = a_hook_driver_calling("core.Register(str(i), 1)");
+    writer_facts(&run, false, false, true, false);
+    assert_eq!(run.triggers().trigger(&f(1)), Trigger::Unchecked);
+    // No census facts: neither reading.
+    let run = a_hook_driver_calling("core.Register(str(i), 1)");
+    assert_eq!(run.triggers().trigger(&f(1)), Trigger::Unchecked);
+}
+
+#[test]
+fn an_entry_path_harness_that_grew_it_without_the_call_wins_over_a_direct_hook_driver() {
+    let run = a_hook_driver_calling("core.Register(str(i), 1)");
+    writer_facts(&run, false, true, true, false);
+    run.harness("H1", Kind::Entry, &[1]);
+    run.run(
+        "S1",
+        "H1",
+        "aa",
+        Some("the name"),
+        Some(&[(1, Verdict::Grew)]),
+    );
+    driver_calling(
+        &run,
+        "H1",
+        "func unit(i int) {\n\tserve(path(i))\n}\n",
+        &["Register"],
+    );
+    assert!(matches!(
+        run.triggers().trigger(&f(1)),
+        Trigger::Reproduced { .. }
+    ));
+}
+
+#[test]
+fn a_test_loop_is_never_a_direct_driver() {
+    for kind in [Kind::PytestLoop, Kind::TestLoop] {
+        let run = Run::new(1);
+        run.harness("H2", kind, &[1]);
+        run.run("S2", "H2", "bb", None, Some(&[(1, Verdict::Grew)]));
+        hook_driver_calling(&run, "H2", "def unit(i):\n    core.Register(str(i), 1)\n");
+        writer_facts(&run, false, true, true, false);
+        assert!(
+            !matches!(run.triggers().trigger(&f(1)), Trigger::Direct { .. }),
+            "a test loop is the project's own workload"
+        );
+    }
 }
 
 #[test]

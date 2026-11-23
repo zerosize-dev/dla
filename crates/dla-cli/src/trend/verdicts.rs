@@ -854,6 +854,7 @@ mod tests {
             function: Some("add".into()),
             init: false,
             startup: false,
+            startup_via: Vec::new(),
             param,
             constant: false,
             exported: true,

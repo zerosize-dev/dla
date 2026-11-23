@@ -422,3 +422,100 @@ fn python_and_go_a_head_that_a_node_was_linked_to_is_a_chain_that_grows() {
     let e = entry(&es, "q._current");
     assert!(e.writers.is_empty(), "{e:?}");
 }
+
+const CODEC_CORE: &str = "CODECS = {}\n\n\ndef register_codec(id, ext):\n    CODECS[ext.lower()] = id\n\n\ndef register_codecs(id, exts):\n    for ext in exts:\n        register_codec(id, ext)\n";
+const CODEC_PLUGIN_A: &str =
+    "from . import core\n\ncore.register_codecs(\"A\", [\".a\", \".aa\"])\n";
+const CODEC_PLUGIN_B: &str = "from pkg import core as c\n\nc.register_codecs(\"B\", [\".b\"])\n";
+
+/// The writer site of `CODECS` (`core.py:5`) over the codec fixture plus `more` files.
+fn codec_writer(more: &[(&str, &str)]) -> dla_core::census::SiteFact {
+    let mut files = vec![
+        ("pkg/__init__.py", ""),
+        ("pkg/core.py", CODEC_CORE),
+        ("pkg/plugin_a.py", CODEC_PLUGIN_A),
+        ("pkg/plugin_b.py", CODEC_PLUGIN_B),
+    ];
+    files.extend_from_slice(more);
+    let es = entries(&files, Runtime::Python);
+    let e = entry(&es, "core.CODECS");
+    assert_eq!(e.facts.writer_sites.len(), 1, "{e:?}");
+    e.facts.writer_sites[0].clone()
+}
+
+#[test]
+fn python_a_writer_called_only_by_a_wrapper_that_modules_call_at_the_top_level_is_start_up() {
+    // The plugins call the wrapper at module top level, one through `from . import core`, the
+    // other through `from pkg import core as c`; the wrapper calls the writer.
+    let w = codec_writer(&[]);
+    assert_eq!(w.function.as_deref(), Some("register_codec"));
+    assert!(w.startup && !w.init && w.param && w.exported, "{w:?}");
+    assert_eq!(w.startup_via, ["register_codecs"], "{w:?}");
+}
+
+#[test]
+fn python_a_run_time_caller_of_the_writer_is_not_start_up() {
+    let handler =
+        "from . import core\n\n\ndef handle(name):\n    core.register_codec(\"x\", name)\n";
+    let w = codec_writer(&[("pkg/serve.py", handler)]);
+    assert!(!w.startup, "{w:?}");
+    assert!(w.startup_via.is_empty(), "{w:?}");
+}
+
+#[test]
+fn python_a_function_nothing_in_the_project_calls_is_not_start_up() {
+    let src = "CODECS = {}\n\n\ndef register_codec(id, ext):\n    CODECS[ext.lower()] = id\n";
+    let es = entries(&[("pkg/core.py", src)], Runtime::Python);
+    let w = &entry(&es, "core.CODECS").facts.writer_sites[0];
+    assert!(!w.startup && w.startup_via.is_empty(), "{w:?}");
+}
+
+#[test]
+fn python_a_same_named_function_of_an_unrelated_module_is_not_a_caller() {
+    // `other.py` defines its own `register_codecs` and calls it at run time; it does not
+    // import `core`. Its call is no call of the wrapper in `core.py`.
+    let other = "REG = []\n\n\ndef register_codecs(id, exts):\n    REG.append(id)\n\n\ndef handle(i):\n    register_codecs(i, [])\n";
+    let w = codec_writer(&[("pkg/other.py", other)]);
+    assert!(w.startup, "{w:?}");
+    assert_eq!(w.startup_via, ["register_codecs"], "{w:?}");
+    // Nor is a qualified call through a module that is not `core`.
+    let user = "import util\n\n\ndef handle(i):\n    util.register_codecs(i, [])\n";
+    let w = codec_writer(&[("pkg/util.py", other), ("pkg/user.py", user)]);
+    assert!(w.startup, "{w:?}");
+    // The same module imported by the calling file is a caller: at run time it is not start-up.
+    let user = "from . import core\n\n\ndef handle(i):\n    core.register_codecs(i, [])\n";
+    let w = codec_writer(&[("pkg/user.py", user)]);
+    assert!(!w.startup, "{w:?}");
+    // Calls through an object stay as they were: it may be anything.
+    let user = "def handle(self, i):\n    self.table.register_codecs(i, [])\n";
+    let w = codec_writer(&[("pkg/user.py", user)]);
+    assert!(!w.startup, "{w:?}");
+}
+
+#[test]
+fn python_a_function_whose_only_callers_are_other_modules_own_functions_is_not_start_up() {
+    // Nothing in the project calls `core.register_codec` or its wrapper: the only calls of
+    // the name are the unrelated module's own.
+    let src = "CODECS = {}\n\n\ndef register_codec(id, ext):\n    CODECS[ext.lower()] = id\n\n\ndef register_codecs(id, exts):\n    for ext in exts:\n        register_codec(id, ext)\n";
+    let other = "def register_codecs(id, exts):\n    pass\n\n\nregister_codecs(\"A\", [])\n";
+    let es = entries(
+        &[("pkg/core.py", src), ("pkg/other.py", other)],
+        Runtime::Python,
+    );
+    let w = &entry(&es, "core.CODECS").facts.writer_sites[0];
+    assert!(!w.startup, "{w:?}");
+}
+
+#[test]
+fn python_a_call_in_a_test_file_is_no_run_time_caller() {
+    // A test method that registers a codec runs in a test, not in the product: the file is
+    // a test file by its name (`test_*.py`) in a directory that is not named like a test
+    // directory, and the census reads no caller there.
+    let t = "from pkg import core\n\n\nclass TestCodecs:\n    def test_register(self):\n        core.register_codec(\"x\", \".x\")\n        core.register_codecs(\"x\", [\".y\"])\n";
+    let w = codec_writer(&[("tests_like/test_codecs.py", t)]);
+    assert!(w.startup, "{w:?}");
+    assert_eq!(w.startup_via, ["register_codecs"], "{w:?}");
+    // The same call in a file that is not a test file is a run-time caller.
+    let w = codec_writer(&[("tests_like/codecs_check.py", t)]);
+    assert!(!w.startup, "{w:?}");
+}

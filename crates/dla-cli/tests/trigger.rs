@@ -68,8 +68,12 @@ fn command(project: &Path) -> Command {
 
 impl Run {
     fn new(init_args: &[&str]) -> Self {
+        Self::with_project(init_args, project)
+    }
+
+    fn with_project(init_args: &[&str], make: fn(&Path)) -> Self {
         let dir = tempfile::tempdir().unwrap();
-        project(dir.path());
+        make(dir.path());
         let mut args = vec!["run", "init", "--session-id", "t"];
         args.extend_from_slice(init_args);
         let o = command(dir.path())
@@ -907,4 +911,276 @@ fn the_bundle_and_the_trigger_of_a_test_loop_finding_name_what_was_measured_to_f
         ),
         "{md}"
     );
+}
+
+/// A package whose plugin modules register codecs at their top level, through a wrapper.
+fn registry_project(dir: &Path) {
+    write(dir, "pkg/__init__.py", "");
+    write(
+        dir,
+        "pkg/core.py",
+        "CODECS = {}\n\n\ndef register_codec(id, ext):\n    CODECS[ext.lower()] = id\n\n\ndef register_codecs(id, exts):\n    for ext in exts:\n        register_codec(id, ext)\n\n\ndef lookup(ext):\n    return CODECS.get(ext.lower())\n",
+    );
+    write(
+        dir,
+        "pkg/plugin_a.py",
+        "from . import core\n\ncore.register_codecs(\"A\", [\".a\", \".aa\"])\n",
+    );
+}
+
+/// The same package plus a function a caller uses to add a plugin at run time.
+fn registry_project_with_a_run_time_entry(dir: &Path) {
+    registry_project(dir);
+    write(
+        dir,
+        "pkg/api.py",
+        "from . import core\n\n\ndef add_plugin(name, exts):\n    core.register_codecs(name, exts)\n",
+    );
+}
+
+const REGISTRY_CORE_SETUP: &str = "    from pkg import core\n    _state['core'] = core";
+/// An entry-path unit that only reads the table: it never registers.
+const REGISTRY_LOOKUP_UNIT: &str = "    _state['core'].lookup('.u%d' % key)";
+const REGISTRY_SETUP: &str =
+    "    from pkg import api, core\n    _state['core'] = core\n    _state['api'] = api";
+/// A hook driver that registers a new extension through the wrapper, per unit.
+const REGISTRY_UNIT: &str = "    _state['core'].register_codecs('x', ['.u%d' % key])";
+/// An entry-path unit: a caller adds a plugin through the public function.
+const REGISTRY_ENTRY_UNIT: &str = "    _state['api'].add_plugin('p%d' % key, ['.p%d' % key])";
+
+#[test]
+fn a_registry_grown_only_by_its_own_writer_is_not_confirmed_and_the_non_leak_way_closes_it() {
+    let r = Run::with_project(&["--budget", "3h"], registry_project);
+    let f = r.id_at("pkg/core.py:1");
+    let g = r.ok(&["harness", "gen", "--lang", "python", "--driver", "--next"]);
+    let workload = g["evidence"][0].as_str().unwrap().to_owned();
+    r.fill("H1", REGISTRY_CORE_SETUP, REGISTRY_UNIT);
+    r.ok(&["harness", "run", "H1", "--mode", "both"]);
+    let t = r.ok(&["trend", "S1"]);
+    let growth = t["evidence"].as_array().unwrap().clone();
+    let ev = growth[0].as_str().unwrap().to_owned();
+    assert_eq!(t["targets"][0]["verdict"], "grew", "{t}");
+
+    // The alloc-test of the direct driver does not offer the confirm that would be refused.
+    let a = r.ok(&["alloc-test", "H1", "--finding", &f]);
+    let next: Vec<&str> = a["next"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(
+        !next.iter().any(|c| c.starts_with("dla ledger confirm")),
+        "{next:?}"
+    );
+    assert!(
+        next.iter().any(|c| c.starts_with(&format!(
+            "dla harness gen --lang python --driver --entry {f}"
+        ))) && next
+            .iter()
+            .any(|c| c.starts_with(&format!("dla alloc-test <H> --finding {f}")))
+            && !next.iter().any(|c| c.contains("--hypothesis N-INTENT")),
+        "{next:?}"
+    );
+
+    // The census reads the writer as a start-up registration through the wrapper, and the only
+    // growth measured is the unit's own call of that wrapper.
+    let e = r.refused(&["ledger", "confirm", &f, "--evidence", &ev]);
+    assert_eq!(e["code"], "registration-only", "{e}");
+    let message = e["message"].as_str().unwrap();
+    for want in [
+        "start-up registration (register_codec)",
+        "(H1)",
+        "register_codecs itself with new keys",
+    ] {
+        assert!(message.contains(want), "{want}: {message}");
+    }
+    let fix = e["fix"].as_str().unwrap().to_owned();
+    // One route: an entry-path harness whose unit does not call the registration function.
+    for want in [
+        &format!("dla harness gen --lang python --driver --entry {f}"),
+        &format!("dla alloc-test <H> --finding {f}"),
+        "dla ledger confirm F",
+        "--hypothesis N-INTENT",
+        "<the sibling id the add prints>",
+    ] {
+        let want = if want == "dla ledger confirm F" {
+            format!("dla ledger confirm {f} again")
+        } else {
+            want.to_owned()
+        };
+        assert!(fix.contains(&want), "{want}: {fix}");
+    }
+    assert!(!fix.contains(&format!("{f}.n")), "{fix}");
+
+    // An earlier sibling (the warm-up one) exists: the N-INTENT sibling gets the next id.
+    r.ok(&[
+        "ledger",
+        "add",
+        "--sibling-of",
+        &f,
+        "--origin",
+        "hypothesis",
+        "--hypothesis",
+        "N-WARM",
+        "--refute-if",
+        "growth continues over the extra cycles",
+        "--evidence",
+        &workload,
+    ]);
+
+    // The entry-path harness: a unit that uses the public API without registering anything.
+    let g = r.ok(&[
+        "harness", "gen", "--lang", "python", "--driver", "--entry", &f,
+    ]);
+    assert_eq!(g["summary"]["purpose"], "entry-path", "{g}");
+    let h = g["summary"]["harness"].as_str().unwrap().to_owned();
+    r.fill(&h, REGISTRY_CORE_SETUP, REGISTRY_LOOKUP_UNIT);
+    r.varies(&h, "the extension a caller looks up");
+    let ran = r.ok(&["harness", "run", &h, "--mode", "both"]);
+    let series = ran["summary"]["series"][0].as_str().unwrap().to_owned();
+    let t2 = r.ok(&["trend", &series]);
+    assert_eq!(t2["targets"][0]["verdict"], "constant", "{t2}");
+    assert_eq!(t2["targets"][0]["trigger"], "direct", "{t2}");
+    let trend_ev = t2["evidence"][0].as_str().unwrap().to_owned();
+    let a = r.ok(&["alloc-test", &h, "--finding", &f]);
+    assert_eq!(a["favors"], "non-leak", "{a}");
+    let alloc_ev = a["evidence"].as_str().unwrap().to_owned();
+    let refute = a["next"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|c| c.starts_with(&format!("dla ledger refute {f} ")))
+        .unwrap_or_else(|| panic!("no refute of {f}: {a}"));
+    let words: Vec<&str> = refute.split_whitespace().skip(1).collect();
+    r.ok(&words);
+    assert_eq!(r.row(&f)["state"], "refuted");
+
+    // Record the reading: the sibling the add prints, tested and confirmed with the same evidence.
+    let add = r.ok(&[
+        "ledger",
+        "add",
+        "--sibling-of",
+        &f,
+        "--origin",
+        "hypothesis",
+        "--hypothesis",
+        "N-INTENT",
+        "--refute-if",
+        "run-time input reaches the registration call",
+        "--evidence",
+        &trend_ev,
+    ]);
+    let sibling = add["id"].as_str().unwrap().to_owned();
+    assert_eq!(sibling, format!("{f}.n2"), "{add}");
+    r.ok(&["ledger", "test", &sibling, "--evidence", &workload]);
+    r.ok(&["ledger", "confirm", &sibling, "--evidence", &alloc_ev]);
+    assert_eq!(r.row(&sibling)["state"], "confirmed");
+}
+
+#[test]
+fn a_registry_an_entry_path_harness_grew_without_the_direct_call_is_confirmed_as_before() {
+    let r = Run::with_project(&["--budget", "3h"], registry_project_with_a_run_time_entry);
+    let f = r.id_at("pkg/core.py:1");
+    let g = r.ok(&["harness", "gen", "--lang", "python", "--driver", "--next"]);
+    let workload = g["evidence"][0].as_str().unwrap().to_owned();
+    r.fill("H1", REGISTRY_SETUP, REGISTRY_UNIT);
+    r.ok(&["harness", "run", "H1", "--mode", "both"]);
+    let t = r.ok(&["trend", "S1"]);
+    let growth = t["evidence"].as_array().unwrap().clone();
+    // A run-time function of the project (`add_plugin`) calls the wrapper: the census does not
+    // read the writer as a start-up registration, so the direct driver is not refused on that.
+    let g = r.ok(&[
+        "harness", "gen", "--lang", "python", "--driver", "--entry", &f,
+    ]);
+    assert_eq!(g["summary"]["purpose"], "entry-path", "{g}");
+    r.fill("H2", REGISTRY_SETUP, REGISTRY_ENTRY_UNIT);
+    r.varies(
+        "H2",
+        "the plugin name and extension a caller of add_plugin passes",
+    );
+    let ran = r.ok(&["harness", "run", "H2", "--mode", "both"]);
+    let t2 = r.ok(&["trend", ran["summary"]["series"][0].as_str().unwrap()]);
+    assert_eq!(t2["targets"][0]["verdict"], "grew", "{t2}");
+    assert_eq!(t2["targets"][0]["trigger"], "reproduced", "{t2}");
+    r.confirm(&f, &workload, &growth);
+    assert_eq!(r.row(&f)["state"], "confirmed");
+}
+
+/// One registration function that fills two module-level tables.
+fn two_table_project(dir: &Path) {
+    write(dir, "pkg/__init__.py", "");
+    write(
+        dir,
+        "pkg/core.py",
+        "CODECS = {}\nMIMES = {}\n\n\ndef register_codec(id, ext):\n    CODECS[ext.lower()] = id\n    MIMES[ext.lower()] = id\n",
+    );
+    write(
+        dir,
+        "pkg/plugin_a.py",
+        "from . import core\n\ncore.register_codec(\"A\", \".a\")\n",
+    );
+}
+
+#[test]
+fn every_table_a_hook_drivers_registration_call_grows_is_direct_not_only_its_target() {
+    let r = Run::with_project(&["--budget", "3h"], two_table_project);
+    let (codecs, mimes) = (r.id_at("pkg/core.py:1"), r.id_at("pkg/core.py:2"));
+    // The driver is generated for one table only; nothing is edited by hand.
+    r.ok(&[
+        "harness", "gen", "--lang", "python", "--driver", "--probe", &codecs,
+    ]);
+    r.fill(
+        "H1",
+        REGISTRY_CORE_SETUP,
+        "    _state['core'].register_codec('x', '.u%d' % key)",
+    );
+    r.ok(&["harness", "run", "H1", "--mode", "both"]);
+    let t = r.ok(&["trend", "S1"]);
+    let ev = t["evidence"][0].as_str().unwrap().to_owned();
+    let targets: Vec<&str> = t["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["finding"].as_str().unwrap())
+        .collect();
+    assert_eq!(targets, [codecs.as_str()], "{t}");
+    // The other table is no target, but its probe column passes and is tied to it.
+    assert!(
+        t["passed"].as_array().unwrap().iter().any(|c| {
+            c["candidates"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|x| x == mimes.as_str()))
+        }),
+        "{t}"
+    );
+    r.ok(&[
+        "ledger",
+        "add",
+        "--sibling-of",
+        &mimes,
+        "--origin",
+        "hypothesis",
+        "--hypothesis",
+        "N-WARM",
+        "--refute-if",
+        "growth continues over the extra cycles",
+        "--evidence",
+        &ev,
+    ]);
+    let a = r.ok(&["alloc-test", "H1", "--finding", &mimes]);
+    assert!(
+        !a["next"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|c| c.starts_with("dla ledger confirm")),
+        "{a}"
+    );
+    for id in [&codecs, &mimes] {
+        let e = r.refused(&["ledger", "confirm", id, "--evidence", &ev]);
+        assert_eq!(e["code"], "registration-only", "{id}: {e}");
+    }
 }

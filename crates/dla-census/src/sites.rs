@@ -35,6 +35,7 @@ use crate::{
     events::{Ev, events, idents},
     model::{Raw, SourceFile},
     parse::{Lang, parse, tree_sitter::Node},
+    pyimports::{Bind, Imports},
     usage::Usage,
 };
 
@@ -104,6 +105,8 @@ struct FileCtx {
     calls: Vec<Call>,
     /// `(type name, line)` of `T{..}`, `new T(..)`, `T(..)`.
     creations: Vec<(String, u32)>,
+    /// Python: the names the file's import statements bind.
+    imports: Imports,
 }
 
 impl FileCtx {
@@ -523,8 +526,12 @@ fn build_file(sf: &SourceFile) -> Option<FileCtx> {
     let mut frames = Vec::new();
     let mut calls = Vec::new();
     let mut creations = Vec::new();
+    let mut imports = Imports::default();
     visit(root, &mut |n| {
         let k = n.kind();
+        if fam == Fam::Python && matches!(k, "import_statement" | "import_from_statement") {
+            imports.add_statement(text(n, src));
+        }
         let frame = match fam {
             Fam::Go
                 if matches!(
@@ -636,6 +643,7 @@ fn build_file(sf: &SourceFile) -> Option<FileCtx> {
         frames,
         calls,
         creations,
+        imports,
     })
 }
 
@@ -648,6 +656,8 @@ struct Project<'a> {
     calls: HashMap<(Fam, String), Vec<CallRow>>,
     creations: HashMap<(Fam, String), Vec<(usize, u32)>>,
     memo: RefCell<HashMap<(usize, u32, u8), bool>>,
+    /// Python: the project files a dotted module name reaches from a file, by file and name.
+    modules: RefCell<HashMap<(usize, String), Vec<usize>>>,
 }
 
 fn new_fn() -> &'static Regex {
@@ -687,6 +697,7 @@ impl<'a> Project<'a> {
             calls,
             creations,
             memo: RefCell::new(HashMap::new()),
+            modules: RefCell::new(HashMap::new()),
         }
     }
 
@@ -779,11 +790,183 @@ impl<'a> Project<'a> {
                 if private_here && other.rel != fc.rel {
                     return false;
                 }
+                if fc.fam == Fam::Python
+                    && f.class.is_none()
+                    && let Some(&target) = self.by_rel.get(fc.rel.as_str())
+                    && !self.py_call_may_reach(target, name, *fi, qual.as_deref())
+                {
+                    return false;
+                }
                 // The function's own body (recursion) is not a caller.
                 !(other.rel == fc.rel && f.start <= *ln && *ln <= f.end)
             })
             .map(|(fi, ln, _)| (*fi, *ln))
             .collect()
+    }
+
+    /// Python: the project files the module `dotted` (leading dots for a relative name) names
+    /// in the file `from`: `m.py` and `m/__init__.py`, an absolute name matched at the end of
+    /// the path because a project often lives under `src/`.
+    fn module_files(&self, from: usize, dotted: &str) -> Vec<usize> {
+        let key = (from, dotted.to_owned());
+        if let Some(v) = self.modules.borrow().get(&key) {
+            return v.clone();
+        }
+        let dots = dotted.chars().take_while(|c| *c == '.').count();
+        let tail = dotted[dots..].replace('.', "/");
+        let mut cands: Vec<String> = Vec::new();
+        let rel = dots > 0;
+        let prefix = if rel {
+            let mut dir: Vec<&str> = self.files[from].dir().split('/').collect();
+            dir.retain(|d| !d.is_empty());
+            for _ in 1..dots {
+                dir.pop();
+            }
+            dir.join("/")
+        } else {
+            String::new()
+        };
+        let base = match (prefix.is_empty(), tail.is_empty()) {
+            (true, _) => tail,
+            (false, true) => prefix,
+            (false, false) => format!("{prefix}/{tail}"),
+        };
+        if base.is_empty() {
+            cands.push("__init__.py".to_owned());
+        } else {
+            cands.push(format!("{base}.py"));
+            cands.push(format!("{base}/__init__.py"));
+        }
+        let out: Vec<usize> = self
+            .files
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.fam == Fam::Python)
+            .filter(|(_, f)| {
+                cands
+                    .iter()
+                    .any(|c| f.rel == *c || (!rel && f.rel.ends_with(&format!("/{c}"))))
+            })
+            .map(|(i, _)| i)
+            .collect();
+        self.modules.borrow_mut().insert(key, out.clone());
+        out
+    }
+
+    /// Python: whether the module named `dotted` in file `from` is the file `target`. A
+    /// package `__init__` may re-export the function, and a name that no project file has but
+    /// whose parent module is in the project may be an attribute of that module: both count.
+    /// A name that reaches nothing in the project, or another module, does not.
+    fn py_module_is(&self, from: usize, dotted: &str, target: usize) -> bool {
+        let files = self.module_files(from, dotted);
+        if !files.is_empty() {
+            return files.contains(&target)
+                || files
+                    .iter()
+                    .any(|&i| self.files[i].rel.ends_with("__init__.py"));
+        }
+        // `a.b.attr`: the longest prefix that is a project module.
+        let mut parts: Vec<&str> = dotted.split('.').collect();
+        while parts.len() > 1 {
+            parts.pop();
+            let p = parts.join(".");
+            if p.chars().all(|c| c == '.') {
+                break;
+            }
+            if !self.module_files(from, &p).is_empty() {
+                return true;
+            }
+        }
+        // A relative name that does not resolve: nothing is known.
+        dotted.starts_with('.')
+    }
+
+    /// Python: whether the call `qual.name(..)` (or `name(..)` without `qual`) in file `fi`
+    /// may be a call of the function `name` defined in file `target`. A call that goes to a
+    /// function of the same name in another module, one the calling file defines itself or
+    /// imports from elsewhere, is not a caller of it. A call on an object (`self.table.f(..)`)
+    /// is read as before: it may be.
+    fn py_call_may_reach(&self, target: usize, name: &str, fi: usize, qual: Option<&str>) -> bool {
+        if fi == target {
+            return true;
+        }
+        let o = &self.files[fi];
+        let Some(q) = qual else {
+            if o.frames
+                .iter()
+                .any(|f| !f.lit && f.class.is_none() && f.name.as_deref() == Some(name))
+            {
+                return false;
+            }
+            return match o.imports.binds.get(name) {
+                Some(Bind::From(m, n)) => n == name && self.py_module_is(fi, m, target),
+                Some(Bind::Module(_)) => true,
+                None => o.imports.star,
+            };
+        };
+        if !q
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+        {
+            return true;
+        }
+        let (root, rest) = q.split_once('.').map_or((q, ""), |(r, t)| (r, t));
+        let with_rest = |m: String| {
+            if rest.is_empty() {
+                m
+            } else {
+                format!("{m}.{rest}")
+            }
+        };
+        match o.imports.binds.get(root) {
+            None => true,
+            Some(Bind::Module(d)) => self.py_module_is(fi, &with_rest(d.clone()), target),
+            Some(Bind::From(m, n)) => {
+                let sep = if m.ends_with('.') { "" } else { "." };
+                let dotted = with_rest(format!("{m}{sep}{n}"));
+                if !self.module_files(fi, &dotted).is_empty() {
+                    self.py_module_is(fi, &dotted, target)
+                } else {
+                    // `n` is not a module of the project: an object of module `m`, or of
+                    // something outside the project.
+                    !self.module_files(fi, m).is_empty() || m.starts_with('.')
+                }
+            }
+        }
+    }
+
+    /// The functions between `f` and the start-up statements that run it: the named function
+    /// around each call of `f` that is not itself an initialiser, then that function's own
+    /// callers, up to `hops` calls up. Nearest first, each once. Meaningful when
+    /// `startup(fc, f, hops)` holds.
+    fn startup_via(&self, fc: &FileCtx, f: &Frame, hops: u8) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        if hops == 0 || self.is_init(fc.fam, Some(f)) {
+            return out;
+        }
+        for (fi, ln) in self.callers(fc, f) {
+            let o = &self.files[fi];
+            let chain = o.chain(ln);
+            if self
+                .outer(&chain)
+                .is_none_or(|x| self.is_init(o.fam, Some(x)))
+            {
+                continue;
+            }
+            let Some(g) = chain.iter().rev().find(|g| !g.lit && g.name.is_some()) else {
+                continue;
+            };
+            let name = g.name.clone().unwrap_or_default();
+            if !out.contains(&name) {
+                out.push(name);
+            }
+            for n in self.startup_via(o, g, hops - 1) {
+                if !out.contains(&n) {
+                    out.push(n);
+                }
+            }
+        }
+        out
     }
 
     /// True when every call of `f` (up to `hops` calls up) is an initialiser, or `f` is one.
@@ -1317,6 +1500,17 @@ fn analyse_one(proj: &Project<'_>, raw: &Raw, usage: &Usage) -> Option<Analysis>
             .rev()
             .find(|f| !f.lit)
             .and_then(|f| f.name.clone());
+        // Start-up reached through wrappers: the functions on the way (Python only).
+        let startup_via = if startup && !init && fam == Fam::Python {
+            chain
+                .iter()
+                .rev()
+                .find(|f| !f.lit && f.name.is_some())
+                .map(|f| proj.startup_via(sfc, f, STARTUP_HOPS))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let exported = !init && proj.exported(sfc, outer);
         let mk = |kind: SiteKind, depth: u8, ev: Option<&crate::events::Event>| {
             let (param, constant) = match ev {
@@ -1330,6 +1524,7 @@ fn analyse_one(proj: &Project<'_>, raw: &Raw, usage: &Usage) -> Option<Analysis>
                 function: function.clone(),
                 init,
                 startup,
+                startup_via: startup_via.clone(),
                 param,
                 constant,
                 exported,
@@ -1410,6 +1605,7 @@ fn analyse_one(proj: &Project<'_>, raw: &Raw, usage: &Usage) -> Option<Analysis>
                     .and_then(|f| f.name.clone()),
                 init,
                 startup,
+                startup_via: Vec::new(),
                 param: false,
                 constant: false,
                 exported: run && proj.exported(fc, outer),

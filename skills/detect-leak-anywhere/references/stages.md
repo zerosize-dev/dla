@@ -377,7 +377,7 @@ under the run directory and need tier 1.
   dependency-path variables it ran with (`PYTHONPATH`, `NODE_PATH`, `CLASSPATH`, `GOFLAGS`, `GOWORK`,
   `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `VIRTUAL_ENV`), and a rerun of the harness (`dla harness run`,
   `dla alloc-test`, `dla intervene`) sets the unset ones from the last run and prints `env_reused`; a variable you set wins. Give a
-  harness run or alloc-test Bash call a timeout of 600000 ms. A harness that `gen` wrote must be run, or the
+  harness run or alloc-test Bash call a timeout of 600000 ms. The Python test loop runs up to its time limit of 1800 s, so start `dla harness run <H>` for it in the background (or let the tool move it there) and wait for it; never put it under the shell's `timeout`. A harness that `gen` wrote must be run, or the
   blocker recorded on `intake.workload` (`--status unresolved --reason env_unavailable|tool_missing|build_fails|privilege_declined
   --remedy "<what blocks it>" --runtime <rt>`; it closes the queue of that runtime only, and is refused for a runtime whose harness wrote a series), before any finding of its runtime is closed `no_harness`, `not_exercised` or `time_budget`; `dla ledger resolve` refuses with
   `harness-not-run` while budget remains, and with `target-pending` while a pending candidate of an open queue is closed that way. Once its manifest loads, `harness run` leaves `harness/H<n>/attempt.json`.

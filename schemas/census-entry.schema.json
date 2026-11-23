@@ -352,6 +352,13 @@
         "startup": {
           "description": "The site runs only at start-up: it is in an initialiser, or every caller of its\nfunction (up to three calls up) is one. Read where the callers can be found.",
           "type": "boolean"
+        },
+        "startup_via": {
+          "description": "When `startup` came through callers that are not initialisers themselves, the functions\non the way (the wrappers between the writer's function and the start-up statements that\ncall them), nearest first. Empty for a direct start-up call. A driver that calls one of\nthem calls the registration function through it.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [

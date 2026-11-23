@@ -55,6 +55,10 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   a test runner grows on its own), refute the loser, `dla ledger confirm`. The final gate lists a growing
   `py.blocks@` column that ties to no dispositioned finding, and `dla ledger resolve` refuses to close a
   finding whose column passed until an alloc-test is bound to it.
+- A table at module level that the project fills at import time through a registration function (plugin
+  modules call it, or a wrapper of it, at their top level), and that a driver grows by calling that function
+  or its wrapper with new keys, is reported as grown by the registration function itself, not as reproduced
+  through the public API; it is a leak only if run-time input reaches that call. Any hook driver whose unit calls the registration function (or a wrapper the census recorded) gives that reading, and `dla ledger confirm` refuses such a finding with `registration-only`; one entry-path harness whose unit does not call it decides both readings (it grows there: confirm; it stays flat: `dla alloc-test` favors non-leak, refute the finding and confirm an `N-INTENT` sibling).
 - The project's own tests in a loop (`dla harness gen --lang python --pytest [--tests a,b]`): a leak that
   nothing holds (a reference an extension module never releases) has no static candidate and shows only as an
   allocation line that grows under a broad workload; the broadest workload a project has is its own tests.
@@ -75,6 +79,7 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   (untracked `*.so`, `*.pyd` or `*.dylib` files next to Python sources), so build first
   (`python3 -m pip install -e .`, or `python3 setup.py build_ext --inplace`) and then generate; if
   the tests import the project from somewhere else the loop stops with a `DLA-PYTEST` line that says so.
+  The loop runs up to its time limit of 1800 s, so never put `dla harness run` for it under the shell's `timeout`: start it in the background and wait for it.
   Read its series with `dla trend`: the columns are the `py.blocks@<file:line>` sites that grew (test files
   and the harness never count), and a site no finding is at gets the `dla ledger add ... --site ...` command; the trend and the final gate name the lines largest growth first, so the first commands are for the lines that grow most.
   A finding made that way is decided with a small driver of its own, not with an alloc-test on the loop (which
