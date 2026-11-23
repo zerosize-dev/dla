@@ -233,9 +233,7 @@ fn grown_at_site_columns(view: &RunView, report: &crate::trend::TrendReport) -> 
             continue;
         };
         for f in view.ledger.findings().filter(|f| {
-            f.site.as_deref().map(str::trim) == Some(site)
-                && f.polarity() == crate::finding::Polarity::Leak
-                && !f.id.is_sibling()
+            grown::finding_is_at_site(&view.ledger, f, site) && !f.id.is_sibling()
         }) {
             if !out.contains(&f.id) {
                 out.push(f.id.clone());

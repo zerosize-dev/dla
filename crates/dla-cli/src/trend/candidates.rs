@@ -45,7 +45,8 @@ pub(super) const CLASSES: &[&str] = &[
 /// a column says something about the registration or creation
 /// AT that line, so only a finding whose own site is that line is its candidate. The
 /// allocation-site columns of the native shim (`native.live_bytes@<site>`) are about where a
-/// holder is written and keep the writer rule.
+/// holder is written and keep the writer rule. A `py.blocks@<site>` column also has the
+/// finding whose holder the line writes into (`dla_core::grown::finding_is_at_site`).
 pub fn is_per_site_count(name: &str) -> bool {
     let base = name.strip_suffix(".pre_gc").unwrap_or(name);
     base.split_once('@')
@@ -198,6 +199,21 @@ impl<'a> Matcher<'a> {
         for (id, ff, fl) in &sited {
             if *ff == file && *fl == line && !out.contains(id) {
                 out.push(id.clone());
+            }
+        }
+        // An allocation-site count of a Python driver run at a writer line of the holder of a
+        // finding is at that finding (`dla_core::grown::finding_is_at_site`), the census
+        // annotation being what lists the writer lines.
+        if dla_core::grown::is_alloc_site_column(&c.name)
+            && let Some(site) = c.site.as_deref()
+        {
+            for f in self.ledger.findings() {
+                if !f.id.is_sibling()
+                    && dla_core::grown::finding_is_at_site(self.ledger, f, site)
+                    && !out.contains(&f.id)
+                {
+                    out.push(f.id.clone());
+                }
             }
         }
         // A count of what one line made: a neighbour in the same function, or a finding that

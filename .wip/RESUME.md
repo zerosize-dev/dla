@@ -1330,3 +1330,34 @@ flat test-loop readings get only 9 second looks.
   release.yml with {"publish": true}). Decide after reading pillow-6.
 - pillow-6 (plugin of 5e2c003 = the tree of 22bd696) running since 06:10 (waiter be591kayr). The python worker ran
   `harness gen --lang python --pytest` and then `harness run H2` as a plain foreground command.
+
+## State at 08:25 UTC 2026-11-23 (after the fifteenth snapshot)
+
+- main = 24a42ab "Add the social preview card [skip ci]" (`.github/social-card.png`, the framed chart
+  version; the owner uploads it by hand; no CI run for it, as the owner asked). Before it: 22bd696
+  (CI on main run 45131266107 was in progress at 08:16). Card sources: wip-notes/social-card/.
+- Not published yet: bd1fc84, f30f050, 22bd696 (next preview: 0.9.0-preview.6). Plan: publish after
+  the round below, one CI round for all of it.
+- pillow-6 (final plugin, started 06:10, hard stop about 08:40): FOUND. python/F275 at
+  src/PIL/ImageFont.py:580, confirmed, 300.9 blocks per iteration in the full test loop S1, and
+  reproduced by the worker's own probe driver H6 (alloc-test favors leak). Weak points:
+  label UNCLASSIFIED, no stored explanation, the verifier's bundle had no frames and no excerpt
+  (site `none`, printed as DISAGREES), 186 open items.
+  - 175 of the 186 items: four lines that build attribute names at run time; CPython's type
+    attribute cache keeps the name strings (measured: 15, 30, 169, 206 live blocks, 0 after
+    `sys._clear_type_cache()`). Fix N1.
+  - Writer lines of census findings are "tied to no finding" (2 here, 10 in pillow-2, 24 in
+    pillow-3). Fix N2. A finding added at such a line has no census facts, so
+    `registration-only` does not apply to it.
+  - python/F107 (extension table) confirmed L-COLLECT, verifier reads N-INTENT, trigger "not
+    found". Not a regression: one plugin's save handler calls the registration function at run
+    time with the extension of the file name, so the census is right that it is not start-up only.
+  - Loop series S1: twelve project lines grow by a constant count per round (ImageFont.py:580
+    +300, Image.py:523 +340, :512 +140, :2712 +105, :515 +70, TiffImagePlugin.py:989 +66,
+    Tests/helper.py:331 +56, ...). Eleven of them look like retention by repeated in-process
+    pytest.main() calls or by test modules. Experiment P measures the holders.
+- In flight (all Sonnet): builder N (brief wip-notes/py-noise-brief.md, scratch u88, waits for
+  14 GB free before its first cargo command), survey for allocation stacks of site findings
+  (task 88), experiment P (scratch u89, task 89).
+- After the waiter for pillow-6 reports: keep small files in /root/dla-real/pillow-6-keep, delete
+  /root/dla-real/pillow-6 (9.5 GB) by literal path at once: builder N waits for that disk.

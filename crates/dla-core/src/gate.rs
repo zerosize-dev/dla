@@ -766,10 +766,7 @@ fn tied_findings<'a>(view: &'a RunView, t: &TrendReport, c: &ColumnTrend) -> Vec
         ids.extend(
             view.ledger
                 .findings()
-                .filter(|f| {
-                    f.polarity() == crate::finding::Polarity::Leak
-                        && f.site.as_deref().map(str::trim) == Some(site)
-                })
+                .filter(|f| crate::grown::finding_is_at_site(&view.ledger, f, site))
                 .map(|f| f.id.clone()),
         );
     }

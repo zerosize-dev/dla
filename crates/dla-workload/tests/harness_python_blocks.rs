@@ -299,6 +299,69 @@ fn a_site_that_keeps_one_object_per_call_has_a_column_with_a_value_at_every_poin
     assert!(!block_columns(&s).iter().any(|c| c.contains("early.py")));
 }
 
+/// A function that calls a method through a name built at run time, the suffix taking three
+/// values, and keeps nothing. The interpreter's attribute cache keeps a reference to the name
+/// string of each lookup, and every call builds a new string.
+const DYNAMIC: &str = "\
+class Handler:
+    def m_a(self):
+        return 1
+
+    def m_b(self):
+        return 2
+
+    def m_c(self):
+        return 3
+
+
+HANDLER = Handler()
+SUFFIXES = (\"a\", \"b\", \"c\")
+
+
+def dispatch(i):
+    total = 0
+    for k in range(300):
+        total += getattr(HANDLER, \"m_\" + SUFFIXES[(i + k) % 3])()  # DYNAMIC
+    return total
+";
+
+#[test]
+fn a_line_that_builds_an_attribute_name_at_run_time_and_keeps_nothing_has_no_column() {
+    if !have_python() {
+        return;
+    }
+    let fx = fixture();
+    write(&fx, "store.py", STORE);
+    write(&fx, "dynamic.py", DYNAMIC);
+    // 50 units per round, 300 lookups per unit: 15000 new name strings per round, far more than
+    // the 4096 slots of the interpreter's type attribute cache. Without emptying that cache at a
+    // checkpoint, the line shows the blocks the cache holds (tens to hundreds of them).
+    let s = run_driver(
+        &fx,
+        "import store\n    import dynamic\n    _state['store'] = store\n    _state['dynamic'] = dynamic",
+        "_state['store'].keep(i)\n    _state['dynamic'].dispatch(i)",
+        50,
+        1,
+        6,
+        &[],
+    );
+    // The keeping line has its column, as in the first test of this file (50 blocks per point).
+    let keep = format!("py.blocks@store.py:{}", line_of(STORE, "# KEEP"));
+    assert_eq!(
+        block_columns(&s).iter().filter(|c| **c == keep).count(),
+        1,
+        "{:?}",
+        block_columns(&s)
+    );
+    // A column exists only for a site whose count grew, so the line that holds nothing has none:
+    // the checkpoint counts it as 0 at every point.
+    assert!(
+        !block_columns(&s).iter().any(|c| c.contains("dynamic.py")),
+        "{:?}",
+        block_columns(&s)
+    );
+}
+
 /// `n` lines in one function, line `k` keeps a list of `k + 1` objects per call, so the growth of
 /// the lines differs and the largest are known.
 fn many_lines(n: usize) -> String {
