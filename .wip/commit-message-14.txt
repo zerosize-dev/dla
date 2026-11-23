@@ -1,0 +1,31 @@
+Only the loop over all test files ends the queue's first step
+
+The first step of an open Python queue is the project's own tests in a
+loop. It exists because a leak that nothing holds has no static candidate:
+only a broad workload shows the line that grows, and the broadest one is
+the whole test suite.
+
+In a real unattended run the Python worker generated the full loop, did
+not run it, generated a second loop with `--tests` on three test files and
+ran that one. The queue ended the step as soon as any test-loop harness
+wrote a series, so it went on to the driver batches. The three files did
+not reach the leaking call and the run never measured its line. An earlier
+run that ran the full loop did.
+
+A loop generated with `--tests` is now marked in its manifest (a second
+tool name, so no schema changes) and does not count for the step. The step
+ends when the loop over all test files wrote a series, or when an attempt
+of that loop failed. Until then `dla run status`, the queue's gate item and
+`dla ledger list` keep printing the full loop: its generation command, or
+the run of its harness once it exists. After the full loop failed, a
+narrowed loop is the agent's own fallback, as before.
+
+The summary of a narrowed loop generated while the full one is pending
+carries a hint that the output bound never cuts: how many of the test
+files it runs, and the command of the first step.
+
+Checked by hand on a real library: with the full loop generated and not
+run, a loop over 2 of 158 test files wrote a series in 13 seconds, and the
+queue still named the run of the full loop.
+
+Not seen yet: an unattended run with this change.
