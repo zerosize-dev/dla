@@ -16,6 +16,14 @@
 //! replaced in every string, except in the structured frame fields of allocation stacks and
 //! retention paths, which are raw evidence the verifier reads. Excerpts come from those
 //! frames only: the verifier has to find the site from the stacks and paths.
+//!
+//! The records a transition cites are not the only ones: the newest two allocation-stack and
+//! two retention-path records that name the finding by the rule `dla ledger label` applies
+//! (`labels::names_finding`) are bundled too. A confirmed or strong finding whose growth is a
+//! count of blocks allocated at one line (`py.blocks@<file:line>`) would otherwise reach the
+//! verifier with no stack and no excerpt, so the bundle is refused with `stacks-not-captured`
+//! when the runtime can capture the stacks and no capture run of the harness that grew the
+//! column is recorded.
 
 use std::{
     fs,
@@ -26,7 +34,7 @@ use clap::Args;
 use dla_core::{
     EvidenceId, FindingId,
     error::codes as core_codes,
-    evidence::EvidenceClass,
+    evidence::{EvidenceClass, EvidenceKind},
     fsutil::{is_written, to_pretty_json, write_atomic},
     paths,
     toolctx::ToolCtx,
@@ -582,9 +590,22 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: BundleArgs) -> 
         )
     })?;
     let owner = finding.owner.clone();
-    let ids = evidence_ids(&ledger, &id);
+    let mut ids = evidence_ids(&ledger, &id);
+    ids.extend(naming_records(&ledger, finding));
+    ids.sort();
+    ids.dedup();
+    let stacks_note = stacks_check(&tc, &id, &ids)?;
     let dir = tc.next_bundle_dir(&dir_name(&id))?;
-    let built = build(&tc, &ledger, &dir, project, &id, owner.as_deref(), &ids);
+    let built = build(
+        &tc,
+        &ledger,
+        &dir,
+        project,
+        &id,
+        owner.as_deref(),
+        &ids,
+        stacks_note.as_deref(),
+    );
     let (manifest_sha, files, copied, omitted, frames) = match built {
         Ok(b) => b,
         Err(f) => {
@@ -593,7 +614,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: BundleArgs) -> 
         }
     };
     let rel = paths::rel_slash(&ctx.run_dir, &dir).unwrap_or_default();
-    Ok(json!({
+    let mut result = json!({
         "ok": true,
         "finding": id.to_string(),
         "dir": ctx.pointer(&rel),
@@ -608,7 +629,134 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: BundleArgs) -> 
             "give the verifier only {} ; then: dla ledger verify {id} --site <file:line|none> --holder <h> --mechanism \"<text>\" --label <ID|UNCLASSIFIED> --bundle {manifest_sha}",
             ctx.pointer(&rel)
         ),
-    }))
+    });
+    if let Some(note) = &stacks_note {
+        result["stacks_note"] = json!(note);
+    }
+    Ok(result)
+}
+
+/// At most this many allocation-stack records and this many retention-path records that name
+/// the finding are added to a bundle.
+const MAX_NAMING_PER_KIND: usize = 2;
+
+/// The newest allocation-stack and retention-path records that name the finding or its root by
+/// the rule the label uses, at most [`MAX_NAMING_PER_KIND`] of each kind.
+fn naming_records(ledger: &dla_core::Ledger, f: &dla_core::Finding) -> Vec<EvidenceId> {
+    let mut subjects = vec![f];
+    if let Some(root) = f.parent.as_ref().and_then(|p| ledger.finding(p)) {
+        subjects.push(root);
+    }
+    let mut out = Vec::new();
+    for kind in [EvidenceKind::AllocStack, EvidenceKind::RetentionPath] {
+        let mut named: Vec<EvidenceId> = ledger
+            .evidence()
+            .filter(|e| e.kind == kind && dla_core::labels::names_finding(e, &subjects))
+            .map(|e| e.evidence_id.clone())
+            .collect();
+        named.reverse();
+        named.truncate(MAX_NAMING_PER_KIND);
+        out.extend(named);
+    }
+    out
+}
+
+/// True when the harness left an allocation capture: `harness/<H>/captures.json` lists a file of
+/// kind `alloc`.
+fn has_alloc_capture(run_dir: &Path, harness: &str) -> bool {
+    let path = dla_core::HarnessManifest::dir_in(run_dir, harness).join("captures.json");
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| {
+            v.get("files")?
+                .as_array()?
+                .iter()
+                .any(|f| f.get("kind").and_then(Value::as_str) == Some("alloc"))
+                .then_some(())
+        })
+        .is_some()
+}
+
+/// The check of a bundle with no stack: `Err(stacks-not-captured)` when the growth is a count of
+/// blocks at one line, the bundle would hold no allocation or retention evidence, the runtime
+/// captures stacks and no capture run of a harness that grew the column is recorded; the
+/// sentence to carry when a capture was summarized and no stack names the finding; `None` when
+/// the check does not apply.
+fn stacks_check(
+    tc: &ToolCtx,
+    id: &FindingId,
+    ids: &[EvidenceId],
+) -> Result<Option<String>, Failure> {
+    use dla_core::{FindingState, finding::Polarity};
+    let Ok(view) = dla_core::RunView::load_for(&tc.run_dir, tc.worker.as_deref()) else {
+        return Ok(None);
+    };
+    let Some(f) = view.ledger.finding(id) else {
+        return Ok(None);
+    };
+    if f.polarity() != Polarity::Leak
+        || !matches!(f.state, FindingState::Confirmed | FindingState::Strong)
+        || ids.iter().any(|e| {
+            view.ledger.evidence_by_id(e).is_some_and(|r| {
+                matches!(
+                    r.kind.class(),
+                    EvidenceClass::Allocation | EvidenceClass::Retention
+                )
+            })
+        })
+    {
+        return Ok(None);
+    }
+    // The harnesses that grew the column, in series order, whose runtime captures stacks.
+    let harnesses: Vec<(String, dla_core::HarnessManifest)> =
+        dla_core::grown::site_column_harnesses(&view, f)
+            .into_iter()
+            .filter_map(|h| {
+                let m = dla_core::HarnessManifest::load(&tc.run_dir, &h).ok()?;
+                dla_workload::harness::capture::supported(m.runtime)
+                    .alloc
+                    .then_some((h, m))
+            })
+            .collect();
+    if harnesses.is_empty() {
+        return Ok(None);
+    }
+    if let Some((h, _)) = harnesses
+        .iter()
+        .find(|(h, _)| has_alloc_capture(&tc.run_dir, h))
+    {
+        return Ok(Some(format!(
+            "an allocation capture of {h} was summarized and no growing stack ends at the finding's line, so the bundle holds no stack and no excerpt"
+        )));
+    }
+    // A hook driver (entry-path, probe or batch) first, else the test loop, else the first.
+    let (h, m) = harnesses
+        .iter()
+        .find(|(_, m)| m.is_hook_driver())
+        .or_else(|| harnesses.iter().find(|(_, m)| m.is_test_loop()))
+        .unwrap_or(&harnesses[0]);
+    let mode = crate::alloc_cmd::key_mode(m).as_str();
+    let commands = crate::alloc_cmd::stacks_commands(h, mode, &id.to_string(), "the line");
+    let loop_note = if m.is_test_loop() {
+        format!(
+            " A capture slows a test loop; a probe driver is the cheaper route: dla harness gen --lang {} --driver --probe {id}, then run it the same way.",
+            m.runtime.as_str()
+        )
+    } else {
+        String::new()
+    };
+    Err(Failure::refuse(
+        core_codes::STACKS_NOT_CAPTURED,
+        format!(
+            "the bundle of {id} would give the verifier no stack and no source excerpt: its growth is a count of blocks allocated at one line, and the stacks that lead to the line were not captured"
+        ),
+        format!("an allocation capture of {h} (harness/{h}/captures.json)"),
+        format!(
+            "{} ; then {} ; then dla bundle {id} again.{loop_note}",
+            commands[0], commands[1]
+        ),
+    ))
 }
 
 type Built = (String, usize, usize, Vec<String>, Vec<String>);
@@ -839,6 +987,7 @@ fn build(
     id: &FindingId,
     owner: Option<&str>,
     ids: &[EvidenceId],
+    stacks_note: Option<&str>,
 ) -> Result<Built, Failure> {
     let write = |name: &str, bytes: &[u8]| -> Result<(), Failure> {
         let path = dir.join(name);
@@ -942,6 +1091,9 @@ fn build(
     if let Some(o) = owner {
         index["owner"] = json!(o);
     }
+    if let Some(n) = stacks_note {
+        index["stacks_note"] = json!(n);
+    }
     if !omitted.is_empty() {
         index["omitted"] = json!(omitted);
     }
@@ -969,6 +1121,68 @@ fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_newest_two_records_of_each_kind_that_name_the_finding_are_taken() {
+        use dla_core::{
+            Ledger, NewEvidence, NewFinding, Origin,
+            evidence::{Authority, EvidenceCoverage, Source, Tool},
+            state::{RunState, now_utc},
+        };
+        let dir = tempfile::tempdir().unwrap();
+        RunState::init("/p", None, 3600, None, now_utc())
+            .unwrap()
+            .save(dir.path())
+            .unwrap();
+        let mut l = Ledger::create(dir.path()).unwrap();
+        let mut add = |kind: EvidenceKind, authority: Authority, result: Value| {
+            l.add_evidence(NewEvidence {
+                source: Source::Repo {
+                    commit: "c".into(),
+                    path: None,
+                },
+                tool: Tool {
+                    name: "t".into(),
+                    version: "1".into(),
+                },
+                authority,
+                kind,
+                result,
+                raw: None,
+                coverage: EvidenceCoverage::default(),
+                limitations: vec![],
+                unknowns: vec![],
+            })
+            .unwrap();
+        };
+        add(EvidenceKind::GrowthSeries, Authority::Test, json!({}));
+        let named = || json!({"finding": "F1"});
+        // E2..E4 name F1, E5 names another finding, E6 and E7 are retention paths naming F1, E8
+        // is a static stack record that names it.
+        for _ in 0..3 {
+            add(EvidenceKind::AllocStack, Authority::Test, named());
+        }
+        add(
+            EvidenceKind::AllocStack,
+            Authority::Test,
+            json!({"finding": "F2"}),
+        );
+        add(EvidenceKind::RetentionPath, Authority::Test, named());
+        add(EvidenceKind::RetentionPath, Authority::Test, named());
+        add(EvidenceKind::AllocStack, Authority::Static, named());
+        let mut nf = NewFinding::new(
+            Origin::parse("census").unwrap(),
+            vec!["E1".parse().unwrap()],
+        );
+        nf.site = Some("a.py:1".into());
+        l.add_finding(nf).unwrap();
+        let f = l.finding(&"F1".parse().unwrap()).unwrap();
+        let got: Vec<String> = naming_records(&l, f)
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(got, ["E4", "E3", "E7", "E6"]);
+    }
 
     #[test]
     fn forbidden_keys_go_at_every_depth() {

@@ -200,6 +200,7 @@ siblings of the root.
 | | the finding has a `site` and a `holder` | `site-required`, `holder-required` |
 | | some non-leak member of the family is `refuted` | `nonleak-refutation-required` |
 | | the growth is not only the unit's own calls of the registration function of a start-up registration (trigger `direct`; the fix gives one route, an entry-path harness whose unit does not call it, then `dla alloc-test`) | `registration-only` |
+| `bundle F3` (confirmed or strong, leak-side) | the bundle holds an allocation or retention record when the growth is a count of blocks allocated at one line (`py.blocks@<file:line>`) and the runtime captures allocation stacks: run `dla harness run <H> --mode <m> --capture alloc` and the `dla summarize alloc-stack-diff` command it prints, then bundle again | `stacks-not-captured` |
 | `ledger confirm F3.n1` (non-leak) | a `discriminator` with `favors: non-leak`, and the leak-side root is `refuted` | `discriminator-required`, `discriminator-direction`, `leak-refutation-required` |
 | `ledger refute F3` (leak-side) | a discriminator with `favors: non-leak` | `discriminator-direction` (none at all: `discriminator-required`) |
 | `ledger refute F3.n1` (non-leak) | a discriminator with `favors: leak` | the same |

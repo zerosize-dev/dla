@@ -59,8 +59,9 @@ const PROTECTED: [&str; 9] = [
 
 /// Sentences that name the next step; a cut one reads as a different instruction: never shrunk.
 /// `junit_hint` and `pytest_hint` point at the project's own tests as a hookless harness;
-/// `queue_next` is the queue's next command with the count of what is left.
-const KEPT_WHOLE: [&str; 3] = ["junit_hint", "pytest_hint", "queue_next"];
+/// `queue_next` is the queue's next command with the count of what is left; `stacks_hint` is the
+/// alloc-test's sentence about capturing the stacks that lead to a growing allocation line.
+const KEPT_WHOLE: [&str; 4] = ["junit_hint", "pytest_hint", "queue_next", "stacks_hint"];
 
 /// Longest string kept whole in a protected value.
 const PROTECTED_STR: usize = 160;

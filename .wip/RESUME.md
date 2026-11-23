@@ -1390,3 +1390,17 @@ flat test-loop readings get only 9 second looks.
   (N, then A) from the same verified tree if the snapshot script allows, else one commit each
   with its own snapshot.
 - Experiment P (what the test loop keeps alive) still running.
+
+## Later on 2026-11-23
+
+- CI on main for 22bd696: success (run 45131266107, 53 minutes). 24a42ab (the card) is a
+  `[skip ci]` commit on top of it.
+- Experiment P, first result: the test objects of a round are held by pytest's own state. Chain:
+  a rewritten test module's `__loader__` (AssertionRewritingHook) -> Config -> plugin manager ->
+  Session -> `Session.items` (Function items) -> `Function._instance` (the test class instance) ->
+  its `__dict__` -> the objects the tests made. With ten test files that gave a one-time step
+  (two generations alive), not the steady growth of the real run. `session.items.clear()` plus
+  `hook.config = None` removed most of the step; the control line kept growing. One session with
+  K passes over the items worked (653 passed, 97 skipped every pass) but three lines still grew.
+  Second experiment running: full suite, name what anchors every round's Session, test cleanups.
+  Scripts: scratch u89.
