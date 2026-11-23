@@ -58,7 +58,7 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
 - A table at module level that the project fills at import time through a registration function (plugin
   modules call it, or a wrapper of it, at their top level), and that a driver grows by calling that function
   or its wrapper with new keys, is reported as grown by the registration function itself, not as reproduced
-  through the public API; it is a leak only if run-time input reaches that call. Any hook driver whose unit calls the registration function (or a wrapper the census recorded) gives that reading, and `dla ledger confirm` refuses such a finding with `registration-only` until an entry-path harness grows it without that call or an `N-INTENT` sibling closes it.
+  through the public API; it is a leak only if run-time input reaches that call. Any hook driver whose unit calls the registration function (or a wrapper the census recorded) gives that reading, and `dla ledger confirm` refuses such a finding with `registration-only`; one entry-path harness whose unit does not call it decides both readings (it grows there: confirm; it stays flat: `dla alloc-test` favors non-leak, refute the finding and confirm an `N-INTENT` sibling).
 - The project's own tests in a loop (`dla harness gen --lang python --pytest [--tests a,b]`): a leak that
   nothing holds (a reference an extension module never releases) has no static candidate and shows only as an
   allocation line that grows under a broad workload; the broadest workload a project has is its own tests.

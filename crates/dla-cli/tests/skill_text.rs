@@ -728,13 +728,13 @@ fn the_python_test_loop_is_never_put_under_a_shell_timeout_and_a_registration_ta
     );
     assert!(
         python.contains(
-            "Any hook driver whose unit calls the registration function (or a wrapper the census recorded) gives that reading, and `dla ledger confirm` refuses such a finding with `registration-only`"
+            "Any hook driver whose unit calls the registration function (or a wrapper the census recorded) gives that reading, and `dla ledger confirm` refuses such a finding with `registration-only`; one entry-path harness whose unit does not call it decides both readings"
         ),
         "python.md does not say that a direct finding cannot be confirmed"
     );
     let report = read("skills/detect-leak-anywhere/references/evidence-and-report.md");
     assert!(
-        report.contains("(trigger `direct`; the fix gives the non-leak sibling `N-INTENT` or an entry-path harness) | `registration-only` |"),
+        report.contains("(trigger `direct`; the fix gives one route, an entry-path harness whose unit does not call it, then `dla alloc-test`) | `registration-only` |"),
         "evidence-and-report.md does not list the registration-only refusal"
     );
 }

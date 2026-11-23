@@ -199,7 +199,7 @@ siblings of the root.
 | | a cited passing growth column tied to the finding (probe, site, owner or `candidates`) | `growth-not-tied` |
 | | the finding has a `site` and a `holder` | `site-required`, `holder-required` |
 | | some non-leak member of the family is `refuted` | `nonleak-refutation-required` |
-| | the growth is not only the unit's own calls of the registration function of a start-up registration (trigger `direct`; the fix gives the non-leak sibling `N-INTENT` or an entry-path harness) | `registration-only` |
+| | the growth is not only the unit's own calls of the registration function of a start-up registration (trigger `direct`; the fix gives one route, an entry-path harness whose unit does not call it, then `dla alloc-test`) | `registration-only` |
 | `ledger confirm F3.n1` (non-leak) | a `discriminator` with `favors: non-leak`, and the leak-side root is `refuted` | `discriminator-required`, `discriminator-direction`, `leak-refutation-required` |
 | `ledger refute F3` (leak-side) | a discriminator with `favors: non-leak` | `discriminator-direction` (none at all: `discriminator-required`) |
 | `ledger refute F3.n1` (non-leak) | a discriminator with `favors: leak` | the same |

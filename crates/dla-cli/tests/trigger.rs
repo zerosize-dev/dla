@@ -939,27 +939,14 @@ fn registry_project_with_a_run_time_entry(dir: &Path) {
 }
 
 const REGISTRY_CORE_SETUP: &str = "    from pkg import core\n    _state['core'] = core";
+/// An entry-path unit that only reads the table: it never registers.
+const REGISTRY_LOOKUP_UNIT: &str = "    _state['core'].lookup('.u%d' % key)";
 const REGISTRY_SETUP: &str =
     "    from pkg import api, core\n    _state['core'] = core\n    _state['api'] = api";
 /// A hook driver that registers a new extension through the wrapper, per unit.
 const REGISTRY_UNIT: &str = "    _state['core'].register_codecs('x', ['.u%d' % key])";
 /// An entry-path unit: a caller adds a plugin through the public function.
 const REGISTRY_ENTRY_UNIT: &str = "    _state['api'].add_plugin('p%d' % key, ['.p%d' % key])";
-
-/// Appends a discriminator that favors the non-leak side, as the tools do for a measured one.
-fn append_discriminator(r: &Run, supports: &str) -> String {
-    let ledger = r.run_dir.join("ledger.jsonl");
-    let text = fs::read_to_string(&ledger).unwrap();
-    let seq = text.lines().count() + 1;
-    let n = text.matches("\"type\":\"evidence\"").count() + 1;
-    let line = format!(
-        r#"{{"schema_version":2,"seq":{seq},"ts":"2026-01-02T03:05:00Z","type":"evidence","evidence_id":"E{n}","source":{{"repo":{{"commit":"abc"}}}},"tool":{{"name":"dla","version":"1"}},"authority":"test","kind":"discriminator","result":{{"test":"purge","favors":"non-leak","supports":["{supports}"],"finding":null}},"coverage":{{"status":"complete"}}}}"#
-    );
-    let mut f = fs::OpenOptions::new().append(true).open(&ledger).unwrap();
-    use std::io::Write;
-    writeln!(f, "{line}").unwrap();
-    format!("E{n}")
-}
 
 #[test]
 fn a_registry_grown_only_by_its_own_writer_is_not_confirmed_and_the_non_leak_way_closes_it() {
@@ -987,7 +974,12 @@ fn a_registry_grown_only_by_its_own_writer_is_not_confirmed_and_the_non_leak_way
         "{next:?}"
     );
     assert!(
-        next.iter().any(|c| c.contains("--hypothesis N-INTENT")),
+        next.iter().any(|c| c.starts_with(&format!(
+            "dla harness gen --lang python --driver --entry {f}"
+        ))) && next
+            .iter()
+            .any(|c| c.starts_with(&format!("dla alloc-test <H> --finding {f}")))
+            && !next.iter().any(|c| c.contains("--hypothesis N-INTENT")),
         "{next:?}"
     );
 
@@ -1004,38 +996,87 @@ fn a_registry_grown_only_by_its_own_writer_is_not_confirmed_and_the_non_leak_way
         assert!(message.contains(want), "{want}: {message}");
     }
     let fix = e["fix"].as_str().unwrap().to_owned();
-    assert!(
-        fix.contains(&format!(
-            "dla harness gen --lang python --driver --entry {f}"
-        )),
-        "{fix}"
-    );
-
-    // Way (a): the printed commands, with the evidence they leave to the caller.
-    let discriminator = append_discriminator(&r, "N-INTENT");
-    let way = fix
-        .split("(an intended table): ")
-        .nth(1)
-        .unwrap()
-        .split("; or the leak reading")
-        .next()
-        .unwrap();
-    let commands: Vec<String> = way
-        .split(", then ")
-        .map(|c| {
-            c.replace("<harness evidence>", &workload)
-                .replace("<discriminator that favors non-leak>", &discriminator)
-                .replace("<that discriminator>", &discriminator)
-        })
-        .collect();
-    assert_eq!(commands.len(), 4, "{commands:?}");
-    for c in &commands {
-        let words: Vec<String> = shell_words(c);
-        let words: Vec<&str> = words.iter().skip(1).map(String::as_str).collect();
-        r.ok(&words);
+    // One route: an entry-path harness whose unit does not call the registration function.
+    for want in [
+        &format!("dla harness gen --lang python --driver --entry {f}"),
+        &format!("dla alloc-test <H> --finding {f}"),
+        "dla ledger confirm F",
+        "--hypothesis N-INTENT",
+        "<the sibling id the add prints>",
+    ] {
+        let want = if want == "dla ledger confirm F" {
+            format!("dla ledger confirm {f} again")
+        } else {
+            want.to_owned()
+        };
+        assert!(fix.contains(&want), "{want}: {fix}");
     }
+    assert!(!fix.contains(&format!("{f}.n")), "{fix}");
+
+    // An earlier sibling (the warm-up one) exists: the N-INTENT sibling gets the next id.
+    r.ok(&[
+        "ledger",
+        "add",
+        "--sibling-of",
+        &f,
+        "--origin",
+        "hypothesis",
+        "--hypothesis",
+        "N-WARM",
+        "--refute-if",
+        "growth continues over the extra cycles",
+        "--evidence",
+        &workload,
+    ]);
+
+    // The entry-path harness: a unit that uses the public API without registering anything.
+    let g = r.ok(&[
+        "harness", "gen", "--lang", "python", "--driver", "--entry", &f,
+    ]);
+    assert_eq!(g["summary"]["purpose"], "entry-path", "{g}");
+    let h = g["summary"]["harness"].as_str().unwrap().to_owned();
+    r.fill(&h, REGISTRY_CORE_SETUP, REGISTRY_LOOKUP_UNIT);
+    r.varies(&h, "the extension a caller looks up");
+    let ran = r.ok(&["harness", "run", &h, "--mode", "both"]);
+    let series = ran["summary"]["series"][0].as_str().unwrap().to_owned();
+    let t2 = r.ok(&["trend", &series]);
+    assert_eq!(t2["targets"][0]["verdict"], "constant", "{t2}");
+    assert_eq!(t2["targets"][0]["trigger"], "direct", "{t2}");
+    let trend_ev = t2["evidence"][0].as_str().unwrap().to_owned();
+    let a = r.ok(&["alloc-test", &h, "--finding", &f]);
+    assert_eq!(a["favors"], "non-leak", "{a}");
+    let alloc_ev = a["evidence"].as_str().unwrap().to_owned();
+    let refute = a["next"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|c| c.starts_with(&format!("dla ledger refute {f} ")))
+        .unwrap_or_else(|| panic!("no refute of {f}: {a}"));
+    let words: Vec<&str> = refute.split_whitespace().skip(1).collect();
+    r.ok(&words);
     assert_eq!(r.row(&f)["state"], "refuted");
-    assert_eq!(r.row(&format!("{f}.n1"))["state"], "confirmed");
+
+    // Record the reading: the sibling the add prints, tested and confirmed with the same evidence.
+    let add = r.ok(&[
+        "ledger",
+        "add",
+        "--sibling-of",
+        &f,
+        "--origin",
+        "hypothesis",
+        "--hypothesis",
+        "N-INTENT",
+        "--refute-if",
+        "run-time input reaches the registration call",
+        "--evidence",
+        &trend_ev,
+    ]);
+    let sibling = add["id"].as_str().unwrap().to_owned();
+    assert_eq!(sibling, format!("{f}.n2"), "{add}");
+    r.ok(&["ledger", "test", &sibling, "--evidence", &workload]);
+    r.ok(&["ledger", "confirm", &sibling, "--evidence", &alloc_ev]);
+    assert_eq!(r.row(&sibling)["state"], "confirmed");
 }
 
 /// Splits a printed command into words, keeping a double-quoted part as one word.
