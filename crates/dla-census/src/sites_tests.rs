@@ -505,3 +505,10 @@ fn python_a_function_whose_only_callers_are_other_modules_own_functions_is_not_s
     let w = &entry(&es, "core.CODECS").facts.writer_sites[0];
     assert!(!w.startup, "{w:?}");
 }
+
+#[test]
+fn python_tmp_repro_test_file() {
+    let t = "from pkg import core\n\n\nclass TestCodecs:\n    def test_register(self):\n        core.register_codec(\"x\", \".x\")\n        core.register_codecs(\"x\", [\".y\"])\n";
+    let w = codec_writer(&[("tests_like/test_codecs.py", t)]);
+    panic!("{w:?}");
+}
