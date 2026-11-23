@@ -694,3 +694,36 @@ fn the_worker_is_told_to_run_the_command_run_status_prints_and_the_python_loop_i
         "worker.md still names the driver batch as the queue command"
     );
 }
+
+#[test]
+fn the_python_test_loop_is_never_put_under_a_shell_timeout_and_a_registration_table_has_its_reading()
+ {
+    // Line breaks do not matter: every text is read with its whitespace collapsed.
+    let read = |p: &str| {
+        fs::read_to_string(root().join(p))
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let python = read("skills/detect-leak-anywhere/references/python.md");
+    let stages = read("skills/detect-leak-anywhere/references/stages.md");
+    assert!(
+        python.contains(
+            "The loop runs up to its time limit of 1800 s, so never put `dla harness run` for it under the shell's `timeout`: start it in the background and wait for it."
+        ),
+        "python.md does not keep the loop out of the shell's timeout"
+    );
+    assert!(
+        stages.contains(
+            "The Python test loop runs up to its time limit of 1800 s, so start `dla harness run <H>` for it in the background (or let the tool move it there) and wait for it; never put it under the shell's `timeout`."
+        ),
+        "stages.md does not keep the loop out of the shell's timeout"
+    );
+    assert!(
+        python.contains(
+            "is reported as grown by the registration function itself, not as reproduced through the public API; it is a leak only if run-time input reaches that call."
+        ),
+        "python.md does not describe the registration-table reading"
+    );
+}

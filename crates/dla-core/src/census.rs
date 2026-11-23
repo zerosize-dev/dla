@@ -150,6 +150,12 @@ pub struct SiteFact {
     /// function (up to three calls up) is one. Read where the callers can be found.
     #[serde(default, skip_serializing_if = "is_false")]
     pub startup: bool,
+    /// When `startup` came through callers that are not initialisers themselves, the functions
+    /// on the way (the wrappers between the writer's function and the start-up statements that
+    /// call them), nearest first. Empty for a direct start-up call. A driver that calls one of
+    /// them calls the registration function through it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub startup_via: Vec<String>,
     /// The inserted key or value derives from a parameter of the enclosing function.
     #[serde(default, skip_serializing_if = "is_false")]
     pub param: bool,

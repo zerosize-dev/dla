@@ -526,6 +526,18 @@ fn driver_calling(run: &Run, h: &str, text: &str, writers: &[&str]) {
 
 /// Records the census facts of F1's one writer site.
 fn writer_facts(run: &Run, init: bool, startup: bool, param: bool, constant: bool) {
+    writer_facts_via(run, init, startup, param, constant, &[]);
+}
+
+/// The same, with the functions the census recorded between the writer and its start-up callers.
+fn writer_facts_via(
+    run: &Run,
+    init: bool,
+    startup: bool,
+    param: bool,
+    constant: bool,
+    via: &[&str],
+) {
     use crate::{
         FindingAnnotation,
         census::{HolderFacts, SiteFact, SiteKind},
@@ -541,6 +553,7 @@ fn writer_facts(run: &Run, init: bool, startup: bool, param: bool, constant: boo
                 function: Some("Register".into()),
                 init,
                 startup,
+                startup_via: via.iter().map(|v| (*v).to_owned()).collect(),
                 param,
                 constant,
                 exported: true,
@@ -592,6 +605,59 @@ fn a_start_up_registry_the_unit_feeds_directly_is_the_direct_reading() {
     assert!(matches!(
         run.triggers().trigger(&f(1)),
         Trigger::Direct { .. }
+    ));
+}
+
+/// A run whose unit calls the wrapper `register_all` of the writer `register` and made F1 grow.
+fn a_unit_that_calls_the_wrapper() -> Run {
+    let run = Run::new(1);
+    run.harness("H1", Kind::Entry, &[1]);
+    run.run(
+        "S1",
+        "H1",
+        "aa",
+        Some("the name"),
+        Some(&[(1, Verdict::Grew)]),
+    );
+    driver_calling(
+        &run,
+        "H1",
+        "def unit(i):\n    core.register_all(str(i), [str(i)])\n",
+        &["register"],
+    );
+    run
+}
+
+#[test]
+fn a_unit_that_calls_the_wrapper_of_a_start_up_writer_calls_the_registration_function_itself() {
+    // The census read the writer as start-up through the wrapper `register_all`.
+    let run = a_unit_that_calls_the_wrapper();
+    writer_facts_via(&run, false, true, true, false, &["register_all"]);
+    let t = run.triggers();
+    match t.trigger(&f(1)) {
+        Trigger::Direct {
+            harness, writer, ..
+        } => assert_eq!((harness.as_str(), writer.as_str()), ("H1", "register_all")),
+        other => panic!("{other:?}"),
+    }
+    // The wrapper is only a way to the writer when the census records it: without it the
+    // call of a function that is not the writer's is not the writer's call.
+    let run = a_unit_that_calls_the_wrapper();
+    writer_facts_via(&run, false, true, true, false, &[]);
+    assert!(matches!(
+        run.triggers().trigger(&f(1)),
+        Trigger::Reproduced { .. }
+    ));
+}
+
+#[test]
+fn a_wrapper_of_a_writer_that_a_run_time_caller_also_reaches_is_reproduced() {
+    // A run-time caller makes the writer not start-up, and no wrapper is recorded.
+    let run = a_unit_that_calls_the_wrapper();
+    writer_facts_via(&run, false, false, true, false, &[]);
+    assert!(matches!(
+        run.triggers().trigger(&f(1)),
+        Trigger::Reproduced { .. }
     ));
 }
 

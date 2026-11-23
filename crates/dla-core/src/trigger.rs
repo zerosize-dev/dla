@@ -231,6 +231,10 @@ pub struct Triggers {
     writers_all: BTreeMap<FindingId, Vec<String>>,
     /// `(finding, harness)` whose entry-path driver calls a writer function of the finding.
     direct: BTreeSet<(FindingId, String)>,
+    /// The wrapper the unit called, for a `(finding, harness)` in `direct` where the driver calls
+    /// no writer function itself but a function on the way to a start-up writer (the census
+    /// fact `startup_via`).
+    via_called: BTreeMap<(FindingId, String), String>,
     /// The census facts on the writer sites of each entry-path target that has some: whether
     /// every one runs at start-up (`init` or `startup`). A finding without facts is absent.
     startup: BTreeMap<FindingId, bool>,
@@ -266,7 +270,23 @@ impl Triggers {
                         .push(h.clone());
                 }
                 t.read_writers(run_dir, &h, &m);
-                t.find_direct_calls(run_dir, &h, &m);
+                let via: BTreeMap<FindingId, Vec<String>> = m
+                    .targets
+                    .iter()
+                    .map(|id| {
+                        let names: Vec<String> = view
+                            .ledger
+                            .annotation(id)
+                            .map(|a| a.facts.writer_sites.as_slice())
+                            .unwrap_or_default()
+                            .iter()
+                            .filter(|s| s.startup)
+                            .flat_map(|s| s.startup_via.iter().cloned())
+                            .collect();
+                        (id.clone(), names)
+                    })
+                    .collect();
+                t.find_direct_calls(run_dir, &h, &m, &via);
             }
             manifests.insert(h, m);
         }
@@ -384,8 +404,16 @@ impl Triggers {
     }
 
     /// Notes the targets of entry-path harness `h` whose driver calls a writer function of the
-    /// target itself (not in a comment): the unit feeds the holder's own writer.
-    fn find_direct_calls(&mut self, run_dir: &std::path::Path, h: &str, m: &HarnessManifest) {
+    /// target itself (not in a comment): the unit feeds the holder's own writer. Calling a
+    /// function the census records on the way from the start-up statements to a writer
+    /// (`via`, the wrappers of a registration function) is calling the writer itself.
+    fn find_direct_calls(
+        &mut self,
+        run_dir: &std::path::Path,
+        h: &str,
+        m: &HarnessManifest,
+        via: &BTreeMap<FindingId, Vec<String>>,
+    ) {
         let dir = HarnessManifest::dir_in(run_dir, h).join("driver");
         let Ok(rd) = std::fs::read_dir(&dir) else {
             return;
@@ -412,6 +440,10 @@ impl Triggers {
                 .any(|n| calls(&code, n.rsplit('.').next().unwrap_or(n)))
             {
                 self.direct.insert((id.clone(), h.to_owned()));
+            } else if let Some(w) = via.get(id).into_iter().flatten().find(|w| calls(&code, w)) {
+                self.direct.insert((id.clone(), h.to_owned()));
+                self.via_called
+                    .insert((id.clone(), h.to_owned()), w.clone());
             }
         }
     }
@@ -504,7 +536,12 @@ impl Triggers {
                                 .varies
                                 .clone()
                                 .unwrap_or_else(|| "not recorded".to_owned()),
-                            writer: self.writer.get(id).cloned().unwrap_or_default(),
+                            writer: self
+                                .via_called
+                                .get(&(id.clone(), r.harness.clone()))
+                                .or_else(|| self.writer.get(id))
+                                .cloned()
+                                .unwrap_or_default(),
                         };
                     }
                     // The census has no facts on the writer: not checked, neither reading.

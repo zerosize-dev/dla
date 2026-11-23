@@ -1342,6 +1342,7 @@ mod open;
                 function: Some("of".into()),
                 init: false,
                 startup,
+                startup_via: Vec::new(),
                 param,
                 constant,
                 exported: false,

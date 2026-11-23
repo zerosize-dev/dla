@@ -1936,6 +1936,7 @@ mod tests {
                         function: Some((*function).to_owned()),
                         init: false,
                         startup: false,
+                        startup_via: Vec::new(),
                         param: true,
                         constant: false,
                         exported: true,
