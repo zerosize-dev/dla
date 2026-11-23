@@ -1296,3 +1296,17 @@ flat test-loop readings get only 9 second looks.
 - CI round 5 on 6986215 (narrowed-loop change) is running (waiter bfy41cvuf, output u79/ci14). When green: commit
   the snapshot tree with commit-message-14.txt (the working tree then still holds builder M's work on top).
 - Open: task 83 (one project copy per harness), Jetty, `--detach` for long harness runs if the text fix is not enough.
+
+## State at about 06:12 UTC 2026-11-23
+
+- Working tree = main bd1fc84 + builder L (narrowed loop; frozen as 6986215, CI round 5 running, waiter bfy41cvuf)
+  + builder M (cut loop is no blocker; texts say plain foreground). L+M snapshot: 5e2c00347326b6ef2b0941bc4139bcbd8f27d65d
+  ([skip ci]). Local on L+M: whole suite 3319 passed 0 failed; pytest-dependent targets pass with the venv; clippy,
+  schema, fmt clean; static 64 pass; own mutations Q20 (narrowed marker) and Q21 (unfinished loop rule) each failed
+  named tests. Real library: blocker refused `loop-not-finished` with the loop generated and not run, and after its
+  run was killed; `harness-not-run` for the loop offers no blocker.
+- Order from here: CI round 5 green -> commit 6986215 with commit-message-14.txt, push main + dev branch -> push the
+  L+M tree as a non-skip frozen snapshot (CI round 6) -> when green commit it with commit-message-15.txt -> CI on main
+  -> Version 0.9.0-preview.6 -> release.yml with publish.
+- pillow-6 started 06:10 with the plugin and binary of 5e2c003 (waiter be591kayr). target/ is empty again.
+- Seen and not fixed: `dla run status` lists a killed harness process under `running` (no liveness check).
