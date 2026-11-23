@@ -1242,3 +1242,13 @@ flat test-loop readings get only 9 second looks.
   Task 83: one full project copy per harness is a product defect (disk use of a run).
 - CI round 4 on e6f8581 (registry change) still running (waiter bejx7vbjy, output u79/ci13).
 - Task 82 brief to write: a pytest loop made with --tests must not satisfy the queue's first step.
+
+## State at about 04:00 UTC 2026-11-23
+
+- main = bd1fc84 "Do not confirm a start-up registration table as a leak" (tree of e6f8581, CI round 4 run 45100885318
+  all green), on top of a2210bd (0.9.0-preview.5, published). Pushed to main and dev/wonderful-mccarthy-algc5s.
+  The working tree is clean. The registry change is NOT in a published preview yet (next preview: 0.9.0-preview.6).
+- pillow-4 still running (waiter bu48tyw00). target/ is empty.
+- Open work: task 82 (narrowed test loop must not satisfy the first step), task 83 (one project copy per harness),
+  Jetty not run, report quality items from pillow-2/3 (verifier stage skipped when the run ends incomplete,
+  mechanism text less exact in pillow-3).
