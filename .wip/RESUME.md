@@ -1265,3 +1265,16 @@ flat test-loop readings get only 9 second looks.
   satisfy the queue's first step. After it: my checks (mutations, real library), whole suite (keep 6 GB free), CI,
   commit message 14 to write, then pillow-5, then 0.9.0-preview.6.
 - Disk 19 GB free after deleting /root/dla-real/pillow-4; target/ was empty before builder L started.
+
+## State at about 04:57 UTC 2026-11-23
+
+- Fourteenth frozen snapshot 69862151a65951692a400d7202ee5edabdbf4cd5 = main bd1fc84 + builder L (a pytest loop made
+  with --tests is marked `pytest-narrowed` in its tools and does not end the queue's first step; kept-whole hint on a
+  narrowed loop). Local: whole suite 3315 passed 0 failed; pytest-dependent targets pass with the venv; clippy,
+  schema, fmt clean; static 64 pass; own mutation Q20 failed four named tests; real library: after a 2-file loop ran,
+  status and ledger list still print `dla harness run H1`. CI round 5 running (waiter bfy41cvuf, output u79/ci14).
+  When green: commit-snapshot-tree.sh 6986215 commit-message-14.txt, push main and the dev branch.
+- pillow-5 started 04:55 with the plugin and binary of 6986215 (waiter b2wb3pm85). target/ is empty again
+  (`cargo clean` to leave the run 19 GB). After the run: keep small files in /root/dla-real/pillow-5-keep, delete
+  /root/dla-real/pillow-5.
+- After both: Version 0.9.0-preview.6 (registry change + narrowed-loop change) once CI on main is green.
