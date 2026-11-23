@@ -155,8 +155,8 @@ count once (duplicates are merged only later, so a census candidate and a sweep 
 holder are one). The deadline never moves earlier (an extension made before sizing stays on top of the
 sized total), the same delta moves every unfinished worker's deadline, and the gate prints one line,
 for example `budget (auto): 3h for 1 runtime and 362 candidates (20 + 15x1 + 3x362 = 1121 min, capped
-at 3h)`. In the core the first such check sizes the budget for good. In a dispatched run each
-worker's first passing check at `sweep` or later sizes it from every registered worker's slice plus the
+at 3h)`. In a run without workers the core's first such check, or its first command after sweep and census, sizes the budget for good. In a dispatched run the core never sizes it (its own ledger holds none of the workers' candidates): each
+worker's first command after its own sweep and census (a gate check whether it passes or not, `dla ledger list`, `dla run status`, any command) sizes it from every registered worker's slice plus the
 main ledger (R is at least the number of workers), and may only raise it; the run state records
 which workers have (`budget.settled_workers`), and once every registered worker has, the budget is
 final. The Time line and the gate line show the estimate the budget was sized to (the largest). A stalled worker never sizes it, so

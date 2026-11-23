@@ -80,23 +80,60 @@ pub fn sweep_and_census_ran(cov: Option<&CoverageManifest>) -> bool {
     })
 }
 
-/// Settles an `auto` budget when sweep and census have run and it is not settled yet, with the
-/// same formula and the same state change as the first passing gate check. The run's own
-/// budget only (a worker's share follows the dispatch rules). Returns what it settled to and
-/// the extensions already on top of it.
-pub fn settle_auto_budget(ctx: &Ctx) -> Option<(dla_core::state::BudgetEstimate, u64)> {
-    if ctx.worker.is_some() {
-        return None;
+/// True when sweep and census have run for `runtime`: its coverage lists the `census`
+/// backend and at least one other.
+pub fn sweep_and_census_ran_for(cov: Option<&CoverageManifest>, runtime: &str) -> bool {
+    cov.is_some_and(|c| {
+        c.workers.iter().any(|(key, w)| {
+            (key == runtime || w.runtime == runtime)
+                && w.backends.contains_key("census")
+                && w.backends.len() > 1
+        })
+    })
+}
+
+/// True when the budget is ready to be sized by the command of `worker` (`None` for the run's
+/// own): sweep and census have run, for the worker's runtime in a worker's command. In a
+/// dispatched run (the state has registered workers) sizing belongs to the workers, so the
+/// run's own command never sizes it: its own ledger holds no candidate of the workers' slices.
+pub fn budget_ready(
+    state: &RunState,
+    cov: Option<&CoverageManifest>,
+    worker: Option<&str>,
+) -> bool {
+    match worker {
+        None => state.workers.is_empty() && sweep_and_census_ran(cov),
+        Some(w) => state
+            .workers
+            .iter()
+            .find(|x| x.name == w)
+            .is_some_and(|x| sweep_and_census_ran_for(cov, &x.runtime)),
     }
+}
+
+/// Settles an `auto` budget when sweep and census have run and it is not settled yet, with the
+/// same formula and the same state change as a passing gate check. In a run without workers it
+/// sizes the budget from the run's own view and the sizing is final. In a dispatched run only a
+/// worker's command sizes it (from the main ledger and every worker's slice), raise-only and
+/// once per worker. Returns what it settled to and the extensions already on top of it.
+pub fn settle_auto_budget(ctx: &Ctx) -> Option<(dla_core::state::BudgetEstimate, u64)> {
+    let worker = ctx.worker.as_deref();
     let state = RunState::load(&ctx.run_dir).ok()?;
     if !state.budget.auto || state.budget.settled || matches!(state.status, RunStatus::Aborted) {
         return None;
     }
-    let view = RunView::load(&ctx.run_dir).ok()?;
-    if !sweep_and_census_ran(view.coverage.as_ref()) {
+    if worker.is_some_and(|w| state.budget.settled_workers.iter().any(|x| x == w)) {
         return None;
     }
-    let estimate = timebudget::estimate(&view, None);
+    let cov = CoverageManifest::load(&ctx.run_dir).ok()?;
+    if !budget_ready(&state, cov.as_ref(), worker) {
+        return None;
+    }
+    let view = RunView::load_for(&ctx.run_dir, worker).ok()?;
+    let estimate = match worker {
+        Some(_) => timebudget::estimate_across(&ctx.run_dir, &view),
+        None => timebudget::estimate(&view, None),
+    };
     drop(view);
     RunState::update(&ctx.run_dir, |st| {
         let ext: u64 = st
@@ -105,7 +142,7 @@ pub fn settle_auto_budget(ctx: &Ctx) -> Option<(dla_core::state::BudgetEstimate,
             .iter()
             .map(|x| x.seconds + x.lapsed_seconds)
             .sum();
-        Ok(st.settle_budget(estimate.clone(), None).map(|_| {
+        Ok(st.settle_budget(estimate.clone(), worker).map(|_| {
             (
                 st.budget
                     .estimate

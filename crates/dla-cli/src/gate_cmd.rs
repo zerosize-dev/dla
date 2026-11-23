@@ -144,20 +144,23 @@ fn check(ctx: &Ctx, a: &CheckArgs) -> Res<GateOut> {
         out["worker"] = json!(w);
     }
     // The first passing check at `sweep` or a later stage sizes an `auto` budget from the
-    // view this check saw, and in the run's own gate that is final. In a dispatched run each
-    // worker's first passing check sizes it again from every worker's slice plus the main
+    // view this check saw, and in the run's own gate that is final. In a dispatched run only
+    // the workers size it: a worker's first command after its sweep and census (this check,
+    // passing or not, or any other command) sizes it from every worker's slice plus the main
     // ledger and may only raise it; it is final once every registered worker has. The final
     // gate does not size: it passes only once every finding is dispositioned, so the run's work is
     // done by then; a run that reaches it unsized reports `auto, not sized`.
+    // In a dispatched run sizing belongs to the workers: the run's own check never sizes it.
     let settles = match target {
         GateTarget::Stage(s) => s.at_least(Stage::Sweep),
         GateTarget::Final => false,
-    };
+    } && (worker.is_some() || view.state.workers.is_empty());
     let sized_by_worker =
         worker.is_some_and(|w| view.state.budget.settled_workers.iter().any(|x| x == w));
     // Sweep and census having run is enough to size it, whether this check passes or not
-    // (the core's own budget only: a worker's check follows the rule above).
-    let ready = worker.is_none() && crate::scope::sweep_and_census_ran(view.coverage.as_ref());
+    // (for the worker's runtime in a worker's check; never in the run's own check of a
+    // dispatched run).
+    let ready = crate::scope::budget_ready(&view.state, view.coverage.as_ref(), worker);
     if ((report.ok && settles) || ready)
         && view.state.budget.auto
         && !view.state.budget.settled

@@ -752,6 +752,57 @@ fn a_driver_reports_the_functions_it_ran_in_its_checkpoints() {
     assert_eq!(first["coverage"]["kind"], "functions", "{first}");
 }
 
+#[test]
+fn coverage_lists_functions_of_the_source_root_outside_the_scratch_copy() {
+    if !have_python() || !python3_ok("import sys; sys.monitoring") {
+        return;
+    }
+    // A package installed in editable mode is imported from the project the copy was made from.
+    let run = Run::new();
+    let src = run.dir.path().join("source");
+    fs::create_dir_all(src.join("lib")).unwrap();
+    fs::create_dir_all(src.join(".dla")).unwrap();
+    fs::write(src.join("lib/tool.py"), "def work():\n    return 1\n").unwrap();
+    fs::write(src.join(".dla/hidden.py"), "def secret():\n    return 2\n").unwrap();
+    fs::write(
+        run.project.join("use_lib.py"),
+        format!(
+            "import runpy\nimport lib.tool\nlib.tool.work()\n\
+             runpy.run_path({:?})['secret']()\n",
+            src.join(".dla/hidden.py")
+        ),
+    )
+    .unwrap();
+    let path = format!("{}:{}", run.agent.display(), src.display());
+    let items = |with_root: bool| -> Vec<String> {
+        let _ = fs::remove_file(run.out());
+        let mut env = vec![("PYTHONPATH", path.as_str())];
+        if with_root {
+            env.push(("DLA_SOURCE_ROOT", src.to_str().unwrap()));
+        }
+        run.python(&["use_lib.py"], &env);
+        let recs = run.records();
+        let rec = recs.iter().find(|r| r["phase"] == "exit").unwrap();
+        rec["coverage"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i.as_str().unwrap().to_string())
+            .collect()
+    };
+    let with = items(true);
+    assert!(
+        with.iter().any(|i| i == "lib.tool:work@lib/tool.py:1"),
+        "{with:?}"
+    );
+    assert!(with.iter().all(|i| !i.contains("secret")), "{with:?}");
+    let without = items(false);
+    assert!(
+        without.iter().all(|i| !i.contains("lib.tool")),
+        "{without:?}"
+    );
+}
+
 /// Runs `script` as `<project>/<name>` under the agent and returns every record it wrote. A
 /// script calls `sitecustomize.checkpoint(k)` where it wants a reading.
 fn records_of(run: &Run, name: &str, script: &str) -> Vec<Value> {
