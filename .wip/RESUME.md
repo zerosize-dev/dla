@@ -1651,3 +1651,16 @@ flat test-loop readings get only 9 second looks.
 - Running: full dynamic bench with frozen binaries (u97/dla-bench-H2, u97/dla-H2, parallel 3,
   output u97/dyn2.out, json u97/dyn2.json), task bxpjrwpls. Then whole suite and static bench
   (u95/suite.sh pattern without the Q29 step), snapshot, CI, commit 19, pillow-9.
+
+## 17:08 UTC: eighteenth snapshot frozen, CI running, pillow-9 started
+
+- Full dynamic bench with the corrected binaries (u97/dyn2.out): "63/64 pass, 1 xfail", "ok: 63
+  fixture(s) pass, 1 expected failure(s)", 57 minutes, no `harness-not-about` in its logs.
+- Whole tree: fmt clean, clippy clean, schema check 20 ok, pytest-dependent tests under 3.12
+  (21 and 17), whole suite 3365 passed 0 failed 5 ignored, static bench 64 pass.
+- Eighteenth frozen snapshot: d8ad3161eb36a09e1b2b2bb36a38e80ececd3ace (non-skip). CI waiter:
+  task b5rbbt6q8, logs u97/ci18. DO NOT push a non-skip snapshot while it runs.
+- After green CI: `bash wip-notes/commit-snapshot-tree.sh d8ad3161eb36a09e1b2b2bb36a38e80ececd3ace
+  wip-notes/commit-message-19.txt`, push main and main:dev/wonderful-mccarthy-algc5s.
+- pillow-9 started 17:08 with the plugin and binary of d8ad316; waiter task bd46xi7se.
+  `target/` was cleaned (8.4 GB).
