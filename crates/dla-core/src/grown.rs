@@ -164,6 +164,30 @@ pub(crate) fn alloc_tested(view: &RunView, root: &FindingId) -> bool {
     })
 }
 
+/// True when the leak-side finding `f` is at `site` (`file:line`) for the tie of an
+/// allocation-site count column: its own `site` is that line, or the census annotation of the
+/// finding lists the line among the writers of its holder (`writer_sites`, and the plain
+/// `writers` list). The column of a line that registers a new key per call counts what that
+/// line keeps, so it belongs to the finding of the table it writes into, whose own site is the
+/// line that defines the table. A non-leak finding is never at a site, and removers never count.
+pub fn finding_is_at_site(
+    ledger: &crate::ledger::Ledger,
+    f: &crate::finding::Finding,
+    site: &str,
+) -> bool {
+    let site = site.trim();
+    if f.polarity() != Polarity::Leak {
+        return false;
+    }
+    if f.site.as_deref().map(str::trim) == Some(site) {
+        return true;
+    }
+    ledger.annotation(&f.id).is_some_and(|a| {
+        a.writers.iter().any(|w| w.trim() == site)
+            || a.facts.writer_sites.iter().any(|w| w.site.trim() == site)
+    })
+}
+
 /// The `file:line` a column is tied to: its `site`, else the part of its name after `@`.
 pub fn column_site(c: &crate::trend::ColumnTrend) -> Option<&str> {
     c.site
@@ -237,11 +261,7 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
                 // after it (from this very column) is the one at the column's own site.
                 view.ledger
                     .findings()
-                    .find(|f| {
-                        f.site.as_deref().map(str::trim) == Some(site)
-                            && f.polarity() == Polarity::Leak
-                            && !f.id.is_sibling()
-                    })
+                    .find(|f| finding_is_at_site(&view.ledger, f, site) && !f.id.is_sibling())
                     .map(|f| f.id.clone())
             }) {
                 pointed.push((f, c.name.clone(), c.kind));
@@ -477,6 +497,115 @@ pub fn items(view: &RunView, grown: &[Grown]) -> Vec<BlockingItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        FindingAnnotation, Ledger, NewEvidence, NewFinding, Origin,
+        census::{HolderFacts, SiteFact, SiteKind},
+        evidence::{Authority, EvidenceCoverage, Source, Tool},
+    };
+
+    /// A ledger with F1 at `a.py:1` whose plain writer list has `a.py:6`, F2 at `a.py:10`
+    /// whose census facts have the writer site `a.py:12`, F3 at `a.py:20` with no annotation,
+    /// and F1.n1, a non-leak sibling of F1 whose own writer list has `a.py:30`.
+    fn scene() -> (tempfile::TempDir, Ledger) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut l = Ledger::create(dir.path()).unwrap();
+        l.add_evidence(NewEvidence {
+            source: Source::Repo {
+                commit: "c".into(),
+                path: None,
+            },
+            tool: Tool {
+                name: "t".into(),
+                version: "1".into(),
+            },
+            authority: Authority::Static,
+            kind: EvidenceKind::StaticHit,
+            result: serde_json::json!({}),
+            raw: None,
+            coverage: EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        })
+        .unwrap();
+        for site in ["a.py:1", "a.py:10", "a.py:20"] {
+            let mut nf = NewFinding::new(
+                Origin::parse("census").unwrap(),
+                vec![crate::EvidenceId::new(1)],
+            );
+            nf.site = Some(site.into());
+            l.add_finding(nf).unwrap();
+        }
+        let mut nf = NewFinding::new(
+            Origin::parse("hypothesis").unwrap(),
+            vec![crate::EvidenceId::new(1)],
+        );
+        nf.sibling_of = Some(FindingId::new(1));
+        nf.hypothesis = Some("N-WARM: warm-up".into());
+        nf.refute_if = Some(REFUTE_IF.into());
+        l.add_finding(nf).unwrap();
+        l.annotate(&FindingId::new(1), vec!["a.py:6".into()], vec![], None)
+            .unwrap();
+        l.annotate_record(FindingAnnotation {
+            facts: HolderFacts {
+                writer_sites: vec![SiteFact {
+                    site: "a.py:12".into(),
+                    kind: SiteKind::Insert,
+                    depth: 0,
+                    function: None,
+                    init: false,
+                    startup: false,
+                    startup_via: vec![],
+                    param: false,
+                    constant: false,
+                    exported: false,
+                }],
+                ..Default::default()
+            },
+            ..FindingAnnotation::new(FindingId::new(2))
+        })
+        .unwrap();
+        let sibling = l.findings().find(|f| f.id.is_sibling()).unwrap().id.clone();
+        l.annotate(&sibling, vec!["a.py:30".into()], vec![], None)
+            .unwrap();
+        (dir, l)
+    }
+
+    fn at(l: &Ledger, site: &str) -> Vec<String> {
+        l.findings()
+            .filter(|f| finding_is_at_site(l, f, site))
+            .map(|f| f.id.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_finding_is_at_its_own_site() {
+        let (_d, l) = scene();
+        assert_eq!(at(&l, "a.py:1"), ["F1"]);
+        assert_eq!(at(&l, " a.py:20 "), ["F3"]);
+    }
+
+    #[test]
+    fn a_finding_is_at_a_writer_line_of_its_holder_listed_plainly_or_in_the_census_facts() {
+        let (_d, l) = scene();
+        assert_eq!(at(&l, "a.py:6"), ["F1"]);
+        assert_eq!(at(&l, "a.py:12"), ["F2"]);
+    }
+
+    #[test]
+    fn a_sibling_is_never_at_a_site() {
+        let (_d, l) = scene();
+        assert!(at(&l, "a.py:30").is_empty());
+    }
+
+    #[test]
+    fn a_site_that_is_neither_has_no_finding_and_a_remover_does_not_count() {
+        let (_d, mut l) = scene();
+        assert!(at(&l, "a.py:7").is_empty());
+        assert!(at(&l, "b.py:6").is_empty());
+        l.annotate(&FindingId::new(3), vec![], vec!["a.py:25".into()], None)
+            .unwrap();
+        assert!(at(&l, "a.py:25").is_empty());
+    }
 
     #[test]
     fn a_pytest_loop_growth_is_decided_on_a_small_driver_of_its_own_first() {

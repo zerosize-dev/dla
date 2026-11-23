@@ -1360,6 +1360,25 @@ def _blocks_checkpoint(limitations):
 # ---------------------------------------------------------------------------------------------
 
 
+def _clear_interpreter_caches():
+    """Empties the interpreter's own caches (the type attribute cache keeps a reference to the
+    name string of every attribute lookup, and a name built at run time is a new string each
+    time), so that a block it holds is not counted as held by the program. Never raises. When
+    the interpreter has no call for it, a limitation line says so, once per process."""
+    try:
+        clear = getattr(sys, "_clear_internal_caches", None)  # 3.13 and later
+        if clear is None:
+            clear = getattr(sys, "_clear_type_cache", None)  # before 3.13 (deprecated after)
+        if clear is not None:
+            clear()
+            return
+    except BaseException:
+        pass
+    note(
+        "the interpreter's attribute cache could not be emptied: lines that build attribute names at run time can show live blocks that the program does not hold"
+    )
+
+
 def _build(phase, x, last):
     limitations = []
     tick = phase == "tick"
@@ -1394,6 +1413,7 @@ def _build(phase, x, last):
         os_before_gc = os_now
         gc.collect()
         gc.collect()
+        _clear_interpreter_caches()
     values = {}
     # The blocks are counted before any figure of this record is read (see "py.blocks").
     counted = None

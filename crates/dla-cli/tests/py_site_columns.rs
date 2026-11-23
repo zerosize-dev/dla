@@ -473,6 +473,226 @@ fn the_alloc_test_decides_by_the_site_column_and_the_trend_evidence_confirms() {
     assert!(open.is_empty(), "{open:?}");
 }
 
+/// Adds the finding of the table that `shop/store.py` writes into: its own site is the line that
+/// defines the table (line 1), and the census annotation lists the line of the column (line 5) as
+/// a writer of the holder. Returns its id.
+fn add_table_finding(r: &Run, evidence: &str) -> String {
+    let added = ok(
+        &r.project,
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "growth-series",
+            "--evidence",
+            evidence,
+            "--site",
+            "shop/store.py:1",
+            "--region",
+            "heap",
+            "--holder",
+            "static/global",
+        ],
+    );
+    let f = added["id"].as_str().unwrap().to_owned();
+    ok(&r.project, &["ledger", "annotate", &f, "--writer", SITE]);
+    f
+}
+
+fn site_adds(t: &Value) -> usize {
+    t["next"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|n| n.starts_with(ADD_PREFIX) && n.contains(&format!(" --site {SITE} ")))
+        .count()
+}
+
+#[test]
+fn a_column_at_a_writer_line_of_a_finding_is_tied_to_it_and_the_gate_asks_for_no_second_finding() {
+    if !have_python() {
+        return;
+    }
+    let r = prepared();
+    let t = r.trend();
+    let e = evidence_of(&Run::next_of(&t, ADD_PREFIX).unwrap());
+    let f = add_table_finding(&r, &e);
+    // The gate (on the first trend, made before the finding existed) ties the column to the
+    // finding of the table and asks for nothing at the line; the finding has no disposition.
+    let missing = r.final_gate();
+    let items = column_items(&missing);
+    assert_eq!(items.len(), 1, "{missing:?}");
+    let desc = items[0]["description"].as_str().unwrap();
+    assert!(
+        desc.contains("tied only to findings that have no disposition"),
+        "{}",
+        items[0]
+    );
+    let fix = items[0]["fix"].as_str().unwrap();
+    assert!(!fix.contains(&format!(" --site {SITE} ")), "{fix}");
+    // The open finding is the item that names the route.
+    let item = missing
+        .iter()
+        .find(|m| m["id"] == f.as_str())
+        .unwrap_or_else(|| panic!("{missing:?}"));
+    assert!(
+        item["fix"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("dla alloc-test H1 --finding {f}")),
+        "{item}"
+    );
+    // The finding counts as grown by the column: it cannot be closed unmeasured.
+    for reason in ["inconclusive", "not_exercised"] {
+        let o = dla(
+            &r.project,
+            &[
+                "ledger",
+                "resolve",
+                &f,
+                "--as",
+                "unresolved",
+                "--reason",
+                reason,
+                "--remedy",
+                "x",
+            ],
+        );
+        assert_ne!(o.code, 0, "{reason}: {}", o.text);
+        assert_eq!(o.json["error"]["code"], "growth-not-measured", "{}", o.text);
+        assert!(
+            o.json["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(COLUMN),
+            "{}",
+            o.text
+        );
+    }
+    // A new trend lists the finding as the candidate of the column and prints no command that
+    // adds a finding at the line; it leads with the route for the finding.
+    let t2 = r.trend();
+    let col = t2["passed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["column"] == COLUMN)
+        .unwrap()
+        .clone();
+    assert_eq!(col["candidates"], serde_json::json!([f]), "{col}");
+    assert_eq!(site_adds(&t2), 0, "{}", t2["next"]);
+    assert!(
+        Run::next_of(&t2, &format!("dla alloc-test H1 --finding {f}")).is_some(),
+        "{}",
+        t2["next"]
+    );
+    // Once the finding has a disposition the gate lists no item for the column.
+    let workload = r
+        .ledger()
+        .iter()
+        .filter(|v| v["kind"] == "workload")
+        .filter_map(|v| v["evidence_id"].as_str().map(str::to_owned))
+        .next_back()
+        .unwrap();
+    ok(
+        &r.project,
+        &[
+            "ledger",
+            "add",
+            "--sibling-of",
+            &f,
+            "--origin",
+            "hypothesis",
+            "--hypothesis",
+            "N-WARM",
+            "--refute-if",
+            "growth continues over the extra cycles",
+            "--evidence",
+            &e,
+        ],
+    );
+    ok(&r.project, &["ledger", "test", &f, "--evidence", &workload]);
+    let a = ok(&r.project, &["alloc-test", "H1", "--finding", &f]);
+    assert_eq!(a["favors"], "leak", "{a}");
+    ok(
+        &r.project,
+        &[
+            "ledger",
+            "refute",
+            &format!("{f}.n1"),
+            "--evidence",
+            a["evidence"].as_str().unwrap(),
+        ],
+    );
+    // The evidence of the second trend, which lists the finding as the candidate of the column,
+    // confirms (the first trend was made before the finding had the writer).
+    let counter = r
+        .ledger()
+        .iter()
+        .filter(|v| v["kind"] == "unit-count-series")
+        .filter_map(|v| v["evidence_id"].as_str().map(str::to_owned))
+        .find(|id| {
+            t2["evidence"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|x| x == id.as_str())
+        })
+        .unwrap_or_else(|| panic!("{}", t2["evidence"]));
+    let c = ok(
+        &r.project,
+        &["ledger", "confirm", &f, "--evidence", &counter],
+    );
+    assert_eq!(c["to"], "confirmed", "{c}");
+    let after = r.final_gate();
+    assert!(
+        column_items(&after).is_empty(),
+        "{:?}",
+        column_items(&after)
+    );
+}
+
+#[test]
+fn a_remover_line_or_a_finding_without_that_writer_does_not_tie_the_column() {
+    if !have_python() {
+        return;
+    }
+    let r = prepared();
+    let t = r.trend();
+    let e = evidence_of(&Run::next_of(&t, ADD_PREFIX).unwrap());
+    let added = ok(
+        &r.project,
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "growth-series",
+            "--evidence",
+            &e,
+            "--site",
+            "shop/store.py:1",
+            "--region",
+            "heap",
+            "--holder",
+            "static/global",
+        ],
+    );
+    let f = added["id"].as_str().unwrap();
+    ok(&r.project, &["ledger", "annotate", f, "--remover", SITE]);
+    let items = column_items(&r.final_gate())
+        .into_iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert!(
+        items[0]["fix"].as_str().unwrap().starts_with(ADD_PREFIX),
+        "{}",
+        items[0]
+    );
+    assert_eq!(site_adds(&r.trend()), 1);
+}
+
 /// A run with a hand-written series S1 of harness H1 whose columns are `py.traced` (a gauge, the
 /// whole process) first and the allocation-site column second, both rising.
 fn synthetic() -> (tempfile::TempDir, PathBuf) {
