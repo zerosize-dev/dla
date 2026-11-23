@@ -1127,13 +1127,10 @@ fn two_table_project(dir: &Path) {
 fn every_table_a_hook_drivers_registration_call_grows_is_direct_not_only_its_target() {
     let r = Run::with_project(&["--budget", "3h"], two_table_project);
     let (codecs, mimes) = (r.id_at("pkg/core.py:1"), r.id_at("pkg/core.py:2"));
-    let g = r.ok(&["harness", "gen", "--lang", "python", "--driver", "--next"]);
-    let _ = g;
-    // The driver declares one table only.
-    let path = r.run_dir.join("harness/H1/harness.json");
-    let mut m: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-    m["targets"] = json!([codecs]);
-    fs::write(&path, m.to_string()).unwrap();
+    // The driver is generated for one table only; nothing is edited by hand.
+    r.ok(&[
+        "harness", "gen", "--lang", "python", "--driver", "--probe", &codecs,
+    ]);
     r.fill(
         "H1",
         REGISTRY_CORE_SETUP,
@@ -1142,6 +1139,32 @@ fn every_table_a_hook_drivers_registration_call_grows_is_direct_not_only_its_tar
     r.ok(&["harness", "run", "H1", "--mode", "both"]);
     let t = r.ok(&["trend", "S1"]);
     let ev = t["evidence"][0].as_str().unwrap().to_owned();
+    let targets: Vec<&str> = t["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["finding"].as_str().unwrap())
+        .collect();
+    assert_eq!(targets, [codecs.as_str()], "{t}");
+    // The other table is no target, but its probe column passes and is tied to it.
+    assert!(
+        t["passed"].as_array().unwrap().iter().any(|c| {
+            c["candidates"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|x| x == mimes.as_str()))
+        }),
+        "{t}"
+    );
+    let a = r.ok(&["alloc-test", "H1", "--finding", &mimes]);
+    assert!(
+        !a["next"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|c| c.starts_with("dla ledger confirm")),
+        "{a}"
+    );
     for id in [&codecs, &mimes] {
         let e = r.refused(&["ledger", "confirm", id, "--evidence", &ev]);
         assert_eq!(e["code"], "registration-only", "{id}: {e}");
