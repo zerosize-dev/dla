@@ -1234,3 +1234,11 @@ flat test-loop readings get only 9 second looks.
   loop (H2), did not run it, generated a loop with `--tests` on three files (H3) and ran that, so the loop step
   counted as done and the leak line was not seen. Task 82: a narrowed loop must not satisfy the queue's first step.
 - Disk: pillow-4 uses 5.5 GB and grows; `cargo clean -p dla-cli` freed 3.6 GB (rebuild dla-cli before any cargo test).
+
+## State at about 03:50 UTC 2026-11-23
+
+- pillow-4 still running; it has 114 harness directories, each with a 79 MB copy of the project (9.1 GB). To give it
+  room I ran `cargo clean` (target is EMPTY now: the next cargo command rebuilds everything, about 15 to 20 minutes).
+  Task 83: one full project copy per harness is a product defect (disk use of a run).
+- CI round 4 on e6f8581 (registry change) still running (waiter bejx7vbjy, output u79/ci13).
+- Task 82 brief to write: a pytest loop made with --tests must not satisfy the queue's first step.
