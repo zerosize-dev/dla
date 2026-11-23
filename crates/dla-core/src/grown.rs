@@ -506,13 +506,14 @@ pub fn growth_evidence(
     root: &crate::finding::Finding,
     prefer: &[String],
 ) -> Option<EvidenceId> {
+    // Only what the confirm rule accepts: a growth record obtained by a test, a live observation
+    // or a dump whose gate passed (`machine::is_passing_growth`). A record with static authority
+    // can pass its gate and still be refused by `dla ledger confirm`.
     let growth = || {
-        records.iter().copied().filter(|e| {
-            matches!(
-                e.kind,
-                EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries
-            )
-        })
+        records
+            .iter()
+            .copied()
+            .filter(|e| crate::machine::is_passing_growth(e))
     };
     let newest = |hits: Vec<&EvidenceRecord>| -> Option<EvidenceId> {
         hits.iter()
@@ -684,10 +685,14 @@ impl ConfirmRoute {
 }
 
 /// The route to confirm the leak-side root `root`, when it has one: an alloc-test bound to its
-/// family, on a harness that is about it ([`harness_about`]), whose discriminator favors leak
-/// and is the newest such record (a newer alloc-test that favors non-leak, or says inconclusive,
-/// lifts it), while the root is still open (a candidate or under test) and its trigger is not
-/// `direct` (a confirm of that is refused for another reason, and its fix is the entry-path
+/// family, run on a hook driver made for it (the finding is among its targets, or it is the
+/// entry-path harness of the finding: `Target` and `EntryPath` of [`harness_about`]), whose
+/// discriminator favors leak and is the newest alloc-test on a harness about the finding (a newer
+/// one on any such harness that favors non-leak, or says inconclusive, lifts it). An alloc-test of
+/// the project's whole workload, of a test loop, or on a harness about the finding only through a
+/// probe, a column, cited evidence or a capture gives no route: the growth there may be kept alive
+/// by another holder, and closing the finding unresolved stays possible. The root has to be still
+/// open (a candidate or under test) and its trigger not `direct` (a confirm of that is refused for another reason, and its fix is the entry-path
 /// route). The commands are [`confirm_commands`].
 pub fn route_to_confirm(view: &RunView, root: &FindingId) -> Option<ConfirmRoute> {
     let ledger = &view.ledger;
@@ -706,17 +711,23 @@ pub fn route_to_confirm(view: &RunView, root: &FindingId) -> Option<ConfirmRoute
         .map(|f| f.id.clone())
         .collect();
     let records: Vec<&EvidenceRecord> = ledger.evidence().collect();
-    let (disc, favors) = bound_alloc_tests(&records, &family)
+    // The newest alloc-test on any harness about the finding decides (a newer one that does not
+    // favor leak lifts the route); the route needs it to have run on a driver made for the finding.
+    let (disc, favors, made_for_it) = bound_alloc_tests(&records, &family)
         .into_iter()
         .rev()
-        .find(|(e, _)| {
-            e.result
+        .find_map(|(e, f)| {
+            let m = e
+                .result
                 .get("harness")
                 .and_then(|h| h.as_str())
-                .and_then(|h| crate::harness::HarnessManifest::load(dir, h).ok())
-                .is_some_and(|m| harness_about(view, &m, root).is_some())
+                .and_then(|h| crate::harness::HarnessManifest::load(dir, h).ok())?;
+            let about = harness_about(view, &m, root)?;
+            let made = m.is_hook_driver()
+                && matches!(about, HarnessAbout::Target | HarnessAbout::EntryPath);
+            Some((e, f, made))
         })?;
-    if favors != crate::discriminator::Favors::Leak {
+    if favors != crate::discriminator::Favors::Leak || !made_for_it {
         return None;
     }
     if matches!(
@@ -1634,6 +1645,54 @@ mod tests {
         alloc_test(&mut l, "leak", "H1");
         let (_r, view) = routed(l, false);
         assert_eq!(route_to_confirm(&view, &f1()), None);
+    }
+
+    /// [`routed`] with H1 built from `extra` and the trend column `column`.
+    fn routed_with(
+        l: Ledger,
+        extra: serde_json::Value,
+        column: serde_json::Value,
+    ) -> (tempfile::TempDir, RunView) {
+        let dir = tempfile::tempdir().unwrap();
+        manifest("H1", extra).save(dir.path()).unwrap();
+        let mut view = view_with(l, column);
+        view.run_dir = Some(dir.path().to_path_buf());
+        (dir, view)
+    }
+
+    #[test]
+    fn only_a_driver_made_for_the_finding_gives_a_route() {
+        let untied = serde_json::json!({"name": "py.traced", "unit": "bytes"});
+        let tied = serde_json::json!({"name": "py.blocks@a.py:1", "site": "a.py:1"});
+        let cases = [
+            // A hook driver that targets the finding.
+            (serde_json::json!({"targets": ["F1"]}), untied.clone(), true),
+            // The whole workload of the project, a test loop, a driver about it only through a
+            // column or a probe: no route.
+            (
+                serde_json::json!({"mode": "command", "workload": "w"}),
+                untied.clone(),
+                false,
+            ),
+            (
+                serde_json::json!({"tools": [crate::harness::PYTEST_TOOL]}),
+                untied.clone(),
+                false,
+            ),
+            (serde_json::json!({}), tied, false),
+            (
+                serde_json::json!({"probes": [{"id": "P1", "finding": "F1", "target": {"kind": "py-module", "module": "m"}}]}),
+                untied,
+                false,
+            ),
+        ];
+        for (extra, column, route) in cases {
+            let (_d, mut l) = scene();
+            growth(&mut l, "S2");
+            alloc_test(&mut l, "leak", "H1");
+            let (_r, view) = routed_with(l, extra.clone(), column);
+            assert_eq!(route_to_confirm(&view, &f1()).is_some(), route, "{extra}");
+        }
     }
 
     #[test]

@@ -17,11 +17,18 @@ accepted, with 107 of 180 budget minutes left, and the report ended with no
 leak confirmed. Two commands would have confirmed it.
 
 A leak-side finding now has a route to confirm when the newest alloc-test
-bound to it, on a harness that is about it, favors leak: the refute of
-each open N-* sibling that the discriminator rules out, the test when the
-finding is still a candidate, and the confirm with the growth evidence the
-confirm rule accepts. The route is built by the code that writes the `next`
-list of the alloc-test, so the two cannot differ.
+bound to it favors leak and ran on a driver made for the finding: a hook
+driver that has the finding among its targets, or its entry-path harness.
+The route is the refute of each open N-* sibling that the discriminator
+rules out, the test when the finding is still a candidate, and the confirm
+with the growth evidence the confirm rule accepts. It is built by the code
+that writes the `next` list of the alloc-test, so the two cannot differ.
+
+An alloc-test on the project's whole workload or on a test loop gives no
+route. There a line can grow because another holder keeps its objects
+alive, so "favors leak, not isolated" is a real state and closing it
+unresolved stays possible; the next step is a driver of its own for the
+line.
 
 `dla ledger resolve --as unresolved` is refused with `leak-favored` for
 such a finding and for its siblings, for every reason, and the fix is the
@@ -34,13 +41,22 @@ The two confirm refusals name real ids. `growth-gate-failed` says which
 cited record is a discriminator and gives the confirm command with the
 growth evidence of the finding, preferring the series of the harness that
 was just measured. `nonleak-refutation-required` gives the refute of the
-sibling with the discriminator that exists, then the confirm.
+sibling with the discriminator that exists, then the confirm. The evidence
+named is only evidence the confirm rule accepts: a record with static
+authority can pass its gate and is still refused, and the older table test
+of that refusal now runs the command the fix gives.
 
 Replayed on a copy of that run's state, cut before the finding was closed:
 the close is refused with the two commands, and running them confirms the
 finding at the documented line.
 
-Not seen yet: an unattended run with this change. The bench tool's
-mechanical flow closes a candidate unresolved when its alloc-test favors
-leak on a column that did not pass; that close is refused now. No fixture
-reaches that path.
+The first version of the rule held for every harness that is about the
+finding. The bench tool's mechanical run on the fixtures showed that this
+is too wide: four fixtures add a finding at a growing allocation line,
+alloc-test it on the fixture's own workload and close it unresolved by
+fixed policy, and that close was refused. The rule was narrowed to a driver
+made for the finding, and those fixtures end as before.
+
+Not seen yet: an unattended run with this change. Not covered: an
+alloc-test on a test loop that favors leak, followed by an inconclusive
+close.

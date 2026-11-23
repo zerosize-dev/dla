@@ -130,7 +130,7 @@ no command to add one by hand. Its `result` carries:
 | `finding` | the finding it is bound to, or null |
 | `column`, `columns` | the tested columns, each with its own verdict and numbers |
 
-After an alloc-test that favors leak, run the commands of its `next` in order (the refute of each open non-leak sibling, then the confirm with the growth evidence); a finding with a leak-favoring alloc-test is confirmed or refuted, never closed unresolved (`leak-favored`).
+After an alloc-test that favors leak on a driver made for the finding (a hook driver that targets it), run the commands of its `next` in order (the refute of each open non-leak sibling, then the confirm with the growth evidence); a finding with such an alloc-test is confirmed or refuted, never closed unresolved (`leak-favored`). An alloc-test of the project's whole workload or of a test loop that favors leak does not isolate the finding: its next step is a narrower driver, and closing it unresolved stays possible.
 
 `dla alloc-test H1 [--finding F3]` re-runs the harness with `iterations + extra` points (extra
 defaults to the iteration count) and a purge applied at the last point, then tests each chosen
@@ -197,7 +197,7 @@ siblings of the root.
 |---|---|---|
 | `ledger test F3 --evidence E` | a `workload` evidence from `harness gen` or `harness run` among the cited or supporting evidence | `harness-required` |
 | `ledger test F3` (leak-side) | at least one non-leak sibling in the family | `sibling-required` |
-| `ledger resolve F3 --as unresolved` (any reason; `time_budget` while the budget is over the floor), `ledger close-rest` | the newest alloc-test bound to the finding, on a harness about it, does not favor leak (a leak-favoring one is confirmed or refuted: the fix is the refute of each open sibling, the test when it is a candidate and the confirm, with real ids; `close-rest` leaves the finding with them) | `leak-favored` |
+| `ledger resolve F3 --as unresolved` (any reason; `time_budget` while the budget is over the floor), `ledger close-rest` | the newest alloc-test bound to the finding, on a harness about it, does not favor leak, or favors it on something other than a hook driver made for the finding (a leak-favoring one on a driver made for the finding is confirmed or refuted: the fix is the refute of each open sibling, the test when it is a candidate and the confirm, with real ids; `close-rest` leaves the finding with them) | `leak-favored` |
 | `ledger confirm F3` (leak-side) | a `growth-series` or `unit-count-series` evidence of authority test, live or dump whose result has `gate: pass` | `growth-gate-failed` (a cited discriminator is said to be no growth evidence, and the fix is the confirm with the growth evidence that passed) |
 | | a cited passing growth column tied to the finding (probe, site, owner or `candidates`) | `growth-not-tied` |
 | | the finding has a `site` and a `holder` | `site-required`, `holder-required` |

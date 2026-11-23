@@ -839,7 +839,7 @@ fn the_references_say_a_finding_with_a_leak_favoring_alloc_test_is_confirmed_or_
     let stages = read("skills/detect-leak-anywhere/references/stages.md");
     let report = read("skills/detect-leak-anywhere/references/evidence-and-report.md");
     let verify = read("docs/VERIFY.md");
-    let sentence = "After an alloc-test that favors leak, run the commands of its `next` in order (the refute of each open non-leak sibling, then the confirm with the growth evidence); a finding with a leak-favoring alloc-test is confirmed or refuted, never closed unresolved (`leak-favored`).";
+    let sentence = "After an alloc-test that favors leak on a driver made for the finding (a hook driver that targets it), run the commands of its `next` in order (the refute of each open non-leak sibling, then the confirm with the growth evidence); a finding with such an alloc-test is confirmed or refuted, never closed unresolved (`leak-favored`). An alloc-test of the project's whole workload or of a test loop that favors leak does not isolate the finding: its next step is a narrower driver, and closing it unresolved stays possible.";
     assert!(stages.contains(sentence), "stages.md lacks the sentence");
     assert!(
         report.contains(sentence),

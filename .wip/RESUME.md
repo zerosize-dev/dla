@@ -1734,3 +1734,19 @@ flat test-loop readings get only 9 second looks.
   commit 20 (commit-message-20.txt needs the narrowed wording), pillow-10. I do not plan a third
   full local dynamic bench: the wide rule failed only those four, the narrowed rule can refuse
   nothing the wide one did not, and CI runs the full bench.
+
+## About 21:40 UTC: rule I narrowed; one defect found by the whole suite and fixed by me
+
+- Narrowed rule (builder): route only for a hook driver that targets the finding. Its bench run
+  on nine fixtures: 8 pass, 1 xfail (rust-tree-parent-links, the known expected failure).
+  My replay with u99/dla-I2: F572 still refused with the two-command route, and the two commands
+  confirm it. My mutation Q35 (candidate state dropped from the route): 5 tests fail.
+- Whole suite (first run on the narrowed tree): 3377 passed, 1 FAILED:
+  `confirm_leak_growth_gate_table` (crates/dla-core/tests/m3_rules.rs). Cause: a real defect in
+  the new hint: `grown::growth_evidence` named E12, a growth record with a passing gate and
+  STATIC authority, which `dla ledger confirm` refuses. My fix: the chooser filters with
+  `machine::is_passing_growth` (kind, authority test/live/dump, gate pass). The table test now
+  parses the evidence the fix names and runs that confirm on a fresh ledger (must be accepted).
+  My mutation Q36 (chooser back to kind only) fails that test.
+- Running: `bash u99/suite.sh` again on the final tree (output u99/suite2.out), task below.
+  Then non-skip snapshot, CI, commit 20, pillow-10.

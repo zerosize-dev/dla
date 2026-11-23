@@ -957,6 +957,12 @@ fn the_final_gate_lists_the_untied_site_columns_largest_slope_first() {
 /// favors leak, none of the ledger commands of `next` run: returns the finding, the trend evidence
 /// and the alloc-test result. With `test` the finding went under test before the alloc-test.
 fn leak_favored_unrefuted(r: &Run, test: bool) -> (String, String, Value) {
+    leak_favored(r, test, true)
+}
+
+/// [`leak_favored_unrefuted`] with the alloc-test on a probe driver made for the finding
+/// (`for_it`) or on H1, the loop of the series the line came from, which targets nothing.
+fn leak_favored(r: &Run, test: bool, for_it: bool) -> (String, String, Value) {
     let t = r.trend();
     let e = evidence_of(&Run::next_of(&t, ADD_PREFIX).unwrap());
     let added = ok(
@@ -1004,7 +1010,14 @@ fn leak_favored_unrefuted(r: &Run, test: bool) -> (String, String, Value) {
             .unwrap();
         ok(&r.project, &["ledger", "test", &f, "--evidence", &workload]);
     }
-    let a = ok(&r.project, &["alloc-test", "H1", "--finding", &f]);
+    let h = if for_it {
+        let h = second_driver(r, &f, STORE_SETUP, "    _state[\"store\"].pin(i)");
+        ok(&r.project, &["harness", "run", &h, "--mode", "fresh"]);
+        h
+    } else {
+        "H1".to_owned()
+    };
+    let a = ok(&r.project, &["alloc-test", &h, "--finding", &f]);
     assert_eq!(a["favors"], "leak", "{a}");
     (f, e, a)
 }
@@ -1013,7 +1026,7 @@ fn leak_favored_unrefuted(r: &Run, test: bool) -> (String, String, Value) {
 /// leak, as the route of the real run did it: returns the finding, the trend evidence and the
 /// alloc-test result. The finding is not confirmed yet.
 fn leak_at_the_line(r: &Run) -> (String, String, Value) {
-    let (f, e, a) = leak_favored_unrefuted(r, true);
+    let (f, e, a) = leak_favored(r, true, false);
     ok(
         &r.project,
         &[
@@ -1374,16 +1387,8 @@ fn a_finding_at_a_steady_line_whose_gate_failed_is_grown_and_cannot_be_closed_as
     ok(&r.project, &["ledger", "test", &f, "--evidence", &workload]);
     let a = ok(&r.project, &["alloc-test", "H1", "--finding", &f]);
     assert_eq!(a["decided_by"], COLUMN, "{a}");
-    // The alloc-test is bound: `growth-not-measured` is lifted. This one favored leak, so the
-    // close is refused as `leak-favored` (it used to be accepted: see
-    // `a_finding_whose_alloc_test_favored_leak_cannot_be_closed_and_the_route_confirms_it`).
-    assert_eq!(a["favors"], "leak", "{a}");
     let closed = resolve_unmeasured(&r, &f, "inconclusive");
-    assert_eq!(
-        closed.json["error"]["code"], "leak-favored",
-        "{}",
-        closed.text
-    );
+    assert_eq!(closed.code, 0, "{}", closed.text);
 }
 
 /// A column that is flat at the finding's line changes nothing: the finding is not grown, the
@@ -1634,6 +1639,18 @@ fn a_finding_whose_alloc_test_favored_leak_cannot_be_closed_and_the_route_confir
     let r = prepared();
     let (f, _e, a) = leak_favored_unrefuted(&r, true);
     let d = a["evidence"].as_str().unwrap().to_owned();
+    let h = r
+        .ledger()
+        .iter()
+        .find(|v| v["evidence_id"] == d.as_str())
+        .unwrap()["result"]["harness"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(
+        h, "H1",
+        "the alloc-test ran on a driver made for the finding"
+    );
     let sibling = format!("{f}.n1");
     let refused = close_unresolved(&r, &f, "inconclusive");
     assert_ne!(refused.code, 0, "{}", refused.text);
@@ -1642,7 +1659,7 @@ fn a_finding_whose_alloc_test_favored_leak_cannot_be_closed_and_the_route_confir
     assert_eq!(
         err["message"],
         format!(
-            "{f} cannot be closed unresolved: the alloc-test {d} on H1 favors leak (decided by {COLUMN}) and nothing measured since says otherwise."
+            "{f} cannot be closed unresolved: the alloc-test {d} on {h} favors leak (decided by {COLUMN}) and nothing measured since says otherwise."
         ),
         "{}",
         refused.text
@@ -1936,4 +1953,31 @@ fn close_rest_names_the_route_for_a_candidate_a_trend_gave_the_verdict_grew() {
         "{why}"
     );
     assert_eq!(out["closed"], 0, "{out}");
+}
+
+/// An alloc-test on the loop the line came from (H1 targets nothing) favors leak: the growth is
+/// the whole workload's, not isolated, so the finding can still be closed unresolved, `close-rest`
+/// leaves no route behind, and the gate's fix is not the route.
+#[test]
+fn an_alloc_test_of_a_loop_that_targets_nothing_does_not_hold_the_close() {
+    if !have_python() {
+        return;
+    }
+    let r = prepared();
+    let (f, _e, a) = leak_favored(&r, true, false);
+    assert_eq!(a["favors"], "leak", "{a}");
+    let d = a["evidence"].as_str().unwrap();
+    for m in r.final_gate().iter().filter(|m| m["id"] == f.as_str()) {
+        assert!(
+            !m["fix"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("--evidence {d}")),
+            "{m}"
+        );
+    }
+    let out = ok(&r.project, &["ledger", "close-rest"]);
+    assert!(!out.to_string().contains("leak-favored"), "{out}");
+    let closed = resolve_unmeasured(&r, &f, "inconclusive");
+    assert_eq!(closed.code, 0, "{}", closed.text);
 }
