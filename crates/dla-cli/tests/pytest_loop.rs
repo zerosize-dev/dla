@@ -859,3 +859,78 @@ fn gate_items_of_python_findings_name_the_loop_first_while_it_is_pending() {
         assert!(fix.contains(DRIVER), "{what}: {fix}");
     }
 }
+
+#[test]
+fn a_narrowed_loop_does_not_replace_the_loop_over_all_test_files() {
+    if !have_pytest() {
+        return;
+    }
+    let (_d, p) = prepared(true);
+    let gen_narrowed = |p: &Path| {
+        ok(
+            p,
+            &[
+                "harness",
+                "gen",
+                "--lang",
+                "python",
+                "--pytest",
+                "--tests",
+                "tests/test_ok.py",
+            ],
+        )
+    };
+    // No full loop yet: the narrowed one is generated, and its hint names the command that
+    // generates the full one.
+    let n0 = gen_narrowed(&p);
+    let hint = n0["summary"]["pytest_hint"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no pytest_hint: {n0}"));
+    assert!(
+        hint.starts_with("this loop runs 1 of the 2 test files; the first step of the queue is the loop over all of them"),
+        "{hint}"
+    );
+    assert!(
+        hint.ends_with(&format!(
+            "{LOOP_FIRST}; a narrowed loop does not replace it"
+        )),
+        "{hint}"
+    );
+    // The full loop is generated: the step is to run it, in every place that prints the step.
+    let full = ok(&p, &["harness", "gen", "--lang", "python", "--pytest"]);
+    let h = full["summary"]["harness"].as_str().unwrap().to_owned();
+    assert!(full["summary"].get("pytest_hint").is_none(), "{full}");
+    let run_full = format!("dla harness run {h}");
+    let narrowed = gen_narrowed(&p);
+    let hint = narrowed["summary"]["pytest_hint"].as_str().unwrap();
+    assert!(
+        hint.contains(&format!("{run_full}; a narrowed loop does not replace it")),
+        "{hint}"
+    );
+    let n = narrowed["summary"]["harness"].as_str().unwrap().to_owned();
+    assert_ne!(n, h);
+    assert_eq!(queue_command(&p), run_full);
+    assert_eq!(ledger_queue_command(&p), run_full);
+    // The narrowed loop ran and wrote a series: the first step is still the full loop.
+    let r = ok(&p, &["harness", "run", &n]);
+    assert!(r["summary"]["series"][0].is_string(), "{r}");
+    assert_eq!(queue_command(&p), run_full);
+    assert_eq!(ledger_queue_command(&p), run_full);
+    let gate = dla(&p, &["gate", "check", "--final"]);
+    let items = gate.json["missing"].as_array().cloned().unwrap_or_default();
+    let fix = items
+        .iter()
+        .find(|i| i["kind"] == "queue")
+        .and_then(|i| i["fix"].as_str())
+        .unwrap_or_else(|| panic!("no queue item: {}", gate.text));
+    assert!(
+        fix.starts_with(&format!("{run_full}, dla trend S<n>")),
+        "{fix}"
+    );
+    // The full loop ran: the queue goes on with the drivers and the hint is gone.
+    ok(&p, &["harness", "run", &h]);
+    assert_eq!(queue_command(&p), DRIVER);
+    assert_eq!(ledger_queue_command(&p), DRIVER);
+    let late = gen_narrowed(&p);
+    assert!(late["summary"].get("pytest_hint").is_none(), "{late}");
+}
