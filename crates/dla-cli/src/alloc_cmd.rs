@@ -1943,7 +1943,9 @@ mod tests {
                 name: "t".into(),
                 version: "1".into(),
             },
-            authority: Authority::Static,
+            // What `dla trend` writes: the confirm rule accepts no growth record with static
+            // authority, so the chooser does not name one.
+            authority: Authority::Test,
             kind: EvidenceKind::GrowthSeries,
             result,
             raw: None,
@@ -2000,7 +2002,13 @@ mod tests {
                 name: "t".into(),
                 version: "1".into(),
             },
-            authority: Authority::Static,
+            // A growth record is what `dla trend` writes (authority test); the census and the
+            // workload records are static.
+            authority: if kind == EvidenceKind::GrowthSeries {
+                Authority::Test
+            } else {
+                Authority::Static
+            },
             kind,
             result,
             raw: None,
