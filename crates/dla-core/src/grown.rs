@@ -170,7 +170,11 @@ pub(crate) fn alloc_tested(view: &RunView, root: &FindingId) -> bool {
 /// `writers` list). The column of a line that registers a new key per call counts what that
 /// line keeps, so it belongs to the finding of the table it writes into, whose own site is the
 /// line that defines the table. A non-leak finding is never at a site, and removers never count.
-pub fn finding_is_at_site(ledger: &crate::ledger::Ledger, f: &crate::finding::Finding, site: &str) -> bool {
+pub fn finding_is_at_site(
+    ledger: &crate::ledger::Ledger,
+    f: &crate::finding::Finding,
+    site: &str,
+) -> bool {
     let site = site.trim();
     if f.polarity() != Polarity::Leak {
         return false;
@@ -257,9 +261,7 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
                 // after it (from this very column) is the one at the column's own site.
                 view.ledger
                     .findings()
-                    .find(|f| {
-                        finding_is_at_site(&view.ledger, f, site) && !f.id.is_sibling()
-                    })
+                    .find(|f| finding_is_at_site(&view.ledger, f, site) && !f.id.is_sibling())
                     .map(|f| f.id.clone())
             }) {
                 pointed.push((f, c.name.clone(), c.kind));
@@ -526,8 +528,10 @@ mod tests {
         })
         .unwrap();
         for site in ["a.py:1", "a.py:10", "a.py:20"] {
-            let mut nf =
-                NewFinding::new(Origin::parse("census").unwrap(), vec![crate::EvidenceId::new(1)]);
+            let mut nf = NewFinding::new(
+                Origin::parse("census").unwrap(),
+                vec![crate::EvidenceId::new(1)],
+            );
             nf.site = Some(site.into());
             l.add_finding(nf).unwrap();
         }

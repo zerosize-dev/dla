@@ -1361,3 +1361,18 @@ flat test-loop readings get only 9 second looks.
   (task 88), experiment P (scratch u89, task 89).
 - After the waiter for pillow-6 reports: keep small files in /root/dla-real/pillow-6-keep, delete
   /root/dla-real/pillow-6 (9.5 GB) by literal path at once: builder N waits for that disk.
+
+## 08:27 UTC: pillow-6 ended
+
+- exit 0, 8076 s wall, report INCOMPLETE (190 open), budget 3h, 2h13m used. Findings line: leak
+  hypotheses confirmed 1 (python/F275 at ImageFont.py:580), confirmed but disputed by the verifier
+  1 (python/F107, extension table), refuted 6; non-leak explanations confirmed 6.
+- Kept: /root/dla-real/pillow-6-keep (report, state, coverage, ledger, transcript, run.json,
+  S1.json, T1.json, bundle_python_F275, gate). Run directory deleted (18.7 GB free after it).
+- Small defect seen: the report's trigger for F275 names the test loop H2 ("which test file feeds
+  it is not measured") although the probe driver H6 reproduced the growth; the confirm line that
+  `dla alloc-test H6` printed cited the loop's trend evidence (python/E6), not H6's.
+- Pillow unattended runs so far: 1 not found, 2 FOUND, 3 FOUND, 4 not found, 5 not found,
+  6 FOUND (the first with the final plugin 22bd696).
+- Briefs written: py-noise-brief.md (builder N, running), py-stacks-brief.md (builder A, to start
+  after N is verified). Survey result for A is summarized inside the brief.

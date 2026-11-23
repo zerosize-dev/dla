@@ -495,10 +495,7 @@ fn add_table_finding(r: &Run, evidence: &str) -> String {
         ],
     );
     let f = added["id"].as_str().unwrap().to_owned();
-    ok(
-        &r.project,
-        &["ledger", "annotate", &f, "--writer", SITE],
-    );
+    ok(&r.project, &["ledger", "annotate", &f, "--writer", SITE]);
     f
 }
 
@@ -542,7 +539,15 @@ fn a_column_at_a_writer_line_of_a_finding_is_tied_to_it_and_the_gate_asks_for_no
         let o = dla(
             &r.project,
             &[
-                "ledger", "resolve", &f, "--as", "unresolved", "--reason", reason, "--remedy", "x",
+                "ledger",
+                "resolve",
+                &f,
+                "--as",
+                "unresolved",
+                "--reason",
+                reason,
+                "--remedy",
+                "x",
             ],
         );
         assert_ne!(o.code, 0, "{reason}: {}", o.text);
@@ -632,8 +637,18 @@ fn a_remover_line_or_a_finding_without_that_writer_does_not_tie_the_column() {
     let added = ok(
         &r.project,
         &[
-            "ledger", "add", "--origin", "growth-series", "--evidence", &e, "--site",
-            "shop/store.py:1", "--region", "heap", "--holder", "static/global",
+            "ledger",
+            "add",
+            "--origin",
+            "growth-series",
+            "--evidence",
+            &e,
+            "--site",
+            "shop/store.py:1",
+            "--region",
+            "heap",
+            "--holder",
+            "static/global",
         ],
     );
     let f = added["id"].as_str().unwrap();
