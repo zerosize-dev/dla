@@ -137,6 +137,15 @@ public final class Main {{
 /// A project with discovery and one harness run (S1) done, and a non-heap finding with a
 /// non-leak sibling under test. Returns the project, the finding and the workload evidence.
 fn prepared(cap: Option<u32>) -> (tempfile::TempDir, PathBuf, String, String) {
+    prepared_citing(cap, true)
+}
+
+/// [`prepared`]; with `cite_growth` false the finding cites only the workload evidence, so the
+/// harness is about it only as a command that runs the project's own workload.
+fn prepared_citing(
+    cap: Option<u32>,
+    cite_growth: bool,
+) -> (tempfile::TempDir, PathBuf, String, String) {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");
     let src = project.join("src/zz");
@@ -165,7 +174,11 @@ fn prepared(cap: Option<u32>) -> (tempfile::TempDir, PathBuf, String, String) {
         .filter_map(Value::as_str)
         .collect::<Vec<_>>()
         .join(",");
-    let cited = format!("{workload},{growth}");
+    let cited = if cite_growth {
+        format!("{workload},{growth}")
+    } else {
+        workload.clone()
+    };
     // The non-heap hypothesis, the way the route prints it: a finding of the region and an
     // `N-WARM` sibling, then under test.
     let f = ok(
@@ -262,6 +275,29 @@ fn a_loop_that_warms_up_is_judged_a_plateau_on_the_non_heap_bytes_and_the_root_i
         }
     }
     assert_eq!(done, ["refute", "test", "confirm"], "{}", a["next"]);
+}
+
+#[test]
+fn an_unbound_alloc_test_of_a_command_that_runs_the_projects_workload_can_refute_a_finding() {
+    if skip() {
+        return;
+    }
+    // The harness runs the project's own workload (command mode): it is about every finding of
+    // the run, so its evidence, bound or not, is cited as before.
+    let (_dir, project, f, _) = prepared_citing(Some(5000), false);
+    let a = ok(&project, &["alloc-test", "H1"]);
+    assert_eq!(a["favors"], "non-leak", "{a}");
+    let r = ok(
+        &project,
+        &[
+            "ledger",
+            "refute",
+            &f,
+            "--evidence",
+            a["evidence"].as_str().unwrap(),
+        ],
+    );
+    assert_eq!(r["to"], "refuted", "{r}");
 }
 
 #[test]

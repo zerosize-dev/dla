@@ -202,6 +202,61 @@ pub enum HarnessAbout {
     Column(String),
     /// The finding cites this growth or unit-count evidence of a series of the harness.
     Evidence(crate::ids::EvidenceId),
+    /// The harness runs the project's own workload (a command-mode harness with a workload, or a
+    /// test loop), which is about the whole program.
+    OwnWorkload,
+    /// This allocation-stack or retention-path record names the finding and was made from a
+    /// capture file of the harness.
+    Capture(crate::ids::EvidenceId),
+}
+
+/// True when evidence `e` (an allocation-stack or retention-path summary) was made from a
+/// capture file of harness `harness`: the raw file of the summary lists, in its `captures` array,
+/// the sha256 of each input it read, and `harness/<H>/captures.json` lists the capture files the
+/// harness last wrote, whose digests are compared. A capture that a later run replaced no longer
+/// matches, so this link says nothing for it.
+fn made_from_capture_of(
+    run_dir: &std::path::Path,
+    e: &crate::evidence::EvidenceRecord,
+    harness: &str,
+) -> bool {
+    use sha2::{Digest, Sha256};
+    let Some(raw) = e.raw.as_deref().filter(|r| {
+        !std::path::Path::new(r)
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    }) else {
+        return false;
+    };
+    let read = |p: &std::path::Path| std::fs::read(p).ok();
+    let Some(doc) =
+        read(&run_dir.join(raw)).and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+    else {
+        return false;
+    };
+    let used: Vec<String> = doc
+        .get("captures")
+        .and_then(|c| c.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c.get("sha256").and_then(|d| d.as_str()).map(str::to_owned))
+        .collect();
+    if used.is_empty() {
+        return false;
+    }
+    let list = crate::harness::HarnessManifest::dir_in(run_dir, harness).join("captures.json");
+    let Some(files) = read(&list)
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v.get("files").cloned())
+        .and_then(|f| serde_json::from_value::<Vec<crate::harness::CaptureFile>>(f).ok())
+    else {
+        return false;
+    };
+    files.iter().any(|f| {
+        read(&run_dir.join(&f.path))
+            .map(|b| hex::encode(Sha256::digest(&b)))
+            .is_some_and(|d| used.contains(&d))
+    })
 }
 
 /// The leak-side root of `id` (a sibling counts through its parent).
@@ -246,9 +301,19 @@ pub fn column_tied_to(
 /// 3. The finding (or one of its siblings) cites, in `supports` or `contradicts`, growth or
 ///    unit-count evidence of a series of this harness.
 ///
-/// A harness made for other findings, whose series has no column of the finding's and that the
-/// finding does not cite, is not about it: whatever its whole-process columns say, they say it
-/// of other code.
+/// 4. The harness runs the project's own workload and no hook driver: a command-mode harness with
+///    a `workload`, or a test loop. It is about every finding of the run, since the workload is
+///    about the whole program. This rule does not check whether the code of the finding ran in
+///    that workload.
+/// 5. An allocation-stack or retention-path record that names the finding
+///    ([`crate::labels::names_finding`]) was made from a capture file of this harness (see
+///    `made_from_capture_of`: the sha256 of the inputs the summary lists against the files of
+///    `harness/<H>/captures.json`). This is how a hook driver whose capture named a finding that
+///    is not among its targets is about it.
+///
+/// A hook driver made for other findings, whose series and captures have nothing tied to the
+/// finding and that the finding does not cite, is not about it: whatever its whole-process
+/// columns say, they say it of other code.
 pub fn harness_about(
     view: &RunView,
     manifest: &crate::harness::HarnessManifest,
@@ -256,6 +321,11 @@ pub fn harness_about(
 ) -> Option<HarnessAbout> {
     let ledger = &view.ledger;
     let root = root_of(ledger, finding);
+    if manifest.is_test_loop()
+        || (manifest.mode == crate::harness::HarnessMode::Command && manifest.workload.is_some())
+    {
+        return Some(HarnessAbout::OwnWorkload);
+    }
     let is_root = |f: &FindingId| root_of(ledger, f) == root;
     if manifest.targets.iter().any(is_root)
         || manifest
@@ -300,6 +370,19 @@ pub fn harness_about(
         let series = ev.result.get("series").and_then(|s| s.as_str());
         if series.is_some_and(of_harness) {
             return Some(HarnessAbout::Evidence(ev.evidence_id.clone()));
+        }
+    }
+    if let Some(dir) = view.run_dir.as_deref()
+        && let Some(rf) = ledger.finding(&root)
+    {
+        let subjects: Vec<&crate::finding::Finding> =
+            std::iter::once(rf).chain(family.iter().copied()).collect();
+        for ev in ledger.evidence() {
+            if crate::labels::names_finding(ev, &subjects)
+                && made_from_capture_of(dir, ev, &manifest.id)
+            {
+                return Some(HarnessAbout::Capture(ev.evidence_id.clone()));
+            }
         }
     }
     None
@@ -1073,5 +1156,101 @@ mod tests {
         for f in [2, 3] {
             assert_eq!(about(&view, &m, f), None, "F{f}");
         }
+    }
+
+    #[test]
+    fn a_harness_that_runs_the_projects_own_workload_is_about_every_finding() {
+        let (_d, l) = scene();
+        let view = view_with(l, serde_json::json!({"name": "py.traced", "unit": "bytes"}));
+        let command = manifest(
+            "H1",
+            serde_json::json!({"mode": "command", "workload": "go:main:.:./cmd/x"}),
+        );
+        for f in [1, 2, 3] {
+            assert_eq!(about(&view, &command, f), Some(HarnessAbout::OwnWorkload));
+        }
+        let test_loop = manifest(
+            "H1",
+            serde_json::json!({"tools": [crate::harness::PYTEST_TOOL]}),
+        );
+        assert_eq!(about(&view, &test_loop, 3), Some(HarnessAbout::OwnWorkload));
+        // A command without a workload, and a hook driver with no tie, are not.
+        let bare = manifest("H1", serde_json::json!({"mode": "command"}));
+        assert_eq!(about(&view, &bare, 3), None);
+        let hooks = manifest("H1", serde_json::json!({"targets": ["F1"]}));
+        assert_eq!(about(&view, &hooks, 3), None);
+    }
+
+    /// A run directory with the capture file `harness/<harness>/out/heap.txt` listed in the
+    /// `captures.json` of `harness`, and an allocation-stack record naming F3 whose raw file lists
+    /// the digest of the capture file `summarised_from` (the content written for it).
+    fn with_capture_summary(harness: &str, summarised_from: &str) -> (tempfile::TempDir, RunView) {
+        use sha2::{Digest, Sha256};
+        let dir = tempfile::tempdir().unwrap();
+        let hd = dir.path().join(format!("harness/{harness}/out"));
+        std::fs::create_dir_all(&hd).unwrap();
+        std::fs::write(hd.join("heap.txt"), "capture").unwrap();
+        std::fs::write(
+            dir.path().join(format!("harness/{harness}/captures.json")),
+            serde_json::json!({"files": [{
+                "kind": "alloc", "path": format!("harness/{harness}/out/heap.txt"),
+                "label": "p1", "seq": 1, "bytes": 7, "captured_at": "2026-01-01T00:00:00Z"}]})
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("alloc")).unwrap();
+        std::fs::write(
+            dir.path().join("alloc/A1.json"),
+            serde_json::json!({"captures": [{"sha256":
+                hex::encode(Sha256::digest(summarised_from.as_bytes()))}]})
+            .to_string(),
+        )
+        .unwrap();
+        let (_d, mut l) = scene();
+        l.add_evidence(NewEvidence {
+            source: Source::Repo {
+                commit: "c".into(),
+                path: None,
+            },
+            tool: Tool {
+                name: "t".into(),
+                version: "1".into(),
+            },
+            authority: Authority::Test,
+            kind: EvidenceKind::AllocStack,
+            result: serde_json::json!({"candidates": ["F3"]}),
+            raw: Some("alloc/A1.json".into()),
+            coverage: EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        })
+        .unwrap();
+        let mut view = view_with(l, serde_json::json!({"name": "py.traced", "unit": "bytes"}));
+        view.run_dir = Some(dir.path().to_path_buf());
+        (dir, view)
+    }
+
+    #[test]
+    fn a_hook_driver_whose_capture_summary_names_the_finding_is_about_it() {
+        let (_d, view) = with_capture_summary("H1", "capture");
+        let m = manifest("H1", serde_json::json!({"targets": ["F1"]}));
+        assert!(matches!(
+            about(&view, &m, 3),
+            Some(HarnessAbout::Capture(_))
+        ));
+        // The summary names F3 only.
+        assert_eq!(about(&view, &m, 2), None);
+    }
+
+    #[test]
+    fn a_capture_summary_of_another_harness_or_of_other_files_does_not_count() {
+        // The summary was made from the capture file of H1; H2 has its own file and digest.
+        let (_d, view) = with_capture_summary("H1", "capture");
+        let other = manifest("H2", serde_json::json!({"targets": ["F1"]}));
+        assert_eq!(about(&view, &other, 3), None);
+        // A summary whose inputs are not the files of the harness.
+        let (_d, view) = with_capture_summary("H1", "something else");
+        let m = manifest("H1", serde_json::json!({"targets": ["F1"]}));
+        assert_eq!(about(&view, &m, 3), None);
     }
 }

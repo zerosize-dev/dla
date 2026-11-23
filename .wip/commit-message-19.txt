@@ -13,13 +13,21 @@ run ended COMPLETE with no leak confirmed, and the leak line was nowhere in
 its report.
 
 `dla alloc-test <H> --finding <F>` is now refused with `harness-not-about`,
-before anything runs, unless the harness is about the finding: the finding
-is among its targets or their siblings, the harness is its entry-path or
-probe harness, a trend of a series of the harness has a column tied to the
-finding (its finding, a candidate, or the finding's site for an
-allocation-site column), or the finding cites growth evidence of a series
-of the harness. The fix names the harnesses that are about the finding and
-the command for a probe driver of its own.
+before anything runs, unless the harness is about the finding. A harness
+that runs a workload of the project itself (a command with a workload, or
+a test loop) is about every finding: the project's own workload is about
+the whole program. A hook driver is about its targets and their siblings,
+about the finding it is the entry-path or probe harness of, about a finding
+that a column of one of its trends is tied to (its finding, a candidate, or
+the finding's site for an allocation-site column), about a finding that
+cites growth evidence of one of its series, and about a finding that a
+summary of one of its captures names. The fix names the harnesses that are
+about the finding and the command for a probe driver of its own.
+
+The rule for a project workload does not check that the finding's code ran
+in that workload. The bench tool's mechanical flow relies on it: on a
+fixture it rules out the open candidates with one alloc-test of the
+fixture's workload.
 
 `dla ledger refute` and `dla ledger confirm` refuse to cite the alloc-test
 evidence of a harness that is not about the finding. That covers an

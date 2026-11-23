@@ -1631,3 +1631,23 @@ flat test-loop readings get only 9 second looks.
 - After its report: my replay, then the WHOLE dynamic bench locally (all 64 fixtures, no other
   cargo job at the same time), whole suite, static bench, snapshot, CI, commit 19
   (commit-message-19.txt needs a sentence on rules d and e), pillow-9.
+
+## About 15:50 UTC: builder H corrected; full dynamic bench running
+
+- Correction: `HarnessAbout::OwnWorkload` (test loop, or command mode with a workload: about
+  every finding; does not check that the code ran) and `Capture(evidence)` (an alloc-stack or
+  retention-path record that names the finding and was made from a capture file of this harness,
+  linked by the sha256 of the files in harness/<H>/captures.json). Builder's five Go fixtures
+  pass (go-buffer-pool, go-gc-tuned-batch, go-header-index, go-subscription-workers,
+  go-subscription-workers-closed).
+- The builder ran `git checkout -p` once with stdin closed (a rule break it reported itself); I
+  compared the tree with snapshot d84d1e7: 14 modified files as before, the correction touches 5
+  files, additions only.
+- My mutation Q34 (command clause off) fails the unit test and the new JVM CLI test.
+- My replay with u97/dla-H2: `ledger refute F572 --evidence E126` refused `harness-not-about`.
+  `alloc-test H5 --finding F572` on the cut copy now answers `time-budget` first (the copied
+  run's deadline 15:41 has passed); no series written. The builder's replay before the deadline
+  got `harness-not-about`.
+- Running: full dynamic bench with frozen binaries (u97/dla-bench-H2, u97/dla-H2, parallel 3,
+  output u97/dyn2.out, json u97/dyn2.json), task bxpjrwpls. Then whole suite and static bench
+  (u95/suite.sh pattern without the Q29 step), snapshot, CI, commit 19, pillow-9.

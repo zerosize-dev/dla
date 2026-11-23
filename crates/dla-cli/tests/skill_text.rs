@@ -809,7 +809,7 @@ fn the_references_say_the_alloc_test_runs_on_a_harness_about_the_finding() {
         "python.md lacks the rule"
     );
     assert!(
-        stages.contains("The alloc-test runs on a harness that targets the finding or measured it")
+        stages.contains("The alloc-test runs on a harness that targets the finding, runs the project's own workload, or measured it")
             && stages.contains(
                 "never on another one: the other is refused with `harness-not-about` before it runs"
             ),
