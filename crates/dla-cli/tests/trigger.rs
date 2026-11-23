@@ -1107,3 +1107,43 @@ fn a_registry_an_entry_path_harness_grew_without_the_direct_call_is_confirmed_as
     r.confirm(&f, &workload, &growth);
     assert_eq!(r.row(&f)["state"], "confirmed");
 }
+
+/// One registration function that fills two module-level tables.
+fn two_table_project(dir: &Path) {
+    write(dir, "pkg/__init__.py", "");
+    write(
+        dir,
+        "pkg/core.py",
+        "CODECS = {}\nMIMES = {}\n\n\ndef register_codec(id, ext):\n    CODECS[ext.lower()] = id\n    MIMES[ext.lower()] = id\n",
+    );
+    write(
+        dir,
+        "pkg/plugin_a.py",
+        "from . import core\n\ncore.register_codec(\"A\", \".a\")\n",
+    );
+}
+
+#[test]
+fn every_table_a_hook_drivers_registration_call_grows_is_direct_not_only_its_target() {
+    let r = Run::with_project(&["--budget", "3h"], two_table_project);
+    let (codecs, mimes) = (r.id_at("pkg/core.py:1"), r.id_at("pkg/core.py:2"));
+    let g = r.ok(&["harness", "gen", "--lang", "python", "--driver", "--next"]);
+    let _ = g;
+    // The driver declares one table only.
+    let path = r.run_dir.join("harness/H1/harness.json");
+    let mut m: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    m["targets"] = json!([codecs]);
+    fs::write(&path, m.to_string()).unwrap();
+    r.fill(
+        "H1",
+        REGISTRY_CORE_SETUP,
+        "    _state['core'].register_codec('x', '.u%d' % key)",
+    );
+    r.ok(&["harness", "run", "H1", "--mode", "both"]);
+    let t = r.ok(&["trend", "S1"]);
+    let ev = t["evidence"][0].as_str().unwrap().to_owned();
+    for id in [&codecs, &mimes] {
+        let e = r.refused(&["ledger", "confirm", id, "--evidence", &ev]);
+        assert_eq!(e["code"], "registration-only", "{id}: {e}");
+    }
+}

@@ -1199,3 +1199,14 @@ flat test-loop readings get only 9 second looks.
 - After W: my checks again (fix text, test without append_discriminator), whole suite, clippy, schema, snapshot for
   CI, commit message 13 (to write), commit, then pillow-4 to see registries end as non-leak or unconfirmed.
 - Disk: 2.6 GB free; target is 15 GB (prune-superseded when no build runs).
+
+## State at about 01:50 UTC 2026-11-23
+
+- 0.9.0-preview.5 is PUBLISHED: tag v0.9.0-preview.5 at a2210bd, pre-release, 11 assets, release run 45095582891 all
+  green, CI on main run 45088966409 all green. (`gh release view` fails here: GraphQL is not available; use
+  `gh api repos/zerosize-dev/dla/releases/tags/<tag> --jq ...`.)
+- Registry change (builder W) in the working tree on top of main, not committed. Remaining: W closes the gap that the
+  hook-driver direct rule walks declared targets only (a second table written by the same registration function was
+  still confirmable on the real library); then my checks (mutations Q16..Q18 pass already), real-library recheck for
+  the second table, whole suite, clippy, schema, CI snapshot, commit with commit-message-13.txt.
+- Then: pillow-4 to see the registries end unconfirmed; Jetty 12.0.31 (add_repo, disk).

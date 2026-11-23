@@ -538,16 +538,29 @@ fn writer_facts_via(
     constant: bool,
     via: &[&str],
 ) {
+    writer_facts_for(run, 1, init, startup, param, constant, via);
+}
+
+/// The same for finding `n`.
+fn writer_facts_for(
+    run: &Run,
+    n: u32,
+    init: bool,
+    startup: bool,
+    param: bool,
+    constant: bool,
+    via: &[&str],
+) {
     use crate::{
         FindingAnnotation,
         census::{HolderFacts, SiteFact, SiteKind},
     };
     let mut l = Ledger::load(run.dir.path()).unwrap();
     l.annotate_record(FindingAnnotation {
-        writers: vec!["pkg/m1.go:9".into()],
+        writers: vec![format!("pkg/m{n}.go:9")],
         facts: HolderFacts {
             writer_sites: vec![SiteFact {
-                site: "pkg/m1.go:9".into(),
+                site: format!("pkg/m{n}.go:9"),
                 kind: SiteKind::Insert,
                 depth: 0,
                 function: Some("Register".into()),
@@ -560,7 +573,7 @@ fn writer_facts_via(
             }],
             ..Default::default()
         },
-        ..FindingAnnotation::new(f(1))
+        ..FindingAnnotation::new(f(n))
     })
     .unwrap();
 }
@@ -707,6 +720,36 @@ fn a_hook_driver_whose_unit_calls_a_start_up_writer_is_the_direct_reading() {
         } => assert_eq!((harness.as_str(), writer.as_str()), ("H2", "register_all")),
         other => panic!("{other:?}"),
     }
+}
+
+#[test]
+fn a_finding_that_grew_in_a_hook_driver_without_being_its_target_is_read_the_same_way() {
+    // H2 declares F1 only; its unit calls the writer F1 and F2 share, and F3 (a run-time
+    // writer) grew there too.
+    let run = Run::new(3);
+    run.harness("H2", Kind::Hooks, &[1]);
+    run.run(
+        "S2",
+        "H2",
+        "bb",
+        Some("the key"),
+        Some(&[(1, Verdict::Grew), (2, Verdict::Grew), (3, Verdict::Grew)]),
+    );
+    hook_driver_calling(&run, "H2", "def unit(i):\n    core.Register(str(i), 1)\n");
+    writer_facts_for(&run, 1, false, true, true, false, &[]);
+    writer_facts_for(&run, 2, false, true, true, false, &[]);
+    writer_facts_for(&run, 3, false, false, true, false, &[]);
+    let t = run.triggers();
+    for n in [1, 2] {
+        match t.trigger(&f(n)) {
+            Trigger::Direct {
+                harness, writer, ..
+            } => assert_eq!((harness.as_str(), writer.as_str()), ("H2", "Register")),
+            other => panic!("F{n}: {other:?}"),
+        }
+    }
+    // Its writer is a run-time one: nothing is said, as before.
+    assert_eq!(t.trigger(&f(3)), Trigger::Unchecked);
 }
 
 #[test]
