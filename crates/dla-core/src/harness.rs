@@ -565,6 +565,10 @@ pub const JUNIT_TOOL: &str = "junit-platform-launcher";
 /// tests in one process, in a loop, with no hooks.
 pub const PYTEST_TOOL: &str = "pytest-loop";
 
+/// Listed next to [`PYTEST_TOOL`] by a pytest loop generated with `--tests`: it runs the files
+/// that were named, not every test file of the working directory.
+pub const PYTEST_NARROWED_TOOL: &str = "pytest-narrowed";
+
 impl HarnessManifest {
     /// True for a driver whose units the model writes (hooks to fill), as opposed to a
     /// command or a test loop, which run the project's own tests.
@@ -582,6 +586,12 @@ impl HarnessManifest {
     /// True for the pytest loop: a test loop of a Python project.
     pub fn is_pytest_loop(&self) -> bool {
         self.mode == HarnessMode::Driver && self.tools.iter().any(|t| t == PYTEST_TOOL)
+    }
+
+    /// True for a pytest loop generated with `--tests`: it runs part of the test files, so it
+    /// does not stand for the loop over all of them.
+    pub fn is_pytest_narrowed(&self) -> bool {
+        self.is_pytest_loop() && self.tools.iter().any(|t| t == PYTEST_NARROWED_TOOL)
     }
 
     fn names_a_test_loop_tool(&self) -> bool {

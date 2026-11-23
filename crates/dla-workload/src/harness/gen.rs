@@ -450,6 +450,9 @@ struct PytestPick {
     tests: Vec<String>,
     /// Lines about the choice, for the manifest's gaps.
     gaps: Vec<String>,
+    /// `--tests` was given: the loop runs `files_run` of the `files_all` test files of the
+    /// working directory.
+    narrowed: Option<(usize, usize)>,
 }
 
 /// `--pytest` is for Python projects.
@@ -625,10 +628,25 @@ fn pytest_pick(ctx: &ToolCtx, opts: &GenOptions) -> Result<PytestPick, Refusal> 
     if !pytest_imports(&ctx.run_dir) {
         return Err(pytest_missing(ctx));
     }
+    let narrowed = (!opts.tests.is_empty()).then(|| {
+        let local: Vec<String> = found.files.iter().map(|f| found.local(f)).collect();
+        let run = local
+            .iter()
+            .filter(|f| {
+                tests.iter().any(|t| {
+                    *f == t
+                        || f.strip_prefix(t.as_str())
+                            .is_some_and(|r| r.starts_with('/'))
+                })
+            })
+            .count();
+        (run, local.len())
+    });
     Ok(PytestPick {
         workload,
         tests,
         gaps,
+        narrowed,
     })
 }
 
@@ -1433,6 +1451,10 @@ fn build_driver(d: &DriverCtx<'_>) -> Result<DriverBuild, Refusal> {
             write(&d.driver.join(commands::PYTEST_LOOP_FILE), &text)?;
             out.spec.pytest_loop = true;
             out.tools.push(dla_core::harness::PYTEST_TOOL.to_owned());
+            if p.narrowed.is_some() {
+                out.tools
+                    .push(dla_core::harness::PYTEST_NARROWED_TOOL.to_owned());
+            }
         }
         Runtime::Python => {
             let text = fill_with(templates::PY_DRIVER, &vars)?;
@@ -1837,6 +1859,20 @@ fn pytest_hint_text(ctx: &ToolCtx) -> Option<String> {
         .py_loop?;
     Some(format!(
         "this project has Python test files and the first step of the queue has not run: {step} runs the project's own tests in a loop with nothing to fill; run it and read its trend before you fill these hooks"
+    ))
+}
+
+/// What the summary of a narrowed pytest loop says while the first step of the queue, the loop
+/// over all test files, has not run: the loop kept whole. `None` once that loop wrote a series
+/// or its attempt failed (the queue has no such step then).
+fn pytest_narrowed_hint_text(ctx: &ToolCtx, run: usize, all: usize) -> Option<String> {
+    let view = dla_core::RunView::load_for(&ctx.run_dir, ctx.worker.as_deref()).ok()?;
+    let step = dla_core::queue::queues(&view, ctx.worker.as_deref())
+        .into_iter()
+        .find(|q| q.runtime == "python" && q.open())?
+        .py_loop?;
+    Some(format!(
+        "this loop runs {run} of the {all} test files; the first step of the queue is the loop over all of them, which reaches code that no candidate names: {step}; a narrowed loop does not replace it"
     ))
 }
 
@@ -2307,6 +2343,11 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
     let pytest_hint = (opts.driver && !opts.pytest && rt == Runtime::Python)
         .then(|| pytest_hint_text(ctx))
         .flatten();
+    // A narrowed pytest loop written while the loop over all test files has not run.
+    let pytest_hint = pytest_hint.or_else(|| {
+        let (run, all) = pytest.as_ref()?.narrowed?;
+        pytest_narrowed_hint_text(ctx, run, all)
+    });
     let iter_arg = opts
         .iter_arg
         .clone()
@@ -2924,6 +2965,9 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
                 "instructions".into(),
                 json!("nothing to fill: the driver runs the project's own tests in a loop; run it"),
             );
+            if let Some(hint) = pytest_hint {
+                m.insert("pytest_hint".into(), json!(hint));
+            }
         } else if info.spec.junit.is_some() {
             let driver_file = ctx.pointer(&format!(
                 "harness/{id}/{DRIVER}/{}.java",

@@ -639,6 +639,7 @@ fn the_references_teach_the_pytest_loop_as_the_first_pass_of_a_python_queue() {
         "`dla harness gen --lang python --driver --probe F`",
         "re-runs the whole suite per run",
         "a candidate of the queue still needs its driver",
+        "`--tests` narrows the loop: it is for a loop that cannot run in full (it stopped with a `DLA-PYTEST` line) or for a second look at a part. The first step of the queue is the loop over all test files, and a narrowed loop does not replace it",
     ] {
         assert!(python.contains(want), "python.md lacks: {want}");
     }
@@ -646,6 +647,7 @@ fn the_references_teach_the_pytest_loop_as_the_first_pass_of_a_python_queue() {
         "A Python project with test files starts the same way, with one loop over all of them: `dla harness gen --lang python --pytest`",
         "`--tests a,b` for files or directories; no candidate, no target, nothing to fill",
         "goes on with the driver batches once it wrote a series or an attempt failed",
+        "a loop narrowed with `--tests` does not count for that, only the loop over all test files does",
     ] {
         assert!(stages.contains(want), "stages.md lacks: {want}");
     }
@@ -684,6 +686,7 @@ fn the_worker_is_told_to_run_the_command_run_status_prints_and_the_python_loop_i
     for want in [
         "run the command it prints for that queue (`next_command`, the same as `queue.<runtime>.command`), exactly as printed",
         "harness gen --lang python --pytest",
+        "harness gen --lang python --pytest` without `--tests` (the project's own tests in a loop",
     ] {
         assert!(worker.contains(want), "worker.md lacks {want:?}");
     }

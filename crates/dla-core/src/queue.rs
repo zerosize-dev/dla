@@ -298,7 +298,8 @@ pub struct Index {
     /// The test-loop harnesses whose attempt failed (they did not build, or every unit
     /// failed): they are not run again, and what they declared waits for a driver.
     test_loop_failed: std::collections::BTreeSet<String>,
-    /// The pytest-loop harnesses (any state), oldest first.
+    /// The full pytest-loop harnesses (any state, generated without `--tests`), oldest first. A
+    /// narrowed loop is not listed: it does not stand for the first step of the queue.
     pytest_loops: Vec<String>,
     /// True when `dla harness gen --lang python --pytest` was refused in this run (pytest does
     /// not import in the harness interpreter): a failed attempt of the loop, with no harness.
@@ -334,7 +335,10 @@ impl Index {
             for t in &m.targets {
                 ix.declared_by.entry(t.clone()).or_default().push(h.clone());
             }
-            if m.is_pytest_loop() && m.runtime == crate::runtime::Runtime::Python {
+            if m.is_pytest_loop()
+                && !m.is_pytest_narrowed()
+                && m.runtime == crate::runtime::Runtime::Python
+            {
                 ix.pytest_loops.push(h.clone());
             }
             if m.is_test_loop() {
@@ -392,9 +396,10 @@ impl Index {
 
     /// Python: the first command of the queue while the project's own tests have not run in a
     /// loop: `dla harness gen --lang python --pytest` until a pytest-loop harness exists, then
-    /// `dla harness run <H>` while one is generated and not run. `None` once a pytest-loop
-    /// harness wrote a series, or an attempt of the loop failed (the refusal of the
-    /// generation, a failed run, a run with no usable point).
+    /// `dla harness run <H>` while one is generated and not run. `None` once a full pytest-loop
+    /// harness (generated without `--tests`) wrote a series, or an attempt of the full loop
+    /// failed (the refusal of the generation, a failed run, a run with no usable point). A
+    /// narrowed loop changes nothing: it is the agent's own fallback, not the first step.
     pub fn pytest_loop_step(&self) -> Option<String> {
         if self.pytest_loops.iter().any(|h| self.run.contains(h)) {
             return None;
@@ -2827,6 +2832,29 @@ mod tests {
         run.harness(&m);
     }
 
+    /// A pytest loop generated with `--tests`: the loop's tool and the narrowed marker.
+    fn pytest_narrowed_harness(run: &Run, h: &str) {
+        let mut m = manifest(h, &[], true);
+        m.tools.push(crate::harness::PYTEST_TOOL.to_owned());
+        m.tools
+            .push(crate::harness::PYTEST_NARROWED_TOOL.to_owned());
+        run.harness(&m);
+    }
+
+    fn failed_attempt(run: &Run, h: &str, reason: &str) {
+        use crate::harness::{AttemptOutcome, HarnessAttempt};
+        HarnessAttempt {
+            harness: h.into(),
+            started_at: HarnessAttempt::now(),
+            finished_at: HarnessAttempt::now(),
+            outcome: AttemptOutcome::Failed,
+            reason: Some(reason.into()),
+            message: None,
+        }
+        .save(run.dir.path())
+        .unwrap();
+    }
+
     fn py_queue(run: &Run) -> RuntimeQueue {
         queues(&run.reload(), None).remove(0)
     }
@@ -3023,6 +3051,92 @@ mod tests {
     }
 
     #[test]
+    fn a_narrowed_loop_that_wrote_a_series_leaves_the_step_at_the_full_loop() {
+        let (run, _) = Run::new(2);
+        py_tests(&run, &["tests/test_a.py", "tests/test_b.py"]);
+        // No full loop yet: the step is to generate it.
+        pytest_narrowed_harness(&run, "H1");
+        run.series("S1", "H1");
+        let q = py_queue(&run);
+        assert_eq!(
+            q.py_loop.as_deref(),
+            Some("dla harness gen --lang python --pytest")
+        );
+        assert_eq!(q.command, "dla harness gen --lang python --pytest");
+        // The full loop is generated and not run: the step is to run it.
+        pytest_harness(&run, "H2");
+        let q = py_queue(&run);
+        assert_eq!(q.py_loop.as_deref(), Some("dla harness run H2"));
+        assert_eq!(q.command, "dla harness run H2");
+        assert!(
+            crate::view::queue_item(&q)
+                .fix
+                .starts_with("dla harness run H2")
+        );
+        // The full loop ran: the queue goes on with the driver batches.
+        run.series("S2", "H2");
+        let q = py_queue(&run);
+        assert!(q.py_loop.is_none());
+        assert_eq!(q.command, q.batch_command);
+    }
+
+    #[test]
+    fn a_full_loop_that_wrote_a_series_ends_the_step_whatever_a_narrowed_loop_did() {
+        let (run, _) = Run::new(2);
+        py_tests(&run, &["tests/test_a.py"]);
+        pytest_harness(&run, "H1");
+        run.series("S1", "H1");
+        assert!(py_queue(&run).py_loop.is_none());
+        pytest_narrowed_harness(&run, "H2");
+        assert!(py_queue(&run).py_loop.is_none());
+    }
+
+    #[test]
+    fn a_failed_full_loop_ends_the_step_and_a_narrowed_loop_after_it_changes_nothing() {
+        let (run, _) = Run::new(2);
+        py_tests(&run, &["tests/test_a.py"]);
+        pytest_harness(&run, "H1");
+        failed_attempt(&run, "H1", "harness-failed");
+        assert!(py_queue(&run).py_loop.is_none());
+        // The agent's own fallback: a narrowed loop, generated, run, failed.
+        pytest_narrowed_harness(&run, "H2");
+        let q = py_queue(&run);
+        assert!(q.py_loop.is_none());
+        assert_eq!(q.command, "dla harness gen --lang python --driver --next");
+        run.series("S1", "H2");
+        assert!(py_queue(&run).py_loop.is_none());
+        failed_attempt(&run, "H2", "no_harness");
+        assert!(py_queue(&run).py_loop.is_none());
+        // A refused generation is the full loop's failed attempt too.
+        let (run, _) = Run::new(2);
+        py_tests(&run, &["tests/test_a.py"]);
+        crate::harness::HarnessAttempt::save_pytest_loop_refusal(
+            run.dir.path(),
+            "tool_missing",
+            "pytest does not import",
+        )
+        .unwrap();
+        pytest_narrowed_harness(&run, "H1");
+        assert!(py_queue(&run).py_loop.is_none());
+    }
+
+    #[test]
+    fn a_narrowed_loop_whose_run_failed_leaves_the_step_at_the_full_loop() {
+        let (run, _) = Run::new(2);
+        py_tests(&run, &["tests/test_a.py", "tests/test_b.py"]);
+        pytest_narrowed_harness(&run, "H1");
+        failed_attempt(&run, "H1", "harness-failed");
+        let q = py_queue(&run);
+        assert_eq!(
+            q.py_loop.as_deref(),
+            Some("dla harness gen --lang python --pytest")
+        );
+        pytest_harness(&run, "H2");
+        let q = py_queue(&run);
+        assert_eq!(q.py_loop.as_deref(), Some("dla harness run H2"));
+    }
+
+    #[test]
     fn the_pytest_loop_is_a_test_loop_and_not_a_hook_driver() {
         let mut m = manifest("H1", &[], true);
         assert!(m.is_hook_driver() && !m.is_test_loop() && !m.is_pytest_loop());
@@ -3035,6 +3149,12 @@ mod tests {
         let mut c = manifest("H3", &[], false);
         c.tools.push(crate::harness::PYTEST_TOOL.to_owned());
         assert!(!c.is_test_loop() && !c.is_hook_driver());
+        // `--tests` marks the loop as narrowed; it stays a pytest loop.
+        assert!(!m.is_pytest_narrowed());
+        m.tools
+            .push(crate::harness::PYTEST_NARROWED_TOOL.to_owned());
+        assert!(m.is_pytest_narrowed() && m.is_pytest_loop());
+        assert!(!j.is_pytest_narrowed());
     }
 
     #[test]
