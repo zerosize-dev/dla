@@ -1210,3 +1210,19 @@ flat test-loop readings get only 9 second looks.
   still confirmable on the real library); then my checks (mutations Q16..Q18 pass already), real-library recheck for
   the second table, whole suite, clippy, schema, CI snapshot, commit with commit-message-13.txt.
 - Then: pillow-4 to see the registries end unconfirmed; Jetty 12.0.31 (add_repo, disk).
+
+## State at about 02:35 UTC 2026-11-23
+
+- Thirteenth frozen snapshot e6f8581a9acf08d9d2d087bff41e7c9ce8fbf7ff = main a2210bd + the registry change (builder W,
+  four passes) + one VERIFY sentence. In CI round 4 (waiter bejx7vbjy, output u79/ci13). When green: commit with
+  commit-message-13.txt (commit-snapshot-tree.sh e6f8581 ...), push main and the dev branch.
+- Local checks on it: whole suite 3306 passed and 4 failed ONLY because the disk filled (98 MB free); with space freed
+  the three targets pass (real_tools 8, attach 18, harness_capture 11); fmt, clippy -D warnings, schema clean;
+  dla-bench static 64 pass; own mutations Q16..Q19 each failed a named test.
+- Real library with the final build: one registration call fills two tables; both findings refused
+  `registration-only`; alloc-test next prints the entry-path route for both. Entry-path harness without the call ->
+  constant -> alloc-test favors non-leak -> refute + N-INTENT sibling confirmed (checked with the earlier build).
+- pillow-4 started 02:33 with the plugin and binary of e6f8581 (waiter b9m7hgm0b stops it from going unnoticed when
+  the disk drops under 700 MB; it only reports, it does not stop the run). After it: keep report/state/ledger/
+  transcript in /root/dla-real/pillow-4-keep and delete /root/dla-real/pillow-4.
+- Disk: keep at least 4 GB free before a whole-suite run; a real run on this library uses up to 3.7 GB.
