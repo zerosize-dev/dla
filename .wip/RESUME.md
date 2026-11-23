@@ -1278,3 +1278,21 @@ flat test-loop readings get only 9 second looks.
   (`cargo clean` to leave the run 19 GB). After the run: keep small files in /root/dla-real/pillow-5-keep, delete
   /root/dla-real/pillow-5.
 - After both: Version 0.9.0-preview.6 (registry change + narrowed-loop change) once CI on main is green.
+
+## State at about 05:40 UTC 2026-11-23
+
+- pillow-5 (plugin of 6986215): NOT FOUND, 1738 s, status COMPLETE, 572 findings, nothing confirmed, 3 harnesses.
+  The python worker generated the full loop H2 and started it with `harness run H2 --iterations 3 > out 2>&1 &` plus
+  `sleep 90` in one tool call; the job died with the call (dump has ticks only, no attempt.json); the worker then
+  recorded `intake.workload` unresolved env_unavailable for python (accepted), close-rest closed 277 findings.
+  The texts added with the registry change ("start it in the background and wait") caused the `&`; pillow-3, before
+  that text, ran the loop in the foreground and the tool moved it to the background by itself. Kept:
+  /root/dla-real/pillow-5-keep.
+- Unattended Pillow runs: 1 not found (before fixes), 2 found (driver), 3 found (full loop), 4 not found (narrowed
+  loop), 5 not found (loop cut by the shell, false blocker).
+- Builder M (brief py-loop-run-brief.md) is running on top of the uncommitted narrowed-loop change: texts say plain
+  foreground with the tool's longest timeout; a workload blocker is refused while a test-loop harness has no finished
+  attempt; harness-not-run no longer offers the blocker for a test loop. target/ was empty before it started.
+- CI round 5 on 6986215 (narrowed-loop change) is running (waiter bfy41cvuf, output u79/ci14). When green: commit
+  the snapshot tree with commit-message-14.txt (the working tree then still holds builder M's work on top).
+- Open: task 83 (one project copy per harness), Jetty, `--detach` for long harness runs if the text fix is not enough.
