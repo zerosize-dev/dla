@@ -1404,3 +1404,30 @@ flat test-loop readings get only 9 second looks.
   K passes over the items worked (653 passed, 97 skipped every pass) but three lines still grew.
   Second experiment running: full suite, name what anchors every round's Session, test cleanups.
   Scripts: scratch u89.
+
+## About 09:40 UTC: builder A done and checked; whole suite running
+
+- Builder A (stacks for a finding at a growing line; brief py-stacks-brief.md) plus one correction
+  (a capture that was made and not summarized is refused with the literal summarize command; the
+  link is the sha256 of the capture files in the `captures` array of the raw alloc/A<n>.json).
+- My checks: mutations Q25 (runtime check dropped), Q27 (site-column condition dropped) each fail
+  `alloc_cmd::tests::a_leak_decided_by_a_site_column_leads_with_the_capture_and_the_summarize_line`;
+  Q26 (bundle takes any stack record) fails the note test and the bundle unit test. Clean: CLI
+  unit tests 322, py_site_columns 11, alloc_test 5, harness_capture 11, ledger_m6 43, skill_text 20,
+  summarize_python 14, gate_flow 13, keep_going 31.
+- Hand run on the real library (frozen binary u90/dla-A, run 20261123-091638-9cef in u72/pillow,
+  env u90/env.sh): hook driver H1 with a unit that draws text with the default font:
+  `py.blocks@src/PIL/ImageFont.py:580` steady, slope 1.0 per unit. Finding F278 at the line.
+  `dla alloc-test H1 --finding F278`: favors leak, decided by the site column, `next` leads with
+  the capture and the summarize line, `stacks_hint` present. Confirmed without capture:
+  `dla bundle F278` refused `stacks-not-captured` (fix: the capture command). After the capture run
+  (4 dumps, 23 s): refused again, fix = the literal `dla summarize alloc-stack-diff` command with
+  the four files. After the summary (E16): bundle with evidence E12, E14, E16, excerpt true, frames
+  ImageFont.py:580, ImageDraw.py:508, ImageDraw.py:565, ExifTags.py:20. The excerpt marks line 580
+  as the `self.font.render(...)` call with the `fill` callback above it.
+- My own edit after the builder: the fix text of the first refusal no longer holds a `#` comment in
+  the middle of a sentence (bundle_cmd.rs).
+- Running: u90/suite.sh (clippy, schema check, whole suite to u90/suite.log, static bench), task
+  bax2x5sl6. Then: non-skip snapshot for CI, commits 16 (noise) and 17 (stacks), version commit
+  0.9.0-preview.6, release.
+- Experiment P second pass still running (what anchors every round's pytest Session).

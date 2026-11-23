@@ -1,0 +1,45 @@
+A finding at a growing line reaches the verifier with its stack
+
+A real unattended run on a Python library with C extension modules found
+the documented leak as a growing column `py.blocks@<file:line>`, added a
+finding at the line, reproduced the growth with a driver of its own and
+confirmed it. Then `dla bundle` wrote a bundle with no frames and no
+excerpt: a column name is cut at `@` in a bundle, excerpts come only from
+allocation and retention evidence, and the run had made no capture. The
+verifier answered site `none`, the report printed that as a disagreement,
+and the finding kept no label and no explanation, although the mechanism
+was one frame away.
+
+`dla alloc-test` now leads its `next` list with the capture when the
+result favors leak, the deciding column is an allocation-site column, the
+runtime writes allocation captures and no stack record names the finding
+yet: `dla harness run <H> --mode <mode> --capture alloc`, then the
+`dla summarize alloc-stack-diff` command that run prints. The same
+sentence is in a `stacks_hint` key that the output bound never cuts.
+
+`dla bundle` takes the allocation-stack and retention-path records that
+name the finding by the rule the label already uses, the newest two of
+each kind, besides the evidence a transition cites. `dla summarize` does
+not add its record to a finding's evidence, so until now a stack reached a
+bundle only when a transition happened to cite it.
+
+`dla bundle` is refused with `stacks-not-captured` for a confirmed or
+strong leak-side finding whose growth is a count at an allocation line,
+when the bundle would hold no allocation or retention evidence and the
+runtime could have captured the stacks. With no capture run of a harness
+that grew the line, the fix is the capture command. With a capture that
+was not summarized (the files of `captures.json` are in no stack record,
+matched by digest), the fix is the literal summarize command for those
+files. With a capture that was summarized and named no stack at the line,
+the bundle is written and says so.
+
+Run by hand on the real library: a driver that draws text grew the
+documented line by one block per unit; the alloc-test printed the capture
+first; the bundle was refused before the capture and again before the
+summary, with the right command each time; after the summary the bundle
+held the stack, and its excerpt shows the growing line as the call into
+the extension module with the callback it passes.
+
+Not seen yet: an unattended run with this change. Not tested: the refusal
+text for a test loop, a native command-mode harness, and the choice of the
+newest capture among several harnesses.

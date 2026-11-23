@@ -661,28 +661,57 @@ fn naming_records(ledger: &dla_core::Ledger, f: &dla_core::Finding) -> Vec<Evide
     out
 }
 
-/// True when the harness left an allocation capture: `harness/<H>/captures.json` lists a file of
-/// kind `alloc`.
-fn has_alloc_capture(run_dir: &Path, harness: &str) -> bool {
+/// The allocation capture files `harness/<H>/captures.json` lists (kind `alloc`), with the
+/// time the list was written; `None` when there is no such list or it names none.
+fn alloc_captures(
+    run_dir: &Path,
+    harness: &str,
+) -> Option<(Vec<dla_core::harness::CaptureFile>, std::time::SystemTime)> {
     let path = dla_core::HarnessManifest::dir_in(run_dir, harness).join("captures.json");
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        .and_then(|v| {
-            v.get("files")?
-                .as_array()?
-                .iter()
-                .any(|f| f.get("kind").and_then(Value::as_str) == Some("alloc"))
-                .then_some(())
+    let v: Value = serde_json::from_str(&fs::read_to_string(&path).ok()?).ok()?;
+    let files: Vec<dla_core::harness::CaptureFile> =
+        serde_json::from_value(v.get("files")?.clone()).ok()?;
+    let files: Vec<_> = files
+        .into_iter()
+        .filter(|f| f.kind == dla_core::harness::CaptureKind::Alloc)
+        .collect();
+    let at = fs::metadata(&path).and_then(|m| m.modified()).ok()?;
+    (!files.is_empty()).then_some((files, at))
+}
+
+/// True when an allocation-stack record was made from files of `files`: the raw file of the
+/// summary (`alloc/A<n>.json`) lists the sha256 of each input in its `captures` array, and the
+/// file of the capture has that digest.
+fn summarized(
+    run_dir: &Path,
+    ledger: &dla_core::Ledger,
+    files: &[dla_core::harness::CaptureFile],
+) -> bool {
+    let digests: Vec<String> = files
+        .iter()
+        .filter_map(|f| fs::read(run_dir.join(&f.path)).ok())
+        .map(|b| sha(&b))
+        .collect();
+    ledger
+        .evidence()
+        .filter(|e| e.kind == EvidenceKind::AllocStack)
+        .filter_map(|e| contained(run_dir, e.raw.as_deref()?))
+        .filter_map(|p| serde_json::from_slice::<Value>(&fs::read(p).ok()?).ok())
+        .any(|raw| {
+            raw.get("captures")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|c| c.get("sha256").and_then(Value::as_str))
+                .any(|d| digests.iter().any(|x| x == d))
         })
-        .is_some()
 }
 
 /// The check of a bundle with no stack: `Err(stacks-not-captured)` when the growth is a count of
 /// blocks at one line, the bundle would hold no allocation or retention evidence, the runtime
-/// captures stacks and no capture run of a harness that grew the column is recorded; the
-/// sentence to carry when a capture was summarized and no stack names the finding; `None` when
-/// the check does not apply.
+/// captures stacks and either no capture run of a harness that grew the column is recorded or
+/// the newest one was never summarized; the sentence to carry when a capture was summarized and
+/// no stack names the finding; `None` when the check does not apply.
 fn stacks_check(
     tc: &ToolCtx,
     id: &FindingId,
@@ -722,13 +751,34 @@ fn stacks_check(
     if harnesses.is_empty() {
         return Ok(None);
     }
-    if let Some((h, _)) = harnesses
+    let captured: Vec<_> = harnesses
         .iter()
-        .find(|(h, _)| has_alloc_capture(&tc.run_dir, h))
+        .filter_map(|(h, _)| alloc_captures(&tc.run_dir, h).map(|(files, at)| (h, files, at)))
+        .collect();
+    if let Some((h, _, _)) = captured
+        .iter()
+        .find(|(_, files, _)| summarized(&tc.run_dir, &view.ledger, files))
     {
         return Ok(Some(format!(
             "an allocation capture of {h} was summarized and no growing stack ends at the finding's line, so the bundle holds no stack and no excerpt"
         )));
+    }
+    // Captured and never summarized: the summarize command of the newest capture is the fix.
+    if let Some((h, files, _)) = captured.iter().max_by_key(|(_, _, at)| *at) {
+        let cmd =
+            dla_workload::harness::capture::summarize_commands(files, &|p| tc.pointer(p), false)
+                .into_iter()
+                .find(|c| c.starts_with("dla summarize alloc-stack-diff "));
+        if let Some(cmd) = cmd {
+            return Err(Failure::refuse(
+                core_codes::STACKS_NOT_CAPTURED,
+                format!(
+                    "an allocation capture of {h} exists and was not summarized, so no stack is tied to {id}; the bundle would give the verifier no stack and no source excerpt"
+                ),
+                format!("an alloc-stack record made from the capture of {h}"),
+                format!("{cmd} ; then dla bundle {id} again"),
+            ));
+        }
     }
     // A hook driver (entry-path, probe or batch) first, else the test loop, else the first.
     let (h, m) = harnesses
@@ -753,8 +803,8 @@ fn stacks_check(
         ),
         format!("an allocation capture of {h} (harness/{h}/captures.json)"),
         format!(
-            "{} ; then {} ; then dla bundle {id} again.{loop_note}",
-            commands[0], commands[1]
+            "{} ; then the dla summarize alloc-stack-diff command that run prints (it ties the stacks at the line to {id}) ; then dla bundle {id} again.{loop_note}",
+            commands[0]
         ),
     ))
 }

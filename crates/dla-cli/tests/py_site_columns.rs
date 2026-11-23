@@ -1066,6 +1066,28 @@ fn a_finding_at_a_growing_line_reaches_the_verifier_with_its_stack() {
             "alloc",
         ],
     );
+    // The capture alone is not enough: no stack is tied yet, and the refusal says so and names
+    // the summarize command of the capture.
+    let again = dla(&r.project, &["bundle", &f]);
+    assert_eq!(
+        again.json["error"]["code"], "stacks-not-captured",
+        "{}",
+        again.text
+    );
+    assert!(
+        again.json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("exists and was not summarized"),
+        "{}",
+        again.text
+    );
+    let fix = again.json["error"]["fix"].as_str().unwrap();
+    let from_fix = fix.split(" ; ").next().unwrap();
+    assert!(
+        from_fix.starts_with("dla summarize alloc-stack-diff "),
+        "{fix}"
+    );
     let cmd = cap["summary"]["summarize"]
         .as_array()
         .unwrap_or_else(|| panic!("{cap}"))
@@ -1073,7 +1095,11 @@ fn a_finding_at_a_growing_line_reaches_the_verifier_with_its_stack() {
         .filter_map(Value::as_str)
         .find(|c| c.starts_with("dla summarize alloc-stack-diff "))
         .unwrap_or_else(|| panic!("{cap}"));
-    let args: Vec<&str> = cmd.split_whitespace().skip(1).collect();
+    assert_eq!(
+        cmd, from_fix,
+        "the fix is the command the capture run prints"
+    );
+    let args: Vec<&str> = from_fix.split_whitespace().skip(1).collect();
     let s = ok(&r.project, &args);
     // The stack ends at the line of the finding: the evidence names it at once.
     assert_eq!(s["tied"], serde_json::json!([f]), "{s}");
@@ -1118,17 +1144,31 @@ fn a_capture_that_no_stack_of_the_line_came_out_of_is_said_in_the_bundle() {
         return;
     }
     let r = prepared();
+    // A real capture of H1 and a real summary of it, made before any finding exists at the
+    // line: the stack record names no finding.
+    let cap = ok(
+        &r.project,
+        &[
+            "harness",
+            "run",
+            "H1",
+            "--mode",
+            "fresh",
+            "--capture",
+            "alloc",
+        ],
+    );
+    let cmd = cap["summary"]["summarize"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{cap}"))
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|c| c.starts_with("dla summarize alloc-stack-diff "))
+        .unwrap();
+    let args: Vec<&str> = cmd.split_whitespace().skip(1).collect();
+    ok(&r.project, &args);
     let (f, e, _) = leak_at_the_line(&r);
     ok(&r.project, &["ledger", "confirm", &f, "--evidence", &e]);
-    // A capture run is recorded (built by hand: the files of the run are not needed) and no
-    // stack names the finding.
-    fs::write(
-        r.run_dir.join("harness/H1/captures.json"),
-        serde_json::json!({"files": [{"kind": "alloc", "path": "x", "label": "p1-fresh", "seq": 1, "bytes": 1}],
-            "summarize": []})
-        .to_string(),
-    )
-    .unwrap();
     let b = ok(&r.project, &["bundle", &f]);
     assert_eq!(b["excerpt"], false, "{b}");
     let note = b["stacks_note"].as_str().unwrap();
