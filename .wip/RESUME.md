@@ -1715,3 +1715,22 @@ flat test-loop readings get only 9 second looks.
   (u99/dyn3.out, task bjn0lvmcn, frozen binaries u99/dla-I, u99/dla-bench-I).
 - After the bench: `bash u99/suite.sh` (my mutation Q35, clippy, schema, pytest tests, whole
   suite, static bench), then non-skip snapshot, CI, commit 20 (commit-message-20.txt), pillow-10.
+
+## 20:15 UTC: rule I too wide for the bench; narrowing sent to the builder
+
+- Full dynamic bench with builder I's binaries (u99/dyn3.out, 59 minutes): 60/64 pass; FAIL:
+  rust-delayed-queue, rust-ledger-sync, rust-meter-callbacks, rust-tree-parent-links ("gate check
+  --final: finding F3 is under_test and has no disposition"). The bench's final gate adds a
+  finding at a growing allocation line, alloc-tests it on the fixture's command-mode workload
+  harness (favors leak), then closes it unresolved by fixed policy; `leak-favored` refused that.
+- Decision: narrow `route_to_confirm` to an alloc-test on a HOOK DRIVER THAT TARGETS the finding
+  (targets, sibling_of, or its entry-path harness). Whole-workload harnesses, test loops and
+  harnesses about the finding only through a probe, column, cited evidence or capture give no
+  route; closing unresolved works there as before. The confirm refusals keep naming real ids on
+  any harness about the finding. Not covered then: a loop alloc-test that favors leak followed by
+  an inconclusive close.
+- After the builder's report: my mutation Q35 (may need a new text), the replay (F572 on H18 must
+  still be refused with the two-command route), `bash u99/suite.sh`, non-skip snapshot, CI,
+  commit 20 (commit-message-20.txt needs the narrowed wording), pillow-10. I do not plan a third
+  full local dynamic bench: the wide rule failed only those four, the narrowed rule can refuse
+  nothing the wide one did not, and CI runs the full bench.
