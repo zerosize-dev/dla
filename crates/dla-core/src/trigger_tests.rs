@@ -661,6 +661,108 @@ fn a_wrapper_of_a_writer_that_a_run_time_caller_also_reaches_is_reproduced() {
     ));
 }
 
+/// The driver of a hook driver that is not entry-path (no `targets.json`: the writer functions
+/// come from the census facts).
+fn hook_driver_calling(run: &Run, h: &str, text: &str) {
+    let dir = run.dir.path().join("harness").join(h);
+    std::fs::create_dir_all(dir.join("driver")).unwrap();
+    std::fs::write(dir.join("driver/zz_driver.py"), text).unwrap();
+}
+
+/// A run with a hook driver H2 (not entry-path) that made F1 grow with a unit that calls `call`.
+fn a_hook_driver_calling(call: &str) -> Run {
+    let run = Run::new(1);
+    run.harness("H2", Kind::Hooks, &[1]);
+    run.run(
+        "S2",
+        "H2",
+        "bb",
+        Some("the key"),
+        Some(&[(1, Verdict::Grew)]),
+    );
+    hook_driver_calling(
+        &run,
+        "H2",
+        &format!("# register_all would be the wrapper\ndef unit(i):\n    {call}\n"),
+    );
+    run
+}
+
+#[test]
+fn a_hook_driver_whose_unit_calls_a_start_up_writer_is_the_direct_reading() {
+    let run = a_hook_driver_calling("core.Register(str(i), 1)");
+    writer_facts(&run, false, true, true, false);
+    match run.triggers().trigger(&f(1)) {
+        Trigger::Direct {
+            harness, writer, ..
+        } => assert_eq!((harness.as_str(), writer.as_str()), ("H2", "Register")),
+        other => panic!("{other:?}"),
+    }
+    // A wrapper the census recorded on the way to the writer is the same call.
+    let run = a_hook_driver_calling("core.register_all(str(i), [str(i)])");
+    writer_facts_via(&run, false, true, true, false, &["register_all"]);
+    match run.triggers().trigger(&f(1)) {
+        Trigger::Direct {
+            harness, writer, ..
+        } => assert_eq!((harness.as_str(), writer.as_str()), ("H2", "register_all")),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_hook_driver_that_does_not_call_the_writer_or_a_writer_that_runs_at_run_time_is_not_direct() {
+    // The unit calls something else: as before, nothing says how a caller reaches the holder.
+    let run = a_hook_driver_calling("core.other(str(i))");
+    writer_facts_via(&run, false, true, true, false, &["register_all"]);
+    assert_eq!(run.triggers().trigger(&f(1)), Trigger::Unchecked);
+    // The writer is called but the census has it at run time: not a start-up registration.
+    let run = a_hook_driver_calling("core.Register(str(i), 1)");
+    writer_facts(&run, false, false, true, false);
+    assert_eq!(run.triggers().trigger(&f(1)), Trigger::Unchecked);
+    // No census facts: neither reading.
+    let run = a_hook_driver_calling("core.Register(str(i), 1)");
+    assert_eq!(run.triggers().trigger(&f(1)), Trigger::Unchecked);
+}
+
+#[test]
+fn an_entry_path_harness_that_grew_it_without_the_call_wins_over_a_direct_hook_driver() {
+    let run = a_hook_driver_calling("core.Register(str(i), 1)");
+    writer_facts(&run, false, true, true, false);
+    run.harness("H1", Kind::Entry, &[1]);
+    run.run(
+        "S1",
+        "H1",
+        "aa",
+        Some("the name"),
+        Some(&[(1, Verdict::Grew)]),
+    );
+    driver_calling(
+        &run,
+        "H1",
+        "func unit(i int) {\n\tserve(path(i))\n}\n",
+        &["Register"],
+    );
+    assert!(matches!(
+        run.triggers().trigger(&f(1)),
+        Trigger::Reproduced { .. }
+    ));
+}
+
+#[test]
+fn a_test_loop_is_never_a_direct_driver() {
+    for kind in [Kind::PytestLoop, Kind::TestLoop] {
+        let run = Run::new(1);
+        run.harness("H2", kind, &[1]);
+        run.run("S2", "H2", "bb", None, Some(&[(1, Verdict::Grew)]));
+        hook_driver_calling(&run, "H2", "def unit(i):\n    core.Register(str(i), 1)\n");
+        writer_facts(&run, false, true, true, false);
+        assert!(
+            !matches!(run.triggers().trigger(&f(1)), Trigger::Direct { .. }),
+            "a test loop is the project's own workload"
+        );
+    }
+}
+
 #[test]
 fn a_handler_no_project_code_calls_is_a_public_entry_and_is_reproduced() {
     // `Server.Watch`: exported, not at start-up, no key from a parameter in a project caller.

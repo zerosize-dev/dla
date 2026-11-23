@@ -68,8 +68,12 @@ fn command(project: &Path) -> Command {
 
 impl Run {
     fn new(init_args: &[&str]) -> Self {
+        Self::with_project(init_args, project)
+    }
+
+    fn with_project(init_args: &[&str], make: fn(&Path)) -> Self {
         let dir = tempfile::tempdir().unwrap();
-        project(dir.path());
+        make(dir.path());
         let mut args = vec!["run", "init", "--session-id", "t"];
         args.extend_from_slice(init_args);
         let o = command(dir.path())
@@ -907,4 +911,180 @@ fn the_bundle_and_the_trigger_of_a_test_loop_finding_name_what_was_measured_to_f
         ),
         "{md}"
     );
+}
+
+/// A package whose plugin modules register codecs at their top level, through a wrapper.
+fn registry_project(dir: &Path) {
+    write(dir, "pkg/__init__.py", "");
+    write(
+        dir,
+        "pkg/core.py",
+        "CODECS = {}\n\n\ndef register_codec(id, ext):\n    CODECS[ext.lower()] = id\n\n\ndef register_codecs(id, exts):\n    for ext in exts:\n        register_codec(id, ext)\n\n\ndef lookup(ext):\n    return CODECS.get(ext.lower())\n",
+    );
+    write(
+        dir,
+        "pkg/plugin_a.py",
+        "from . import core\n\ncore.register_codecs(\"A\", [\".a\", \".aa\"])\n",
+    );
+}
+
+/// The same package plus a function a caller uses to add a plugin at run time.
+fn registry_project_with_a_run_time_entry(dir: &Path) {
+    registry_project(dir);
+    write(
+        dir,
+        "pkg/api.py",
+        "from . import core\n\n\ndef add_plugin(name, exts):\n    core.register_codecs(name, exts)\n",
+    );
+}
+
+const REGISTRY_CORE_SETUP: &str = "    from pkg import core\n    _state['core'] = core";
+const REGISTRY_SETUP: &str =
+    "    from pkg import api, core\n    _state['core'] = core\n    _state['api'] = api";
+/// A hook driver that registers a new extension through the wrapper, per unit.
+const REGISTRY_UNIT: &str = "    _state['core'].register_codecs('x', ['.u%d' % key])";
+/// An entry-path unit: a caller adds a plugin through the public function.
+const REGISTRY_ENTRY_UNIT: &str = "    _state['api'].add_plugin('p%d' % key, ['.p%d' % key])";
+
+/// Appends a discriminator that favors the non-leak side, as the tools do for a measured one.
+fn append_discriminator(r: &Run, supports: &str) -> String {
+    let ledger = r.run_dir.join("ledger.jsonl");
+    let text = fs::read_to_string(&ledger).unwrap();
+    let seq = text.lines().count() + 1;
+    let n = text.matches("\"type\":\"evidence\"").count() + 1;
+    let line = format!(
+        r#"{{"schema_version":2,"seq":{seq},"ts":"2026-01-02T03:05:00Z","type":"evidence","evidence_id":"E{n}","source":{{"repo":{{"commit":"abc"}}}},"tool":{{"name":"dla","version":"1"}},"authority":"test","kind":"discriminator","result":{{"test":"purge","favors":"non-leak","supports":["{supports}"],"finding":null}},"coverage":{{"status":"complete"}}}}"#
+    );
+    let mut f = fs::OpenOptions::new().append(true).open(&ledger).unwrap();
+    use std::io::Write;
+    writeln!(f, "{line}").unwrap();
+    format!("E{n}")
+}
+
+#[test]
+fn a_registry_grown_only_by_its_own_writer_is_not_confirmed_and_the_non_leak_way_closes_it() {
+    let r = Run::with_project(&["--budget", "3h"], registry_project);
+    let f = r.id_at("pkg/core.py:1");
+    let g = r.ok(&["harness", "gen", "--lang", "python", "--driver", "--next"]);
+    let workload = g["evidence"][0].as_str().unwrap().to_owned();
+    r.fill("H1", REGISTRY_CORE_SETUP, REGISTRY_UNIT);
+    r.ok(&["harness", "run", "H1", "--mode", "both"]);
+    let t = r.ok(&["trend", "S1"]);
+    let growth = t["evidence"].as_array().unwrap().clone();
+    let ev = growth[0].as_str().unwrap().to_owned();
+    assert_eq!(t["targets"][0]["verdict"], "grew", "{t}");
+
+    // The alloc-test of the direct driver does not offer the confirm that would be refused.
+    let a = r.ok(&["alloc-test", "H1", "--finding", &f]);
+    let next: Vec<&str> = a["next"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(
+        !next.iter().any(|c| c.starts_with("dla ledger confirm")),
+        "{next:?}"
+    );
+    assert!(
+        next.iter().any(|c| c.contains("--hypothesis N-INTENT")),
+        "{next:?}"
+    );
+
+    // The census reads the writer as a start-up registration through the wrapper, and the only
+    // growth measured is the unit's own call of that wrapper.
+    let e = r.refused(&["ledger", "confirm", &f, "--evidence", &ev]);
+    assert_eq!(e["code"], "registration-only", "{e}");
+    let message = e["message"].as_str().unwrap();
+    for want in [
+        "start-up registration (register_codec)",
+        "(H1)",
+        "register_codecs itself with new keys",
+    ] {
+        assert!(message.contains(want), "{want}: {message}");
+    }
+    let fix = e["fix"].as_str().unwrap().to_owned();
+    assert!(
+        fix.contains(&format!(
+            "dla harness gen --lang python --driver --entry {f}"
+        )),
+        "{fix}"
+    );
+
+    // Way (a): the printed commands, with the evidence they leave to the caller.
+    let discriminator = append_discriminator(&r, "N-INTENT");
+    let way = fix
+        .split("(an intended table): ")
+        .nth(1)
+        .unwrap()
+        .split("; or the leak reading")
+        .next()
+        .unwrap();
+    let commands: Vec<String> = way
+        .split(", then ")
+        .map(|c| {
+            c.replace("<harness evidence>", &workload)
+                .replace("<discriminator that favors non-leak>", &discriminator)
+                .replace("<that discriminator>", &discriminator)
+        })
+        .collect();
+    assert_eq!(commands.len(), 4, "{commands:?}");
+    for c in &commands {
+        let words: Vec<String> = shell_words(c);
+        let words: Vec<&str> = words.iter().skip(1).map(String::as_str).collect();
+        r.ok(&words);
+    }
+    assert_eq!(r.row(&f)["state"], "refuted");
+    assert_eq!(r.row(&format!("{f}.n1"))["state"], "confirmed");
+}
+
+/// Splits a printed command into words, keeping a double-quoted part as one word.
+fn shell_words(c: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    for ch in c.chars() {
+        match ch {
+            '"' => quoted = !quoted,
+            ' ' if !quoted => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            _ => cur.push(ch),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+#[test]
+fn a_registry_an_entry_path_harness_grew_without_the_direct_call_is_confirmed_as_before() {
+    let r = Run::with_project(&["--budget", "3h"], registry_project_with_a_run_time_entry);
+    let f = r.id_at("pkg/core.py:1");
+    let g = r.ok(&["harness", "gen", "--lang", "python", "--driver", "--next"]);
+    let workload = g["evidence"][0].as_str().unwrap().to_owned();
+    r.fill("H1", REGISTRY_SETUP, REGISTRY_UNIT);
+    r.ok(&["harness", "run", "H1", "--mode", "both"]);
+    let t = r.ok(&["trend", "S1"]);
+    let growth = t["evidence"].as_array().unwrap().clone();
+    // A run-time function of the project (`add_plugin`) calls the wrapper: the census does not
+    // read the writer as a start-up registration, so the direct driver is not refused on that.
+    let g = r.ok(&[
+        "harness", "gen", "--lang", "python", "--driver", "--entry", &f,
+    ]);
+    assert_eq!(g["summary"]["purpose"], "entry-path", "{g}");
+    r.fill("H2", REGISTRY_SETUP, REGISTRY_ENTRY_UNIT);
+    r.varies(
+        "H2",
+        "the plugin name and extension a caller of add_plugin passes",
+    );
+    let ran = r.ok(&["harness", "run", "H2", "--mode", "both"]);
+    let t2 = r.ok(&["trend", ran["summary"]["series"][0].as_str().unwrap()]);
+    assert_eq!(t2["targets"][0]["verdict"], "grew", "{t2}");
+    assert_eq!(t2["targets"][0]["trigger"], "reproduced", "{t2}");
+    r.confirm(&f, &workload, &growth);
+    assert_eq!(r.row(&f)["state"], "confirmed");
 }

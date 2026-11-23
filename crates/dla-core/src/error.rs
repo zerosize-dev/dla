@@ -138,6 +138,9 @@ pub mod codes {
     pub const TARGET_PENDING: &str = "target-pending";
     /// A harness was asked to declare more targets than the limit.
     pub const TOO_MANY_TARGETS: &str = "too-many-targets";
+    /// A leak-side finding was confirmed although the only growth measured comes from a unit that
+    /// calls the registration function of a start-up registration itself with new keys.
+    pub const REGISTRATION_ONLY: &str = "registration-only";
     /// `--entry` named a finding that is not a leak-side finding that grew in some harness.
     pub const ENTRY_NOT_GROWN: &str = "entry-not-grown";
     /// `dla harness run` was asked to run an entry-path harness whose `VARIES.txt` is empty or

@@ -507,8 +507,15 @@ fn python_a_function_whose_only_callers_are_other_modules_own_functions_is_not_s
 }
 
 #[test]
-fn python_tmp_repro_test_file() {
+fn python_a_call_in_a_test_file_is_no_run_time_caller() {
+    // A test method that registers a codec runs in a test, not in the product: the file is
+    // a test file by its name (`test_*.py`) in a directory that is not named like a test
+    // directory, and the census reads no caller there.
     let t = "from pkg import core\n\n\nclass TestCodecs:\n    def test_register(self):\n        core.register_codec(\"x\", \".x\")\n        core.register_codecs(\"x\", [\".y\"])\n";
     let w = codec_writer(&[("tests_like/test_codecs.py", t)]);
-    panic!("{w:?}");
+    assert!(w.startup, "{w:?}");
+    assert_eq!(w.startup_via, ["register_codecs"], "{w:?}");
+    // The same call in a file that is not a test file is a run-time caller.
+    let w = codec_writer(&[("tests_like/codecs_check.py", t)]);
+    assert!(!w.startup, "{w:?}");
 }

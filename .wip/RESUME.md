@@ -1181,3 +1181,21 @@ flat test-loop readings get only 9 second looks.
   the Python census has no writer facts (start-up registration or not), and a thin public wrapper around the writer
   is not seen as direct. Also say in the texts: run the pytest loop in the background, never under `timeout`.
 - Then Jetty 12.0.31 (large Maven build; free disk first; add the repository with add_repo before cloning).
+
+## State at about 01:40 UTC 2026-11-23
+
+- main = a2210bd (Version 0.9.0-preview.5); CI run 45088966409 on main in progress (waiter b950s9akm, output
+  u79/ci-main-v5). When green: release.yml on main with {"publish": true}; check the release exists.
+- Builder W (brief py-registry-brief.md, resumed twice) works in the tree on top of main. Verified so far by me:
+  its tests pass (dla-census 132+7, dla-core lib 248, dla-cli trigger 6, skill_text 19, queue 16); own mutations
+  Q16 (refusal call removed), Q17 (startup_via cleared), Q18 (hook-driver direct disabled) each failed a named test.
+  Real library (run 20261123-013045-7642 in u72/pillow): six registration writers have startup true, the seventh
+  (register_extension) has not, correctly: one plugin's save handler calls it at run time with an extension taken
+  from the file name. Hook driver calling register_open with new keys: table grows 1 per unit; alloc-test next has
+  no confirm; `ledger confirm F12` refused `registration-only`. Real route that works: `--driver --entry F12` with a
+  unit that opens an image (no registration call) -> constant -> alloc-test favors non-leak (E21) -> refute F12,
+  confirm N-INTENT sibling F12.n2 with E21. W's printed "way (a)" needed a hand-made discriminator; sent back to
+  print the one real route and to make its CLI test use real commands.
+- After W: my checks again (fix text, test without append_discriminator), whole suite, clippy, schema, snapshot for
+  CI, commit message 13 (to write), commit, then pillow-4 to see registries end as non-leak or unconfirmed.
+- Disk: 2.6 GB free; target is 15 GB (prune-superseded when no build runs).

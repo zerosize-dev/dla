@@ -596,6 +596,9 @@ pub fn move_to(ctx: &Ctx, a: MoveArgs, to: FindingState) -> Res<Value> {
         .map(|e| ledger.own_evidence_id(e))
         .collect();
     let from = ledger.finding(&finding).map(|f| f.state);
+    if to == FindingState::Confirmed {
+        refuse_registration_only(ctx, &finding, &evidence)?;
+    }
     let line = ledger.transition(&finding, to, None, None, evidence.clone(), by)?;
     let mut out = json!({
         "ok": true,
@@ -612,6 +615,77 @@ pub fn move_to(ctx: &Ctx, a: MoveArgs, to: FindingState) -> Res<Value> {
         out["warning"] = json!(w);
     }
     Ok(out)
+}
+
+/// The harness and the function when the trigger of the leak-side finding `id` is `direct`:
+/// the only growth measured comes from a unit that calls the registration function itself.
+pub(crate) fn direct_trigger(
+    run_dir: &std::path::Path,
+    worker: Option<&str>,
+    id: &FindingId,
+) -> Option<(String, String, String)> {
+    use dla_core::trigger::{Trigger, Triggers};
+    let view = RunView::load_for(run_dir, worker).ok()?;
+    let finding = view.ledger.finding(id)?;
+    if finding.id.is_sibling() || finding.polarity() != dla_core::finding::Polarity::Leak {
+        return None;
+    }
+    match Triggers::of(&view).trigger(id) {
+        Trigger::Direct {
+            harness, writer, ..
+        } => {
+            let rt =
+                gate::finding_runtime(&view, finding).unwrap_or_else(|| "<runtime>".to_owned());
+            Some((harness, writer, rt))
+        }
+        _ => None,
+    }
+}
+
+/// Refuses to confirm a leak-side finding whose trigger is `direct`: the census reads every
+/// writer of the holder as a start-up registration and the only growth measured comes from a
+/// unit that calls the registration function itself with new keys.
+fn refuse_registration_only(ctx: &Ctx, id: &FindingId, evidence: &[EvidenceId]) -> Res<()> {
+    let Some((harness, writer, rt)) = direct_trigger(&ctx.run_dir, ctx.worker.as_deref(), id)
+    else {
+        return Ok(());
+    };
+    let Ok(view) = RunView::load_for(&ctx.run_dir, ctx.worker.as_deref()) else {
+        return Ok(());
+    };
+    let Some(finding) = view.ledger.finding(id) else {
+        return Ok(());
+    };
+    let mut fns: Vec<String> = view
+        .ledger
+        .annotation(id)
+        .map(|a| a.facts.writer_sites.as_slice())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|s| s.function.clone())
+        .collect();
+    fns.sort();
+    fns.dedup();
+    let writers = if fns.is_empty() {
+        writer.clone()
+    } else {
+        fns.join(", ")
+    };
+    let ev = evidence
+        .first()
+        .map_or_else(|| "<growth evidence>".to_owned(), ToString::to_string);
+    Err(Failure::refuse(
+        core_codes::REGISTRATION_ONLY,
+        format!(
+            "{id} cannot be confirmed as a leak on this evidence: the census reads every writer of the holder as a start-up registration ({writers}), and the only growth measured ({harness}) comes from a unit that calls {writer} itself with new keys, which is growth by design."
+        ),
+        format!(
+            "growth that a caller of the public API causes without calling the registration function {writer}"
+        ),
+        format!(
+            "one route decides both readings: an entry-path harness whose unit uses the public API without calling {writer}: dla harness gen --lang {rt} --driver --entry {id}, fill the hooks and VARIES.txt, dla harness run <H> --mode both, dla trend <S>, dla alloc-test <H> --finding {id}; if the table grows there, dla ledger confirm {id} again; if it stays flat, that alloc-test favors non-leak: dla ledger refute {id} --evidence <the alloc-test evidence>, and to record the reading dla ledger add --sibling-of {id} --origin hypothesis --hypothesis N-INTENT --refute-if \"run-time input reaches the registration call\" --evidence {ev}, dla ledger test <the sibling id the add prints> --evidence <harness evidence>, dla ledger confirm <that id> --evidence <the alloc-test evidence>"
+        ),
+    ))
 }
 
 /// Runs `dla ledger resolve`.

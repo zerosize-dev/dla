@@ -1436,6 +1436,9 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         .push("gate and plateau thresholds are provisional (not calibrated)".to_owned());
     let evidence = tc.add_evidence(&mut ledger, spec)?;
 
+    let direct = bound.as_ref().and_then(|f| {
+        crate::ledger_cmd::direct_trigger(&tc.run_dir, tc.worker.as_deref(), &f.root_id())
+    });
     let next = match &drift {
         Some(Drift::Agent(_)) => vec![drift_next(ctx)],
         Some(Drift::Growing {
@@ -1451,6 +1454,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
                     &supports,
                     &evidence,
                     extra,
+                    direct.as_ref(),
                 ));
             }
             n
@@ -1469,6 +1473,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
             &supports,
             &evidence,
             extra,
+            direct.as_ref(),
         ),
     };
     let next = say_how_long_a_held_plateau_needs(next, favors, &results, &picked);
@@ -1596,6 +1601,7 @@ fn say_how_long_a_held_plateau_needs(
     next
 }
 
+#[allow(clippy::too_many_arguments)]
 fn next_commands(
     ledger: &Ledger,
     bound: Option<&Finding>,
@@ -1604,6 +1610,7 @@ fn next_commands(
     supports: &[String],
     evidence: &EvidenceId,
     extra: u32,
+    direct: Option<&(String, String, String)>,
 ) -> Vec<String> {
     let mut next: Vec<String> = Vec::new();
     let Some(f) = bound else {
@@ -1652,6 +1659,16 @@ fn next_commands(
                 }
                 next.push(format!("dla ledger confirm {} --evidence {evidence}", s.id));
             }
+        }
+        // The growth is the registration itself: `ledger confirm` is refused, and an entry-path
+        // harness whose unit does not call the writer decides both readings.
+        Favors::Leak if let Some((h, w, rt)) = direct => {
+            next.push(format!(
+                "dla harness gen --lang {rt} --driver --entry {root}   ({root} grew only because the unit of {h} calls {w} itself with new keys, so dla ledger confirm {root} is refused with registration-only; the unit of this harness uses the public API without calling {w}; fill the hooks and VARIES.txt, dla harness run <H> --mode both, dla trend <S>)"
+            ));
+            next.push(format!(
+                "dla alloc-test <H> --finding {root}   (on that harness; if the table grows there: dla ledger confirm {root}; if it stays flat the alloc-test favors non-leak: dla ledger refute {root} --evidence <that alloc-test>)"
+            ));
         }
         Favors::Leak => {
             for s in siblings.iter().filter(|s| !s.state.is_dispositioned()) {
@@ -1828,7 +1845,7 @@ mod tests {
         // confirm without the refuted sibling is refused).
         {
             let f = l.finding(&root).unwrap().clone();
-            let next = next_commands(&l, Some(&f), "H1", Favors::Leak, &[], &last(&l), 4);
+            let next = next_commands(&l, Some(&f), "H1", Favors::Leak, &[], &last(&l), 4, None);
             let at = |needle: &str| {
                 next.iter()
                     .position(|n| n.starts_with(needle))
@@ -1848,7 +1865,7 @@ mod tests {
         sib.refute_if = Some("keeps growing".into());
         l.add_finding(sib).unwrap();
         let f = l.finding(&root).unwrap().clone();
-        let next = next_commands(&l, Some(&f), "H1", Favors::Leak, &[], &last(&l), 4);
+        let next = next_commands(&l, Some(&f), "H1", Favors::Leak, &[], &last(&l), 4, None);
         let at = |needle: &str| next.iter().position(|n| n.starts_with(needle));
         let refute = at("dla ledger refute F1.n1").unwrap_or(usize::MAX);
         let test = at(&format!("dla ledger test F1 --evidence {workload}")).unwrap_or(usize::MAX);

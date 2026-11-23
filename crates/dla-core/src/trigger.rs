@@ -105,6 +105,28 @@ fn calls(code: &str, name: &str) -> bool {
     })
 }
 
+/// The code of a harness driver, without the lines that are comments.
+fn driver_code(run_dir: &std::path::Path, h: &str) -> String {
+    let dir = HarnessManifest::dir_in(run_dir, h).join("driver");
+    let mut code = String::new();
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        return code;
+    };
+    for e in rd.flatten() {
+        let Ok(text) = std::fs::read_to_string(e.path()) else {
+            continue;
+        };
+        for line in text.lines() {
+            let t = line.trim_start();
+            if !(t.starts_with("//") || t.starts_with('#') || t.starts_with('*')) {
+                code.push_str(line);
+                code.push('\n');
+            }
+        }
+    }
+    code
+}
+
 /// One read series of an entry-path harness that targeted a finding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntryRun {
@@ -126,6 +148,8 @@ struct Run {
     harness: String,
     series: String,
     entry: bool,
+    /// A hook driver that is not an entry-path harness (no test loop, no fixed command).
+    hook: bool,
     /// A fixed command of the project or a JUnit repeat.
     own_workload: bool,
     workload: Option<String>,
@@ -235,6 +259,11 @@ pub struct Triggers {
     /// no writer function itself but a function on the way to a start-up writer (the census
     /// fact `startup_via`).
     via_called: BTreeMap<(FindingId, String), String>,
+    /// `(finding, harness)` of a hook driver that is not an entry-path harness whose unit calls
+    /// a start-up writer of the finding or a function on the way to one, with the function.
+    hook_direct: BTreeMap<(FindingId, String), String>,
+    /// Findings that a hook driver which is not an entry-path harness declared.
+    hook_declared: BTreeSet<FindingId>,
     /// The census facts on the writer sites of each entry-path target that has some: whether
     /// every one runs at start-up (`init` or `startup`). A finding without facts is absent.
     startup: BTreeMap<FindingId, bool>,
@@ -288,9 +317,19 @@ impl Triggers {
                     .collect();
                 t.find_direct_calls(run_dir, &h, &m, &via);
             }
+            if m.is_hook_driver() && !m.is_entry_path() {
+                t.hook_declared.extend(m.targets.iter().cloned());
+                t.find_hook_direct_calls(run_dir, &h, &m, view);
+            }
             manifests.insert(h, m);
         }
-        for id in t.entry_declared.keys() {
+        let declared: BTreeSet<FindingId> = t
+            .entry_declared
+            .keys()
+            .chain(t.hook_declared.iter())
+            .cloned()
+            .collect();
+        for id in &declared {
             let sites = view
                 .ledger
                 .annotation(id)
@@ -314,6 +353,7 @@ impl Triggers {
                 harness: h.clone(),
                 series: series.clone(),
                 entry: m.is_entry_path(),
+                hook: m.is_hook_driver() && !m.is_entry_path(),
                 own_workload: !m.is_hook_driver() && !m.is_entry_path(),
                 workload: m.workload.clone(),
                 digest: rec
@@ -414,23 +454,7 @@ impl Triggers {
         m: &HarnessManifest,
         via: &BTreeMap<FindingId, Vec<String>>,
     ) {
-        let dir = HarnessManifest::dir_in(run_dir, h).join("driver");
-        let Ok(rd) = std::fs::read_dir(&dir) else {
-            return;
-        };
-        let mut code = String::new();
-        for e in rd.flatten() {
-            let Ok(text) = std::fs::read_to_string(e.path()) else {
-                continue;
-            };
-            for line in text.lines() {
-                let t = line.trim_start();
-                if !(t.starts_with("//") || t.starts_with('#') || t.starts_with('*')) {
-                    code.push_str(line);
-                    code.push('\n');
-                }
-            }
-        }
+        let code = driver_code(run_dir, h);
         for id in &m.targets {
             let Some(names) = self.writers_all.get(id) else {
                 continue;
@@ -443,6 +467,34 @@ impl Triggers {
             } else if let Some(w) = via.get(id).into_iter().flatten().find(|w| calls(&code, w)) {
                 self.direct.insert((id.clone(), h.to_owned()));
                 self.via_called
+                    .insert((id.clone(), h.to_owned()), w.clone());
+            }
+        }
+    }
+
+    /// Notes the targets of a hook driver `h` that is not an entry-path harness whose unit calls
+    /// a function of a start-up writer site of the target: the writer's own function, or a
+    /// function the census recorded on the way to it (`startup_via`).
+    fn find_hook_direct_calls(
+        &mut self,
+        run_dir: &std::path::Path,
+        h: &str,
+        m: &HarnessManifest,
+        view: &RunView,
+    ) {
+        let code = driver_code(run_dir, h);
+        for id in &m.targets {
+            let sites = view
+                .ledger
+                .annotation(id)
+                .map(|a| a.facts.writer_sites.as_slice())
+                .unwrap_or_default();
+            let names = sites
+                .iter()
+                .filter(|s| s.startup || s.init)
+                .flat_map(|s| s.function.iter().chain(s.startup_via.iter()));
+            if let Some(w) = names.into_iter().find(|w| calls(&code, w)) {
+                self.hook_direct
                     .insert((id.clone(), h.to_owned()), w.clone());
             }
         }
@@ -569,6 +621,27 @@ impl Triggers {
                         r.workload.as_deref().unwrap_or(&r.harness)
                     )
                 },
+            };
+        }
+        // A hook driver's unit that calls a start-up writer of the finding (or a function on the
+        // way to it) with new keys: the growth is the registration itself, whichever driver
+        // measured it. An entry-path harness that grew it otherwise, or the project's own
+        // workload, has returned above.
+        if self.startup.get(id) == Some(&true)
+            && let Some((r, w)) = self.runs.iter().filter(|r| r.hook).find_map(|r| {
+                (r.verdicts.get(id) == Some(&Verdict::Grew))
+                    .then(|| self.hook_direct.get(&(id.clone(), r.harness.clone())))
+                    .flatten()
+                    .map(|w| (r, w))
+            })
+        {
+            return Trigger::Direct {
+                harness: r.harness.clone(),
+                varies: r
+                    .varies
+                    .clone()
+                    .unwrap_or_else(|| "not recorded".to_owned()),
+                writer: w.clone(),
             };
         }
         // The first run of each of two harnesses whose drivers differ, the ones that measured
