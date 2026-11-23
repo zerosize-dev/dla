@@ -1556,3 +1556,23 @@ flat test-loop readings get only 9 second looks.
 - Commit message ready: commit-message-18.txt.
 - Next: builder's extra test, whole suite (u90/suite.sh pattern, static bench command fixed in
   notes), non-skip snapshot, CI, commit 18, pillow-8, then 0.9.0-preview.6 if it finds the leak.
+
+## 12:40 UTC: seventeenth snapshot frozen, CI running, pillow-8 started
+
+- Builder G's extra test: `a_run_cut_after_some_tests_ran_is_not_a_unit_and_is_made_again`
+  (exit code 3 from `pytest_runtest_logfinish` after the first file's test). My mutation Q29 now
+  fails it. Line of the first file shows a double step in that round (its test ran twice), the
+  second file's line rises by one at every step; the note says the tests that ran before the cut
+  are in the round's figures.
+- Whole tree: fmt clean, clippy clean, schema check 20 ok, pytest-dependent tests under 3.12
+  (harness_pytest_loop 21, pytest_loop 17), whole suite 3348 passed 0 failed 5 ignored (default
+  PATH, python 3.13), static bench 64 pass.
+- Seventeenth frozen snapshot: b28bc4045808c02ec691d4fb9137c4643174ab59 (non-skip). CI waiter:
+  task bqop1dl7n, logs u95/ci17. DO NOT push a non-skip snapshot while it runs.
+- After green CI: `bash wip-notes/commit-snapshot-tree.sh b28bc4045808c02ec691d4fb9137c4643174ab59
+  wip-notes/commit-message-18.txt`, push main and main:dev/wonderful-mccarthy-algc5s.
+- pillow-8 started 12:40 with the plugin and binary of b28bc40; waiter task bmwkqo47f.
+  `target/` was cleaned again (7.5 GB).
+- After pillow-8: if FOUND, version commit 0.9.0-preview.6 (sed 0.9.0-preview.5 -> 0.9.0-preview.6
+  in .claude-plugin/marketplace.json, .claude-plugin/plugin.json, Cargo.toml, Cargo.lock), CI on
+  main, release.yml with publish. Then R2 (apply wip-notes/r1-holder-capture.patch first).
