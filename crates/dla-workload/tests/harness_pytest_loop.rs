@@ -1134,8 +1134,7 @@ fn a_run_cut_after_some_tests_ran_is_not_a_unit_and_is_made_again() {
     );
     let log = harness_log(&fx);
     assert!(
-        log.contains("DLA-PYTEST summary: units=9") && log.contains("repeats=1 cut_units=0")
-            || log.contains("cut_units=0 repeats=1"),
+        log.contains("DLA-PYTEST summary: units=9") && log.contains("cut_units=0 repeats=1"),
         "{log}"
     );
 }
