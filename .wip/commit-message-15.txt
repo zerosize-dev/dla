@@ -1,0 +1,34 @@
+A test loop whose run was cut is not a workload blocker
+
+In a real unattended run the Python worker started the loop over the
+project's tests with the shell's `&` and looked at its output after ninety
+seconds. The job died when the tool call returned: the harness had ticks
+in its dump, no checkpoint and no attempt record. The worker then recorded
+`env_unavailable` on `intake.workload` for the runtime. That was accepted,
+it closed the queue, `dla ledger close-rest` closed 277 findings, and the
+run ended in 28 minutes with nothing measured. Its deadline was more than
+two hours away.
+
+Two reference texts had told it to "start it in the background", and an
+agent reads that as the shell's `&`. In an earlier run, before those
+sentences existed, the worker ran the loop as a plain foreground command,
+the tool moved the long command to the background by itself, and the loop
+wrote its series. The texts now say that: a plain foreground command with
+the tool's longest timeout, never `&`, `nohup` or `timeout`, because a
+shell background job is killed when the command returns and a cut run
+writes no series.
+
+A blocker reason on `intake.workload` is now refused with
+`loop-not-finished` while the runtime has a test loop that was generated
+and has neither a series nor a finished attempt. A test loop needs nothing
+written, so nothing shows that the environment cannot run the workload
+until the loop has run to an end. Once it has a series or a recorded
+failure, the earlier rules apply. The refusal `harness-not-run` no longer
+offers the blocker for a test loop; for a hook driver it does, as before.
+
+Replayed by hand on a real library: with the loop generated and not run,
+and again after its run was killed, the blocker is refused and the queue
+still names the run of the loop.
+
+Not seen yet: an unattended run with this change. `dla run status` still
+lists a killed harness process under `running`.
