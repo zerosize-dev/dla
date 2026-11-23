@@ -5,7 +5,11 @@
 use std::{fs, path::Path};
 
 use assert_cmd::Command;
-use dla_core::{AnswerStatus, ChecklistAnswer, HarnessManifest, Ledger, UnresolvedReason};
+use dla_core::{
+    AnswerStatus, Authority, ChecklistAnswer, EvidenceKind, HarnessManifest, Ledger, NewEvidence,
+    Source, Tool, UnresolvedReason,
+    evidence::{EvidenceCoverage, Signal},
+};
 use serde_json::{Value, json};
 
 const BLOCKER: [&str; 8] = [
@@ -427,4 +431,67 @@ fn a_reason_that_is_not_a_blocker_with_a_runtime_is_stored_for_that_runtime() {
     // Not a blocker: no queue is closed by it.
     let st = r.ok(&["run", "status"]);
     assert_eq!(st["queue"]["native"]["open"], true, "{st}");
+}
+
+/// A python test loop H1 that `dla harness gen` wrote (its manifest and the `workload` evidence)
+/// and nothing ran.
+fn python_test_loop_generated(r: &R) {
+    let m: HarnessManifest = serde_json::from_value(json!({
+        "id": "H1", "runtime": "python", "mode": "driver",
+        "scratch": "x", "run": {"argv": ["x"], "cwd": "."},
+        "warmup": 1, "iterations": 8, "step": 1, "key_modes": ["fresh"],
+        "targets": [], "agent": "driver-python", "timeout_secs": 60,
+        "tools": ["pytest-loop"],
+    }))
+    .unwrap();
+    m.save(&r.run_dir).unwrap();
+    let mut result = json!({"harness": "H1", "mode": "driver"});
+    result["signal"] = Signal::new("t", "x", "src").to_value();
+    Ledger::load(&r.run_dir)
+        .unwrap()
+        .add_evidence(NewEvidence {
+            source: Source::Repo {
+                commit: "abc".into(),
+                path: None,
+            },
+            tool: Tool {
+                name: "t".into(),
+                version: "0".into(),
+            },
+            authority: Authority::Test,
+            kind: EvidenceKind::Workload,
+            result,
+            raw: None,
+            coverage: EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        })
+        .unwrap();
+}
+
+#[test]
+fn a_blocker_for_python_is_refused_while_its_test_loop_has_no_end_and_one_for_native_is_accepted() {
+    let r = two_runtimes();
+    python_test_loop_generated(&r);
+    let (code, v) = r.blocker(&["--runtime", "python"]);
+    assert_ne!(code, 0, "{v}");
+    assert_eq!(v["error"]["code"], "loop-not-finished", "{v}");
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(fix.contains("dla harness run H1"), "{fix}");
+    let st = r.ok(&["run", "status"]);
+    assert_eq!(st["queue"]["python"]["open"], true, "{st}");
+    // The loop of python says nothing about the other runtime.
+    let (code, v) = r.blocker(&["--runtime", "native"]);
+    assert_eq!(code, 0, "{v}");
+    // A failed attempt the tool recorded ends the loop: the python blocker is accepted.
+    fs::write(
+        r.run_dir.join("harness/H1/attempt.json"),
+        json!({"harness": "H1", "started_at": "2026-01-01T00:00:00Z",
+            "finished_at": "2026-01-01T00:00:01Z", "outcome": "failed",
+            "reason": "build_fails", "message": "x"})
+        .to_string(),
+    )
+    .unwrap();
+    let (code, v) = r.blocker(&["--runtime", "python"]);
+    assert_eq!(code, 0, "{v}");
 }

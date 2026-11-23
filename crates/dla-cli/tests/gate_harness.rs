@@ -183,6 +183,11 @@ fn manifest_of(id: &str, runtime: Runtime) -> HarnessManifest {
 /// A run with harness H1 of `runtime` generated (manifest plus the `workload` evidence gen
 /// writes) and one candidate F1. With `worker`, both live in that worker's slice.
 fn scene(runtime: Runtime, worker: Option<&str>) -> Run {
+    scene_with(runtime, worker, &[])
+}
+
+/// [`scene`] whose harness lists `tools`: a test loop names its tool and has no hooks to fill.
+fn scene_with(runtime: Runtime, worker: Option<&str>, tools: &[&str]) -> Run {
     let dir = tempfile::tempdir().unwrap();
     let o = base(dir.path())
         .env("DLA_CONSENT_TIERS", "1,2")
@@ -198,8 +203,12 @@ fn scene(runtime: Runtime, worker: Option<&str>) -> Run {
     if let Some(w) = worker {
         r.ok(&["run", "dispatch", "--workers", w]);
     }
-    manifest(runtime).save(&r.run_dir()).unwrap();
-    unfilled_driver(&r, "H1");
+    let mut m = manifest(runtime);
+    m.tools = tools.iter().map(|t| (*t).to_owned()).collect();
+    m.save(&r.run_dir()).unwrap();
+    if tools.is_empty() {
+        unfilled_driver(&r, "H1");
+    }
     gen_evidence(&r, worker);
     let mut l = Ledger::load_for(&r.run_dir(), worker).unwrap();
     let e = l.evidence().last().unwrap().evidence_id.clone();
@@ -966,4 +975,143 @@ fn the_rule_costs_one_load_of_the_series_not_one_per_closed_finding() {
     timed("report", &|| {
         r.run(&["report"]);
     });
+}
+
+/// `ledger resolve intake.workload --status unresolved --reason <reason>` with the given extra
+/// arguments, returning the exit code and the printed value.
+fn workload_blocker(r: &Run, reason: &str, extra: &[&str]) -> (i32, Value) {
+    let mut args = vec![
+        "ledger",
+        "resolve",
+        "intake.workload",
+        "--status",
+        "unresolved",
+        "--reason",
+        reason,
+        "--remedy",
+        "the loop could not finish",
+    ];
+    args.extend_from_slice(extra);
+    r.run(&args)
+}
+
+#[test]
+fn a_blocker_is_refused_while_a_generated_test_loop_has_no_end_and_accepted_after_a_failed_attempt()
+{
+    for tool in ["pytest-loop", "junit-platform-launcher"] {
+        let rt = if tool == "pytest-loop" {
+            Runtime::Python
+        } else {
+            Runtime::Jvm
+        };
+        let r = scene_with(rt, None, &[tool]);
+        // Never run: refused, for every blocker reason, and the fix names the run.
+        for reason in [
+            "env_unavailable",
+            "tool_missing",
+            "build_fails",
+            "privilege_declined",
+        ] {
+            let (code, v) = workload_blocker(&r, reason, &[]);
+            assert_ne!(code, 0, "{tool} {reason}: {v}");
+            let e = &v["error"];
+            assert_eq!(e["code"], "loop-not-finished", "{tool} {reason}: {v}");
+            let msg = e["message"].as_str().unwrap();
+            assert!(
+                msg.contains("the test loop H1 of")
+                    && msg.contains("needs nothing written")
+                    && msg.contains("never started, or cut before its first result"),
+                "{msg}"
+            );
+            let fix = e["fix"].as_str().unwrap();
+            assert!(
+                fix.contains("dla harness run H1 as a plain foreground command")
+                    && fix.contains("record the blocker"),
+                "{fix}"
+            );
+        }
+        // A run the caller cut leaves an interrupted record: still no end.
+        failed_attempt(&r, "H1", "interrupted");
+        let (_, v) = workload_blocker(&r, "env_unavailable", &[]);
+        assert_eq!(v["error"]["code"], "loop-not-finished", "{v}");
+        // Nothing was recorded.
+        assert!(
+            Ledger::load(&r.run_dir())
+                .unwrap()
+                .answers()
+                .get("intake.workload")
+                .is_none()
+        );
+        // A failed attempt the tool recorded is an end: the blocker is accepted as before.
+        failed_attempt(&r, "H1", "build_fails");
+        let (code, v) = workload_blocker(&r, "build_fails", &[]);
+        assert_eq!(code, 0, "{tool}: {v}");
+    }
+}
+
+#[test]
+fn a_blocker_is_accepted_for_a_runtime_with_only_a_hook_driver_that_never_ran() {
+    let r = scene(Runtime::Python, None);
+    let (code, v) = workload_blocker(&r, "env_unavailable", &[]);
+    assert_eq!(code, 0, "{v}");
+    let l = Ledger::load(&r.run_dir()).unwrap();
+    assert!(l.answers().get("intake.workload").is_some());
+}
+
+#[test]
+fn harness_not_run_for_a_test_loop_offers_no_blocker_and_for_a_hook_driver_it_still_does() {
+    let r = scene_with(Runtime::Python, None, &["pytest-loop"]);
+    let (code, v) = r.run(&[
+        "ledger",
+        "resolve",
+        "F1",
+        "--as",
+        "unresolved",
+        "--reason",
+        "no_harness",
+        "--remedy",
+        "x",
+    ]);
+    assert_ne!(code, 0, "{v}");
+    let e = &v["error"];
+    assert_eq!(e["code"], "harness-not-run", "{v}");
+    let missing = e["missing"].as_str().unwrap();
+    let fix = e["fix"].as_str().unwrap();
+    assert!(missing.contains("H1 run"), "{missing}");
+    assert!(
+        fix.contains("dla harness run H1 as a plain foreground command"),
+        "{fix}"
+    );
+    for text in [missing, fix] {
+        assert!(!text.contains("intake.workload"), "{text}");
+        assert!(!text.contains("blocker"), "{text}");
+    }
+    // A hook driver keeps the offer.
+    let r = scene(Runtime::Python, None);
+    let (_, v) = r.run(&[
+        "ledger",
+        "resolve",
+        "F1",
+        "--as",
+        "unresolved",
+        "--reason",
+        "no_harness",
+        "--remedy",
+        "x",
+    ]);
+    let e = &v["error"];
+    assert_eq!(e["code"], "harness-not-run", "{v}");
+    assert!(
+        e["missing"]
+            .as_str()
+            .unwrap()
+            .contains("blocker recorded on intake.workload with --runtime python"),
+        "{e}"
+    );
+    assert!(
+        e["fix"]
+            .as_str()
+            .unwrap()
+            .contains("If H1 cannot run, record why")
+    );
 }

@@ -133,6 +133,9 @@ pub mod codes {
     /// `intake.workload` was recorded as blocked although a harness of the run ran and wrote a
     /// series for every runtime that has candidates.
     pub const WORKLOAD_RAN: &str = "workload-ran";
+    /// `intake.workload` was recorded as blocked for a runtime that has a generated test loop
+    /// whose run never reached an end (no series, no recorded finished attempt).
+    pub const LOOP_NOT_FINISHED: &str = "loop-not-finished";
     /// A candidate ranked for measurement was closed as not exercised while its runtime's
     /// queue is open.
     pub const TARGET_PENDING: &str = "target-pending";

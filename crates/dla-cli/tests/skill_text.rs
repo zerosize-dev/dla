@@ -713,15 +713,27 @@ fn the_python_test_loop_is_never_put_under_a_shell_timeout_and_a_registration_ta
     let stages = read("skills/detect-leak-anywhere/references/stages.md");
     assert!(
         python.contains(
-            "The loop runs up to its time limit of 1800 s, so never put `dla harness run` for it under the shell's `timeout`: start it in the background and wait for it."
+            "The loop runs up to its time limit of 1800 s. Run `dla harness run <H>` for it as a plain foreground command with the tool's longest timeout. When the tool moves the command to the background because it runs long, wait for the notice that it ended and do other read-only work meanwhile. Never start it with the shell's `&` or `nohup` and never put it under `timeout`: a shell background job is killed when the command returns, and a cut run writes no series."
         ),
         "python.md does not keep the loop out of the shell's timeout"
     );
     assert!(
         stages.contains(
-            "The Python test loop runs up to its time limit of 1800 s, so start `dla harness run <H>` for it in the background (or let the tool move it there) and wait for it; never put it under the shell's `timeout`."
+            "The Python test loop runs up to its time limit of 1800 s. Run `dla harness run <H>` for it as a plain foreground command with the tool's longest timeout. When the tool moves the command to the background because it runs long, wait for the notice that it ended and do other read-only work meanwhile. Never start it with the shell's `&` or `nohup` and never put it under `timeout`: a shell background job is killed when the command returns, and a cut run writes no series."
         ),
         "stages.md does not keep the loop out of the shell's timeout"
+    );
+    let worker = read("agents/worker.md");
+    for (name, text) in [("python.md", &python), ("stages.md", &stages)] {
+        assert!(
+            !text.contains("in the background and wait"),
+            "{name} tells the agent to start the loop in the shell's background"
+        );
+    }
+    assert!(
+        worker.contains("as a plain foreground command with the tool's longest timeout")
+            && worker.contains("never with the shell's `&`, `nohup` or `timeout`"),
+        "worker.md does not say how the test loop is run"
     );
     assert!(
         python.contains(
