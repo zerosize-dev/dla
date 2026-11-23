@@ -1501,3 +1501,33 @@ flat test-loop readings get only 9 second looks.
   decide after pillow-7, which runs on the tree of cbf3de3).
 - Uncommitted in the working tree: builder R1's holder capture (harness/python/sitecustomize.py,
   README.md). It waits for R2 (Rust side) and its own CI round.
+
+## 11:40 UTC (approx.): pillow-7 NOT FOUND; cause found and reproduced; builder G started
+
+- pillow-7 (tree of cbf3de3): exit 0, 4858 s, report COMPLETE, "no leak confirmed", 0 captures.
+  Kept: /root/dla-real/pillow-7-keep (report, state, coverage, ledger, transcript, run.json,
+  S1.json, T1.json, H2-p1-fresh.log, gate). Run directory deleted. A replay copy of its state:
+  scratch u94/project/.dla/20261123-095603-f16d (ledger cut after F2 was added; full ledger
+  u94/ledger.full.jsonl).
+- Chain of the miss:
+  1. Agent defect: the tick thread (`_ticker`, DLA_TICK_MS=100) calls `len(gc.get_objects())`
+     in `_build`. On a large heap this races with tuple construction in the main thread:
+     `SystemError: Objects/tupleobject.c:909: bad argument to internal function`.
+     Reproduced: u94/race.py (600000 objects, thread every 100 ms): 0 errors without the thread,
+     25 in 20 s on 3.12, 68 on 3.13. In the run: 7 of 9 loop rounds had such failures; in round 2
+     it hit collection, pytest stopped ("Interrupted: 1 error during collection", 27 s) and ran
+     no test. This defect was in every earlier Python run too.
+  2. The loop counted that run as a unit: every line had one flat step (299, 299, 598, ...), and
+     the counter gate failed every `py.blocks@` column with `delta < 1` (shape still steady).
+  3. Hole: `grown_unmeasured` needs a PASSED column, so findings F1..F11 that the orchestrator
+     added at the non-flat lines were not "grown". `resolve --reason inconclusive` was refused
+     (`measurement-required`), but the gate printed `dla ledger close-rest` as their fix and
+     close-rest closed all 11 as unresolved(not_exercised).
+- Pillow unattended runs: 1 no, 2 yes, 3 yes, 4 no, 5 no, 6 yes, 7 no.
+- Builder G running (brief py-loop-robust-brief.md, scratch u95): G1 no heap walk in ticks, G2 a
+  run pytest cut is not a unit (+ --continue-on-collection-errors), G3 a finding at the site of
+  a non-flat site column is grown.
+- R1 (holder capture of the Python agent) was taken out of the working tree and saved as
+  wip-notes/r1-holder-capture.patch (applies to cbf3de3; `git apply` it before starting R2).
+  It may need a small merge with G1's edit of sitecustomize.py.
+- 0.9.0-preview.6 is NOT published: wait for G and a run that finds the leak with it.
