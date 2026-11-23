@@ -1155,6 +1155,20 @@ fn every_table_a_hook_drivers_registration_call_grows_is_direct_not_only_its_tar
         }),
         "{t}"
     );
+    r.ok(&[
+        "ledger",
+        "add",
+        "--sibling-of",
+        &mimes,
+        "--origin",
+        "hypothesis",
+        "--hypothesis",
+        "N-WARM",
+        "--refute-if",
+        "growth continues over the extra cycles",
+        "--evidence",
+        &ev,
+    ]);
     let a = r.ok(&["alloc-test", "H1", "--finding", &mimes]);
     assert!(
         !a["next"]

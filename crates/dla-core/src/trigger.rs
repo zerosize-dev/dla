@@ -160,6 +160,10 @@ struct Run {
     /// The series reuses no keys (a `repeated` series says nothing about new keys).
     fresh: bool,
     verdicts: BTreeMap<FindingId, Verdict>,
+    /// The findings a passing column of the series' trend is tied to (the column's `finding` or
+    /// one of its `candidates`), whether or not the harness declared them or has a verdict
+    /// for them.
+    tied: BTreeSet<FindingId>,
     declared: BTreeSet<FindingId>,
     /// The harness is a test loop (the project's own JUnit tests in a loop).
     test_loop: bool,
@@ -374,6 +378,18 @@ impl Triggers {
                     }
                     v
                 },
+                tied: report
+                    .map(|r| {
+                        r.columns
+                            .iter()
+                            .filter(|c| {
+                                c.gate == dla_stats::GateVerdict::Pass
+                                    && c.unit != crate::series::Unit::Seconds
+                            })
+                            .flat_map(|c| c.finding.iter().chain(&c.candidates).cloned())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 declared: m.targets.iter().cloned().collect(),
                 test_loop: m.is_test_loop(),
                 pytest_loop: m.is_pytest_loop(),
@@ -473,12 +489,17 @@ impl Triggers {
             .iter()
             .filter(|r| r.hook)
             .map(|r| {
-                let grew = r
+                let mut grew: Vec<FindingId> = r
                     .verdicts
                     .iter()
                     .filter(|(_, v)| **v == Verdict::Grew)
                     .map(|(id, _)| id.clone())
                     .collect();
+                for id in &r.tied {
+                    if !grew.contains(id) {
+                        grew.push(id.clone());
+                    }
+                }
                 (r.harness.clone(), grew)
             })
             .collect();
@@ -639,7 +660,7 @@ impl Triggers {
         // workload, has returned above.
         if self.startup.get(id) == Some(&true)
             && let Some((r, w)) = self.runs.iter().filter(|r| r.hook).find_map(|r| {
-                (r.verdicts.get(id) == Some(&Verdict::Grew))
+                (r.verdicts.get(id) == Some(&Verdict::Grew) || r.tied.contains(id))
                     .then(|| self.hook_direct.get(&(id.clone(), r.harness.clone())))
                     .flatten()
                     .map(|w| (r, w))

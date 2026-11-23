@@ -148,6 +148,37 @@ impl Run {
         }
     }
 
+    /// Adds to the trend of series `series` a passing column tied to finding `n` (no target
+    /// verdict is given for it).
+    fn tie_a_passing_column(&self, series: &str, n: u32) {
+        use crate::{
+            series::{ColumnKind, SeriesRegion, Unit},
+            trend::ColumnTrend,
+        };
+        use dla_stats::TrendShape;
+        let mut r = TrendReport::load(self.dir.path(), &format!("T{}", &series[1..])).unwrap();
+        r.columns.push(ColumnTrend {
+            name: "probe:pkg.tables.MIMES.size".into(),
+            unit: Unit::Count,
+            kind: ColumnKind::Counter,
+            region: SeriesRegion::Heap,
+            site: None,
+            finding: None,
+            candidates: vec![f(n)],
+            n: 8,
+            mk: None,
+            sen: None,
+            halves: None,
+            every_delta: None,
+            noise: 0.0,
+            rise: 8.0,
+            shape: TrendShape::Steady,
+            gate: dla_stats::GateVerdict::Pass,
+            gate_failed: vec![],
+        });
+        r.save(self.dir.path()).unwrap();
+    }
+
     fn triggers(&self) -> Triggers {
         Triggers::of(&RunView::load(self.dir.path()).unwrap())
     }
@@ -750,6 +781,33 @@ fn a_finding_that_grew_in_a_hook_driver_without_being_its_target_is_read_the_sam
     }
     // Its writer is a run-time one: nothing is said, as before.
     assert_eq!(t.trigger(&f(3)), Trigger::Unchecked);
+}
+
+#[test]
+fn a_finding_a_passing_column_of_a_hook_drivers_trend_is_tied_to_is_read_the_same_way() {
+    // H2 declares F1 only and the trend gives F1 a verdict; the column of a second table passes
+    // and is tied to F2, which has no verdict there.
+    let run = Run::new(2);
+    run.harness("H2", Kind::Hooks, &[1]);
+    run.run(
+        "S2",
+        "H2",
+        "bb",
+        Some("the key"),
+        Some(&[(1, Verdict::Grew)]),
+    );
+    run.tie_a_passing_column("S2", 2);
+    hook_driver_calling(&run, "H2", "def unit(i):\n    core.Register(str(i), 1)\n");
+    writer_facts_for(&run, 1, false, true, true, false, &[]);
+    writer_facts_for(&run, 2, false, true, true, false, &[]);
+    let t = run.triggers();
+    for n in [1, 2] {
+        assert!(
+            matches!(t.trigger(&f(n)), Trigger::Direct { .. }),
+            "F{n}: {:?}",
+            t.trigger(&f(n))
+        );
+    }
 }
 
 #[test]
