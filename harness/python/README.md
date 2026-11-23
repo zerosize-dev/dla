@@ -30,6 +30,13 @@ and cover only files under `DLA_PROJECT`, plus files under `DLA_SOURCE_ROOT` (a 
   `/proc/self/status`. `values_pre_gc` holds `py.traced`, `py.gc_objects`, `os.rss` read before
   the collection (this is how cyclic garbage waiting for the collector shows up).
 - `types`: top 20 types by instance count with summed `sys.getsizeof`.
+- `tick` records (`DLA_TICK_MS`, written by the agent's own thread every tick, `dla harness run` sets 100 ms) carry only what
+  can be read without creating a reference to an object of the program: `py.traced` and `py.traced_peak` (counters of
+  tracemalloc), `py.gc_collections` and the `os.*` values. A tick never calls `gc.get_objects`, `gc.get_referrers` or
+  `gc.get_referents`, takes no tracemalloc snapshot and walks no dict of the program, so it has no `py.gc_objects`: the
+  list `gc.get_objects` returns refers to objects another thread may be building, and that thread's resize of a tuple
+  then fails with `SystemError: bad argument to internal function`. Checkpoint and exit records read the heap on the
+  thread that took them.
 - `group_counts`, in every checkpoint record of a driver run: `py.blocks`, the live blocks tracemalloc
   traces per allocation site, all counted sites (see "Allocation sites" below); `group_capped` names
   the counters a record cut at the bound of 5000 sites.
@@ -186,7 +193,7 @@ fallback, and the missing pytest-memray is a recorded coverage gap.
 directory first on `sys.path` (and `<cwd>/src` when that directory holds a package or a module). A small plugin
 counts, per test file, the tests that passed, failed and were skipped and the time they took. The arguments keep
 the run quiet and in this process: `-o addopts=` (the project's own addopts may ask for parallel workers or a
-coverage plugin), `-p no:cacheprovider`, `-p no:xdist`, `-q`, `--tb=short` and `--rootdir <cwd>`; what pytest and
+coverage plugin), `-p no:cacheprovider`, `-p no:xdist`, `-q`, `--tb=short`, `--continue-on-collection-errors` (one test file that fails to import costs its own tests and not the whole run; the file is named once in a limitation) and `--rootdir <cwd>`; what pytest and
 the tests print goes to a temporary file and only a bounded head of it reaches the harness log (the first run, and
 the first later run with a failure). `SystemExit` of a test is caught. Rounds as the generic driver
 (`DLA_WARMUP`, `DLA_ROUNDS`, `DLA_STEP`, a checkpoint after each round) with a step of at least 1; the default step is 1.
@@ -208,10 +215,16 @@ After the first run the driver:
    files until it fits (limitation `dropped test file <path>: it took <t> s of <unit> s per run and the series would
    not fit <limit> s`); when one file alone does not fit it stops with `the tests are too slow for a series` and exit 3,
    so the run reports no usable point. A reading of a single run holds the one-time costs (the imports), so this stop
-   waits for the second run unless one run alone is over the budget. Timing restarts after a drop.
+   waits for the second run unless one run alone is over the budget. Timing restarts after a drop;
+4. does not count a run that pytest ended early. From the second run on, when the exit code of `pytest.main` is neither 0
+   (all passed) nor 1 (some tests failed), or the run executed no test (an error in a plugin, a `conftest.py` or the
+   collection as a whole), the run is not a unit: a limitation says which run, the exit code and the first error
+   line, and the same run is made again, at most 2 times for one unit and 4 times in the loop. After that the run
+   counts as a dead unit, the last limitation and the summary line (`cut_units=`, `repeats=`) say how many units were
+   cut, and the time the repeats took counts for the time fitting. The first run keeps the rules above.
 
 It records the files it runs in `pytest-files.json` next to the dump (the bundle of a finding lists them) and ends
-with `DLA-PYTEST summary: units= tests_run= files= dropped= failed_units= first_failure=` on stderr. The driver file
+with `DLA-PYTEST summary: units= tests_run= files= dropped= failed_units= first_failure=` on stderr (`cut_units=` and `repeats=` follow `failed_units=`). The driver file
 counts as a harness file: its lines have no `py.blocks@` column.
 
 ### Placeholders

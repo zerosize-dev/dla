@@ -1,6 +1,7 @@
 //! Growth the run measured and has not decided.
 //!
-//! A passed growth column of a harness series points at a finding: the finding the column was
+//! A growth column of a harness series (one whose gate passed, or a non-flat allocation-site
+//! column) points at a finding: the finding the column was
 //! probed for, else the first candidate of its site (the choice `dla trend` makes when it prints
 //! `dla ledger add --sibling-of`). Until an alloc-test evidence bound to that finding exists the
 //! finding is not closed unmeasured: `close-rest` leaves it, `ledger resolve` refuses to close it,
@@ -257,7 +258,18 @@ fn same_leak_as(view: &RunView, f: &FindingId, harness: &str) -> Option<(Finding
         })
 }
 
-/// Findings a passed growth column of a harness series points at, or that a trend gave the
+/// True when a trend column is growth the run measured and nobody decided: its gate passed, or
+/// it is an allocation-site count column (`py.blocks@<file:line>`) that is non-flat by the gate's
+/// own predicate ([`crate::gate::non_flat`]: shape `steady` or `stair`). A site column can fail
+/// the counter gate on one flat step (a unit that did not run) and still be a line that grew.
+pub fn counts_as_growth(c: &crate::trend::ColumnTrend) -> bool {
+    c.unit != Unit::Seconds
+        && (c.gate == GateVerdict::Pass
+            || (is_alloc_site_column(&c.name) && crate::gate::non_flat(c)))
+}
+
+/// Findings a growth column of a harness series points at (a column whose gate passed, or a
+/// non-flat allocation-site column: [`counts_as_growth`]), or that a trend gave the
 /// verdict `grew`, that no alloc-test evidence is bound to, in the order of the trends. Only open findings and findings closed `unresolved` or
 /// `suspected_static_only` count: the others have been decided.
 pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
@@ -275,7 +287,7 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
         for c in t
             .columns
             .iter()
-            .filter(|c| c.gate == GateVerdict::Pass && c.unit != Unit::Seconds)
+            .filter(|c| counts_as_growth(c))
             .filter(|c| !is_whole_process(&c.name))
         {
             if let Some(f) = c
@@ -469,7 +481,7 @@ pub fn items(view: &RunView, grown: &[Grown]) -> Vec<BlockingItem> {
             kind: BlockingKind::Growth,
             id: g.finding.to_string(),
             description: format!(
-                "{} is closed {} but its column {} of {} passed the growth gate and no alloc-test decided it",
+                "{} is closed {} but its column {} of {} grew (it passed the growth gate, or it is a non-flat allocation-site column) and no alloc-test decided it",
                 g.finding, g.state, g.column, g.series
             ),
             fix: g.commands().join("   then   "),
@@ -634,6 +646,72 @@ mod tests {
         l.annotate(&FindingId::new(3), vec![], vec!["a.py:25".into()], None)
             .unwrap();
         assert!(at(&l, "a.py:25").is_empty());
+    }
+
+    /// The findings `grown_unmeasured` lists for a one-column trend of series S1 (harness H1)
+    /// whose column is `name`, at the site `a.py:1` of F1, with the given shape and gate.
+    fn grown_by_column(name: &str, shape: &str, gate: &str) -> Vec<String> {
+        let (_d, l) = scene();
+        let state =
+            crate::state::RunState::init("/p", None, 3600, None, crate::state::now_utc()).unwrap();
+        let mut view = RunView::new(state, l, None);
+        let col: crate::trend::ColumnTrend = serde_json::from_value(serde_json::json!({
+            "name": name, "unit": "count", "kind": "counter", "region": "heap",
+            "site": "a.py:1", "n": 8, "noise": 0.0, "rise": 100.0, "shape": shape, "gate": gate,
+            "gate_failed": if gate == "fail" { vec!["delta < 1"] } else { vec![] },
+        }))
+        .unwrap();
+        view.trends = vec![crate::trend::TrendReport {
+            schema_version: 1,
+            id: "T1".into(),
+            series: "S1".into(),
+            thresholds: dla_stats::GateThresholds::default(),
+            columns: vec![col],
+            targets: vec![],
+        }];
+        view.series_harness.insert("S1".into(), "H1".into());
+        grown_unmeasured(&view)
+            .iter()
+            .map(|g| g.finding.to_string())
+            .collect()
+    }
+
+    const SITE_COLUMN: &str = "py.blocks@a.py:1";
+
+    #[test]
+    fn a_site_column_whose_gate_passed_points_at_the_finding_at_its_site() {
+        assert_eq!(grown_by_column(SITE_COLUMN, "steady", "pass"), ["F1"]);
+    }
+
+    #[test]
+    fn a_steady_or_stair_site_column_points_at_it_although_its_gate_failed() {
+        assert_eq!(grown_by_column(SITE_COLUMN, "steady", "fail"), ["F1"]);
+        assert_eq!(grown_by_column(SITE_COLUMN, "stair", "fail"), ["F1"]);
+        // The same for the column of a series cut before the collection (`.pre_gc`).
+        assert_eq!(
+            grown_by_column("py.blocks@a.py:1.pre_gc", "steady", "fail"),
+            ["F1"]
+        );
+    }
+
+    #[test]
+    fn a_flat_plateau_spike_or_falling_site_column_with_a_failed_gate_points_at_nothing() {
+        for shape in ["flat", "plateau", "spike", "declining", "insufficient"] {
+            assert!(
+                grown_by_column(SITE_COLUMN, shape, "fail").is_empty(),
+                "{shape}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_an_allocation_site_column_is_helped_by_its_shape() {
+        // Another column at the same site (a type count, a probe) keeps the rule of the gate.
+        assert!(grown_by_column("py.type:list.count", "steady", "fail").is_empty());
+        assert_eq!(
+            grown_by_column("py.type:list.count", "steady", "pass"),
+            ["F1"]
+        );
     }
 
     #[test]

@@ -505,7 +505,13 @@ pub fn status_for(view: &RunView, worker: Option<&str>) -> ReportStatus {
         if f.state.is_dispositioned() {
             counts.dispositioned += 1;
         } else {
-            let reason = view.ledger.supported_reason(&f.id);
+            // A finding whose column grew was measured: it is never `not_exercised`, even when
+            // the growth evidence lists only the columns whose gate passed.
+            let reason = if grown.iter().any(|g| g.finding == f.id) {
+                crate::finding::UnresolvedReason::Inconclusive
+            } else {
+                view.ledger.supported_reason(&f.id)
+            };
             // Where the ledger would refuse that close for an unrun, unbuilt or missing
             // harness, the fix is the step that clears the rule.
             let step = crate::gate::open_finding_step(

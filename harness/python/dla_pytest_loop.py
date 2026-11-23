@@ -11,6 +11,16 @@ defaults are baked in at generation time; the step is never below 1). The time l
 process is DLA_TIME_LIMIT_SECS: from the first unit the loop estimates the whole series and, when it
 would not fit, drops the slowest test files (a limitation says which).
 
+A run that pytest ends early is not a unit. From the second run on, when the exit code of
+`pytest.main` is neither 0 (all passed) nor 1 (some tests failed), or the run executed no test (an
+error while collecting, an error in a plugin or a conftest.py), the run is not counted: a note says
+which run, the exit code and the first error line, and the same run is made again, at most
+MAX_UNIT_REPEATS times for one unit and MAX_LOOP_REPEATS times in the whole loop. After that the run
+counts as a dead unit and the summary line and the limitations say how many units were cut. The
+time the repeats took counts for the time fitting. The first run keeps its own rules (below).
+`--continue-on-collection-errors` makes one test file that fails to import cost its own tests and
+not the whole run; such a file is named once in a note.
+
 Exit codes: 0 the series was written; 2 no test passed in any unit; 3 the loop cannot run (pytest
 does not import, no test found, the tests import the project from outside it, one test file alone
 does not fit the time limit). The reason is a line that starts with `DLA-PYTEST` on stderr.
@@ -47,7 +57,22 @@ FAILURE_CHARS = 200
 
 # Arguments that keep the run in this process and quiet. The project's own addopts may ask for
 # parallel workers or a coverage plugin; the cache plugin writes into the project.
-PYTEST_ARGS = ["-o", "addopts=", "-p", "no:cacheprovider", "-p", "no:xdist", "-q", "--tb=short"]
+PYTEST_ARGS = [
+    "-o",
+    "addopts=",
+    "-p",
+    "no:cacheprovider",
+    "-p",
+    "no:xdist",
+    "-q",
+    "--tb=short",
+    "--continue-on-collection-errors",
+]
+
+# A run that pytest ended early (see the module text) is made again: at most this many times for one
+# unit, and this many in the whole loop.
+MAX_UNIT_REPEATS = 2
+MAX_LOOP_REPEATS = 4
 
 
 class _Stop(Exception):
@@ -76,6 +101,8 @@ class _Tally:
     def __init__(self):
         self.files = {}  # path -> [passed, failed, skipped, seconds]
         self.first = {}  # path -> first failure, one line
+        self.ran = 0  # test reports seen: a run that executed no test has none
+        self.collect_failed = []  # test files whose collection failed, in the order they did
 
     def _slot(self, nodeid):
         path = (nodeid or "").split("::", 1)[0].replace("\\", "/") or "<session>"
@@ -99,6 +126,7 @@ class _Tally:
         self.first[path] = _limit(f"{where}: {text}")
 
     def pytest_runtest_logreport(self, report):
+        self.ran += 1
         path, slot = self._slot(report.nodeid)
         slot[3] += getattr(report, "duration", 0.0) or 0.0
         outcome = report.outcome
@@ -116,6 +144,8 @@ class _Tally:
             path, slot = self._slot(report.nodeid)
             slot[1] += 1
             self._failure(path, report)
+            if path not in self.collect_failed:
+                self.collect_failed.append(path)
 
     def totals(self):
         passed = sum(s[0] for s in self.files.values())
@@ -127,6 +157,18 @@ class _Tally:
         for path in sorted(self.first):
             return self.first[path]
         return None
+
+
+def _error_line(tally, head):
+    """The error line of a run: the first failure the plugin saw, else the last line of the output
+    that names an error (the end of a traceback)."""
+    line = tally.first_failure()
+    if line:
+        return line
+    for raw in reversed(head.splitlines()):
+        if "rror" in raw or "INTERNALERROR" in raw:
+            return _limit(raw.strip())
+    return "no error line in the output"
 
 
 def _holds_python(directory):
@@ -285,6 +327,8 @@ def main(counts):
     shown_later = False
     state = {"first": 0.0, "since_secs": 0.0, "since_units": 0, "estimate": 0.0}
     file_secs = {}
+    collect_noted = []  # test files named in a note as failing to collect
+    cut_runs = []  # the numbers of the runs that ended as a dead unit although pytest ended them early
 
     def per_unit():
         if state["since_units"] > 0:
@@ -357,8 +401,33 @@ def main(counts):
         while n < step:
             n += 1
             done += 1
-            tally = _Tally()
-            code, took, head, size = _run_pytest(active, tally)
+            repeated = 0
+            while True:
+                tally = _Tally()
+                code, took, head, size = _run_pytest(active, tally)
+                cut = done > 1 and (code not in (0, 1) or tally.ran == 0)
+                if not cut:
+                    break
+                counts["cut_runs"] += 1
+                why = (
+                    f"run {done} of the tests was ended early by pytest (exit code {code}, "
+                    f"{tally.ran} test report(s); first error: {_error_line(tally, head)})"
+                    + ("; the tests that ran before the cut are in the round's figures" if tally.ran else "")
+                )
+                # What the cut run took is the time of getting this unit.
+                state["since_secs"] += took
+                if repeated >= MAX_UNIT_REPEATS or counts["repeats"] >= MAX_LOOP_REPEATS:
+                    counts["cut_units"] += 1
+                    cut_runs.append(done)
+                    text = f"{why}; it was made again {repeated} time(s) and counts as a dead unit"
+                    dla.note(text)
+                    _say(text)
+                    break
+                repeated += 1
+                counts["repeats"] += 1
+                text = f"{why}: it is not a unit and is made again ({repeated} of at most {MAX_UNIT_REPEATS} for this unit, {counts['repeats']} of at most {MAX_LOOP_REPEATS} in the loop)"
+                dla.note(text)
+                _say(text)
             counts["units"] = done
             passed, failed, skipped = tally.totals()
             if done == 1:
@@ -385,11 +454,19 @@ def main(counts):
                 broken = [f for f in active if tally.files[f][0] == 0 and tally.files[f][1] > 0]
                 gone = 0.0
                 for f in broken:
-                    why = (
-                        f"dropped test file {f}: none of its tests passed in the first run (first failure: "
-                        f"{tally.first.get(f, 'failed')}), so it is left out of the loop and the other files "
-                        "are measured"
-                    )
+                    if f in tally.collect_failed:
+                        why = (
+                            f"dropped test file {f}: it failed to collect in the first run (first failure: "
+                            f"{tally.first.get(f, 'failed')}), so it costs its own tests only and is left out "
+                            "of the loop; the other files are measured"
+                        )
+                        collect_noted.append(f)
+                    else:
+                        why = (
+                            f"dropped test file {f}: none of its tests passed in the first run (first failure: "
+                            f"{tally.first.get(f, 'failed')}), so it is left out of the loop and the other files "
+                            "are measured"
+                        )
                     dla.note(why)
                     _say(why)
                     dropped.append(f)
@@ -419,10 +496,23 @@ def main(counts):
             elif failed > 0:
                 counts["failed_units"] += 1
                 counts["first_failure"] = counts["first_failure"] or tally.first_failure()
-            if passed == 0:
+            for f in tally.collect_failed:
+                if f not in collect_noted:
+                    collect_noted.append(f)
+                    dla.note(
+                        f"test file {f} failed to collect in run {done} (first failure: "
+                        f"{tally.first.get(f, 'failed')}): it costs its own tests only, the other files ran"
+                    )
+            cut_now = bool(cut_runs) and cut_runs[-1] == done
+            if passed == 0 or cut_now:
                 counts["dead_units"] += 1
             if done <= 2:
                 fit(round_no, n)
+        if round_no == total and cut_runs:
+            dla.note(
+                f"{len(cut_runs)} unit(s) of the loop were cut by pytest and counted as dead "
+                f"(run {', '.join(str(r) for r in cut_runs)}) after {counts['repeats']} repeat(s) in the loop"
+            )
         dla.checkpoint(done, last=round_no == total)
         if round_no < total:
             fit(round_no + 1, 0)
@@ -434,13 +524,15 @@ def main(counts):
 def _summary(counts):
     failure = counts["first_failure"]
     sys.stderr.write(
-        "DLA-PYTEST summary: units=%d tests_run=%d files=%d dropped=%d failed_units=%d%s\n"
+        "DLA-PYTEST summary: units=%d tests_run=%d files=%d dropped=%d failed_units=%d cut_units=%d repeats=%d%s\n"
         % (
             counts["units"],
             counts["tests_run"],
             counts["files"],
             counts["dropped"],
             counts["failed_units"],
+            counts["cut_units"],
+            counts["repeats"],
             f" first_failure={failure}" if failure else "",
         )
     )
@@ -459,6 +551,9 @@ if __name__ == "__main__":
         "dropped": 0,
         "failed_units": 0,
         "dead_units": 0,
+        "cut_units": 0,
+        "cut_runs": 0,
+        "repeats": 0,
         "first_failure": None,
     }
     try:
