@@ -1320,3 +1320,13 @@ flat test-loop readings get only 9 second looks.
   commit-snapshot-tree.sh 9371823 commit-message-15.txt, push main + dev, wait for CI on main, then
   Version 0.9.0-preview.6 and release.yml with publish.
 - pillow-6 running since 06:10 with the plugin of the same tree (waiter be591kayr).
+
+## State at about 07:30 UTC 2026-11-23
+
+- main = 22bd696 "A test loop whose run was cut is not a workload blocker" (tree of 9371823, CI round 6 run
+  45123257647 all green), on top of f30f050 and bd1fc84. Pushed to main and the dev branch. Working tree clean.
+- Three commits are on main since the published 0.9.0-preview.5 (a2210bd): bd1fc84 registry tables, f30f050 narrowed
+  loop, 22bd696 cut loop. Next preview: 0.9.0-preview.6 (version commit on main, wait for CI on main, then
+  release.yml with {"publish": true}). Decide after reading pillow-6.
+- pillow-6 (plugin of 5e2c003 = the tree of 22bd696) running since 06:10 (waiter be591kayr). The python worker ran
+  `harness gen --lang python --pytest` and then `harness run H2` as a plain foreground command.
