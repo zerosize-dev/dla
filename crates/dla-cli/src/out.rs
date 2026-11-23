@@ -59,8 +59,9 @@ const PROTECTED: [&str; 9] = [
 
 /// Sentences that name the next step; a cut one reads as a different instruction: never shrunk.
 /// `junit_hint` and `pytest_hint` point at the project's own tests as a hookless harness;
-/// `queue_next` is the queue's next command with the count of what is left.
-const KEPT_WHOLE: [&str; 3] = ["junit_hint", "pytest_hint", "queue_next"];
+/// `queue_next` is the queue's next command with the count of what is left; `stacks_hint` is the
+/// alloc-test's sentence about capturing the stacks that lead to a growing allocation line.
+const KEPT_WHOLE: [&str; 4] = ["junit_hint", "pytest_hint", "queue_next", "stacks_hint"];
 
 /// Longest string kept whole in a protected value.
 const PROTECTED_STR: usize = 160;
@@ -266,6 +267,30 @@ mod tests {
         assert_eq!(b["queue_next"], next);
         assert_eq!(b["summary"]["junit_hint"], hint);
         assert_eq!(b["summary"]["pytest_hint"], py);
+    }
+
+    #[test]
+    fn the_stacks_hint_of_an_alloc_test_is_never_cut() {
+        let hint = crate::alloc_cmd::stacks_hint("H1", "fresh", "F1");
+        assert!(hint.len() > PROTECTED_STR, "{}", hint.len());
+        let v = json!({
+            "ok": true,
+            "stacks_hint": hint,
+            "columns": vec!["a long text ".repeat(20); 40],
+        });
+        let b = bound(v);
+        assert!(serde_json::to_string(&b).unwrap().len() < MAX_OUTPUT_BYTES);
+        assert_eq!(b["truncated"], true);
+        assert_eq!(b["stacks_hint"], hint);
+        let mut o = Map::new();
+        o.insert("ok".into(), json!(true));
+        o.insert("stacks_hint".into(), json!(hint));
+        for i in 0..400 {
+            o.insert(format!("key{i}"), json!(i));
+        }
+        let b = bound(Value::Object(o));
+        assert!(serde_json::to_string(&b).unwrap().len() < MAX_OUTPUT_BYTES);
+        assert_eq!(b["stacks_hint"], hint);
     }
 
     #[test]

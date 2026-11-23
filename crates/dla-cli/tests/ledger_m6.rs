@@ -1073,6 +1073,23 @@ fn no_evidence_frame_means_no_excerpt_even_with_a_site() {
     assert!(!all_bundle_text(&dir).contains("z.go"));
 }
 
+/// A confirmed finding whose growth is a heap-graph column (not a count of blocks allocated at
+/// one line) is bundled as before: no refusal, no stack note, no excerpt without a frame.
+#[test]
+fn a_confirmed_finding_grown_by_a_holder_column_bundles_without_stacks_as_before() {
+    let e = env();
+    let (f2, e2) = under_test_with_column(&e, "b.go:1", Holder::StaticGlobal, None);
+    let v = ok(&e, &["ledger", "confirm", &f2, "--evidence", &e2]);
+    assert_eq!(v["to"], "confirmed", "{v}");
+    let b = ok(&e, &["bundle", &f2]);
+    assert_eq!(b["excerpt"], false, "{b}");
+    assert!(b.get("stacks_note").is_none(), "{b}");
+    assert!(
+        b["evidence"].as_array().unwrap().iter().any(|x| *x == e2),
+        "{b}"
+    );
+}
+
 // ------------------------------------------------------------------- confirm: holder warning
 
 /// Adds a leak-side finding at `site` with holder `holder`, its refuted N-WARM sibling and the

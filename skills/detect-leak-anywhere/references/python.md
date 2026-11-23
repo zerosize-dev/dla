@@ -57,7 +57,13 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   (it decides by the `py.blocks@` column of the finding's line, not by `py.traced`, which a unit that runs
   a test runner grows on its own), refute the loser, `dla ledger confirm`. The final gate lists a growing
   `py.blocks@` column that ties to no dispositioned finding, and `dla ledger resolve` refuses to close a
-  finding whose column passed until an alloc-test is bound to it.
+  finding whose column passed until an alloc-test is bound to it. After `dla alloc-test` favors leak,
+  capture the stacks that lead to the line: run the `dla harness run H --mode <m> --capture alloc` command
+  it prints first, then the `dla summarize alloc-stack-diff` command that run prints (it ties the stacks at
+  the line to the finding), then label, `dla bundle` and explain; `dla bundle` is refused with
+  `stacks-not-captured` for a confirmed finding at such a line until that capture was made. The frame above
+  the growing line shows who receives the object: for a callback or a wrapper object it is a function of an
+  extension module, so read that module's source for the reference it keeps.
 - A table at module level that the project fills at import time through a registration function (plugin
   modules call it, or a wrapper of it, at their top level), and that a driver grows by calling that function
   or its wrapper with new keys, is reported as grown by the registration function itself, not as reproduced

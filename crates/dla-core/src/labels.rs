@@ -191,6 +191,19 @@ fn names_subject(result: &Value, subjects: &[&Finding]) -> bool {
         })
 }
 
+/// True when a retention-path or allocation-stack record names one of `subjects` without being
+/// cited: a holder key is the finding's owner, an allocation site is the finding's site, or the
+/// result's `finding` or `candidates` name it. The rule `dla ledger label` applies to these two
+/// kinds, and the one `dla bundle` and `dla alloc-test` use to find such records. False for
+/// every other kind and for a record of authority `static`.
+pub fn names_finding(e: &EvidenceRecord, subjects: &[&Finding]) -> bool {
+    matches!(
+        e.kind,
+        EvidenceKind::RetentionPath | EvidenceKind::AllocStack
+    ) && e.authority != Authority::Static
+        && (subjects.iter().any(|s| names_holder(e, s)) || names_subject(&e.result, subjects))
+}
+
 /// Why `e` does not count for the finding behind `subjects`; `Ok` when it does.
 /// `label` is the `N-*` id being claimed, if any.
 fn tie(
@@ -273,7 +286,7 @@ fn tie(
             }
         }
         EvidenceKind::RetentionPath | EvidenceKind::AllocStack => {
-            if subjects.iter().any(|s| names_holder(e, s)) || names_subject(&e.result, subjects) {
+            if names_finding(e, subjects) {
                 Ok(())
             } else {
                 Err(format!(

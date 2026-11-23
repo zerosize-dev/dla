@@ -937,7 +937,7 @@ fn cap_for_unread_probe(favors: Favors, supports: Vec<String>) -> (Favors, Vec<S
     }
 }
 
-fn key_mode(m: &HarnessManifest) -> KeyMode {
+pub(crate) fn key_mode(m: &HarnessManifest) -> KeyMode {
     match m.mode {
         HarnessMode::Driver => KeyMode::Fresh,
         HarnessMode::Command => m.key_modes.first().copied().unwrap_or(KeyMode::Native),
@@ -1439,6 +1439,12 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     let direct = bound.as_ref().and_then(|f| {
         crate::ledger_cmd::direct_trigger(&tc.run_dir, tc.worker.as_deref(), &f.root_id())
     });
+    let decided = decided_by(&picked);
+    let stacks_ctx = StacksCtx {
+        decided: decided.as_deref(),
+        runtime: manifest.runtime,
+        mode: key_mode(&manifest).as_str(),
+    };
     let next = match &drift {
         Some(Drift::Agent(_)) => vec![drift_next(ctx)],
         Some(Drift::Growing {
@@ -1455,6 +1461,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
                     &evidence,
                     extra,
                     direct.as_ref(),
+                    Some(&stacks_ctx),
                 ));
             }
             n
@@ -1474,9 +1481,20 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
             &evidence,
             extra,
             direct.as_ref(),
+            Some(&stacks_ctx),
         ),
     };
     let next = say_how_long_a_held_plateau_needs(next, favors, &results, &picked);
+    // The hint rides with the capture command: a key the output bound never cuts.
+    let stacks_note = stacks_offer(
+        &ledger,
+        bound.as_ref(),
+        &a.harness,
+        favors,
+        Some(&stacks_ctx),
+    )
+    .filter(|(lead, _)| next.contains(&lead[0]))
+    .map(|(_, hint)| hint);
     let mut out = Map::new();
     out.insert("ok".into(), json!(true));
     out.insert("command".into(), json!("alloc-test"));
@@ -1499,6 +1517,9 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     }
     if let Some(Drift::Agent(note)) = &drift {
         out.insert("caution".into(), json!(note));
+    }
+    if let Some(hint) = &stacks_note {
+        out.insert("stacks_hint".into(), json!(hint));
     }
     if !partial.is_empty() {
         out.insert(
@@ -1601,6 +1622,70 @@ fn say_how_long_a_held_plateau_needs(
     next
 }
 
+/// What `next_commands` needs to offer the stack capture: the column that decided, the runtime
+/// of the harness and the key mode the alloc-test ran.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct StacksCtx<'a> {
+    /// The column whose reading decided the verdict.
+    pub decided: Option<&'a str>,
+    /// The runtime of the harness.
+    pub runtime: Runtime,
+    /// The key mode of the run (`fresh`, `native`).
+    pub mode: &'a str,
+}
+
+/// The two commands that capture the stacks of a growing allocation line and tie them to the
+/// finding: the capture run, then a line that says to run the summarize command it prints (a `#`
+/// line: nothing tries to execute it).
+pub(crate) fn stacks_commands(harness: &str, mode: &str, finding: &str, site: &str) -> [String; 2] {
+    [
+        format!("dla harness run {harness} --mode {mode} --capture alloc"),
+        format!(
+            "# run the dla summarize alloc-stack-diff command that run prints; it ties the stacks at {site} to {finding}"
+        ),
+    ]
+}
+
+/// The sentence of the `stacks_hint` key (never cut by the output bound).
+pub(crate) fn stacks_hint(harness: &str, mode: &str, finding: &str) -> String {
+    format!(
+        "the growth is a count of blocks allocated at one line, and a verifier and an explanation need the stack that leads to it: run `dla harness run {harness} --mode {mode} --capture alloc`, then the `dla summarize alloc-stack-diff` command that run prints, which ties the stacks at the line to {finding}"
+    )
+}
+
+/// The `next` entries that capture the stacks, and the hint sentence, when they apply: the result
+/// favors leak, the deciding column is an allocation-site column, the runtime of the harness
+/// writes allocation captures, and no allocation-stack record names the finding yet (the test
+/// `dla ledger label` uses).
+fn stacks_offer(
+    ledger: &Ledger,
+    bound: Option<&Finding>,
+    harness: &str,
+    favors: Favors,
+    stacks: Option<&StacksCtx>,
+) -> Option<([String; 2], String)> {
+    let (f, c) = (bound?, stacks?);
+    let column = c.decided?;
+    if favors != Favors::Leak
+        || !dla_core::grown::is_alloc_site_column(column)
+        || !dla_workload::harness::capture::supported(c.runtime).alloc
+    {
+        return None;
+    }
+    let root = f.root_id();
+    let root_f = ledger.finding(&root).unwrap_or(f);
+    if ledger.evidence().any(|e| {
+        e.kind == EvidenceKind::AllocStack && dla_core::labels::names_finding(e, &[root_f])
+    }) {
+        return None;
+    }
+    let site = column.split_once('@').map_or("the line", |(_, s)| s);
+    Some((
+        stacks_commands(harness, c.mode, &root.to_string(), site),
+        stacks_hint(harness, c.mode, &root.to_string()),
+    ))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn next_commands(
     ledger: &Ledger,
@@ -1611,6 +1696,7 @@ fn next_commands(
     evidence: &EvidenceId,
     extra: u32,
     direct: Option<&(String, String, String)>,
+    stacks: Option<&StacksCtx>,
 ) -> Vec<String> {
     let mut next: Vec<String> = Vec::new();
     let Some(f) = bound else {
@@ -1710,7 +1796,22 @@ fn next_commands(
             extra * 2
         )),
     }
-    next.truncate(MAX_NEXT);
+    // The stack capture leads; when the list is too long the two entries and the confirm line
+    // stay and the commands between them give way.
+    let Some((lead, _)) = stacks_offer(ledger, bound, harness, favors, stacks) else {
+        next.truncate(MAX_NEXT);
+        return next;
+    };
+    let room = MAX_NEXT - lead.len();
+    if next.len() > room {
+        let confirm = next
+            .last()
+            .filter(|c| c.starts_with("dla ledger confirm"))
+            .cloned();
+        next.truncate(room - usize::from(confirm.is_some()));
+        next.extend(confirm);
+    }
+    next.splice(0..0, lead);
     next
 }
 
@@ -1845,7 +1946,17 @@ mod tests {
         // confirm without the refuted sibling is refused).
         {
             let f = l.finding(&root).unwrap().clone();
-            let next = next_commands(&l, Some(&f), "H1", Favors::Leak, &[], &last(&l), 4, None);
+            let next = next_commands(
+                &l,
+                Some(&f),
+                "H1",
+                Favors::Leak,
+                &[],
+                &last(&l),
+                4,
+                None,
+                None,
+            );
             let at = |needle: &str| {
                 next.iter()
                     .position(|n| n.starts_with(needle))
@@ -1865,7 +1976,17 @@ mod tests {
         sib.refute_if = Some("keeps growing".into());
         l.add_finding(sib).unwrap();
         let f = l.finding(&root).unwrap().clone();
-        let next = next_commands(&l, Some(&f), "H1", Favors::Leak, &[], &last(&l), 4, None);
+        let next = next_commands(
+            &l,
+            Some(&f),
+            "H1",
+            Favors::Leak,
+            &[],
+            &last(&l),
+            4,
+            None,
+            None,
+        );
         let at = |needle: &str| next.iter().position(|n| n.starts_with(needle));
         let refute = at("dla ledger refute F1.n1").unwrap_or(usize::MAX);
         let test = at(&format!("dla ledger test F1 --evidence {workload}")).unwrap_or(usize::MAX);
@@ -1873,6 +1994,152 @@ mod tests {
             at(&format!("dla ledger confirm F1 --evidence {growth}")).unwrap_or(usize::MAX);
         assert!(
             refute < test && test < confirm && confirm < next.len(),
+            "{next:?}"
+        );
+    }
+
+    /// A ledger with the leak-side F1 at `shop/store.py:5` and the evidence a stack record
+    /// of a given result is added to.
+    fn stacks_ledger() -> (tempfile::TempDir, Ledger) {
+        use dla_core::{
+            NewFinding, Origin,
+            state::{RunState, now_utc},
+        };
+        let dir = tempfile::tempdir().unwrap();
+        RunState::init("/p", None, 3600, None, now_utc())
+            .unwrap()
+            .save(dir.path())
+            .unwrap();
+        let mut l = Ledger::create(dir.path()).unwrap();
+        l.add_evidence(stack_evidence(
+            EvidenceKind::GrowthSeries,
+            Authority::Test,
+            serde_json::json!({"n": 1}),
+        ))
+        .unwrap();
+        let mut nf = NewFinding::new(
+            Origin::parse("census").unwrap(),
+            vec!["E1".parse().unwrap()],
+        );
+        nf.site = Some("shop/store.py:5".into());
+        l.add_finding(nf).unwrap();
+        (dir, l)
+    }
+
+    fn stack_evidence(
+        kind: EvidenceKind,
+        authority: Authority,
+        result: serde_json::Value,
+    ) -> dla_core::NewEvidence {
+        dla_core::NewEvidence {
+            source: dla_core::evidence::Source::Repo {
+                commit: "c".into(),
+                path: None,
+            },
+            tool: dla_core::evidence::Tool {
+                name: "t".into(),
+                version: "1".into(),
+            },
+            authority,
+            kind,
+            result,
+            raw: None,
+            coverage: EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        }
+    }
+
+    const SITE_COLUMN: &str = "py.blocks@shop/store.py:5";
+
+    fn offered(l: &Ledger, favors: Favors, decided: &str, runtime: Runtime) -> Vec<String> {
+        let f = l.findings().next().unwrap().clone();
+        let ctx = StacksCtx {
+            decided: Some(decided),
+            runtime,
+            mode: "fresh",
+        };
+        let ev = l.evidence().next().unwrap().evidence_id.clone();
+        next_commands(l, Some(&f), "H1", favors, &[], &ev, 4, None, Some(&ctx))
+    }
+
+    #[test]
+    fn a_leak_decided_by_a_site_column_leads_with_the_capture_and_the_summarize_line() {
+        let (_d, l) = stacks_ledger();
+        let next = offered(&l, Favors::Leak, SITE_COLUMN, Runtime::Python);
+        assert_eq!(next[0], "dla harness run H1 --mode fresh --capture alloc");
+        assert!(
+            next[1].starts_with("# run the dla summarize alloc-stack-diff command that run prints")
+                && next[1].contains("F1")
+                && next[1].contains("shop/store.py:5"),
+            "{next:?}"
+        );
+        assert!(next[2].starts_with("dla ledger"), "{next:?}");
+        assert!(next.len() <= MAX_NEXT, "{next:?}");
+        // A column that is not an allocation-site column, or a runtime without the capture,
+        // leaves the list as it was.
+        for (col, rt) in [("os.rss", Runtime::Python), (SITE_COLUMN, Runtime::Jvm)] {
+            let next = offered(&l, Favors::Leak, col, rt);
+            assert!(next.iter().all(|n| !n.contains("--capture")), "{next:?}");
+        }
+    }
+
+    #[test]
+    fn a_result_that_favors_non_leak_offers_no_capture() {
+        let (_d, l) = stacks_ledger();
+        for favors in [Favors::NonLeak, Favors::Inconclusive] {
+            let next = offered(&l, favors, SITE_COLUMN, Runtime::Python);
+            assert!(
+                next.iter()
+                    .all(|n| !n.contains("--capture") && !n.starts_with('#')),
+                "{next:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stack_record_that_names_the_finding_ends_the_offer() {
+        let (_d, mut l) = stacks_ledger();
+        // A stack of another finding does not.
+        l.add_evidence(stack_evidence(
+            EvidenceKind::AllocStack,
+            Authority::Test,
+            serde_json::json!({"finding": "F9"}),
+        ))
+        .unwrap();
+        assert!(offered(&l, Favors::Leak, SITE_COLUMN, Runtime::Python)[0].contains("--capture"));
+        l.add_evidence(stack_evidence(
+            EvidenceKind::AllocStack,
+            Authority::Test,
+            serde_json::json!({"finding": "F1", "candidates": ["F1"]}),
+        ))
+        .unwrap();
+        let next = offered(&l, Favors::Leak, SITE_COLUMN, Runtime::Python);
+        assert!(
+            next.iter().all(|n| !n.contains("--capture")) && next[0].starts_with("dla ledger"),
+            "{next:?}"
+        );
+    }
+
+    #[test]
+    fn a_long_list_keeps_the_two_entries_and_the_confirm_line() {
+        let (_d, mut l) = stacks_ledger();
+        // Several open siblings make the ledger part longer than the room.
+        for _ in 0..9 {
+            let mut sib = dla_core::NewFinding::new(
+                dla_core::Origin::parse("hypothesis").unwrap(),
+                vec!["E1".parse().unwrap()],
+            );
+            sib.sibling_of = Some("F1".parse().unwrap());
+            sib.hypothesis = Some("N-WARM".into());
+            sib.refute_if = Some("keeps growing".into());
+            l.add_finding(sib).unwrap();
+        }
+        let next = offered(&l, Favors::Leak, SITE_COLUMN, Runtime::Python);
+        assert_eq!(next.len(), MAX_NEXT, "{next:?}");
+        assert!(next[0].contains("--capture") && next[1].starts_with('#'));
+        assert!(
+            next.last().unwrap().starts_with("dla ledger confirm F1"),
             "{next:?}"
         );
     }

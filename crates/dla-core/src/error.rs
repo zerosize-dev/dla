@@ -149,6 +149,10 @@ pub mod codes {
     /// `dla harness run` was asked to run an entry-path harness whose `VARIES.txt` is empty or
     /// still the placeholder.
     pub const VARIES_MISSING: &str = "varies-missing";
+    /// `dla bundle` was asked for a confirmed or strong leak-side finding whose growth is a count
+    /// of blocks allocated at one line, where the bundle would hold no allocation or retention
+    /// evidence and the stacks that lead to the line were never captured.
+    pub const STACKS_NOT_CAPTURED: &str = "stacks-not-captured";
 }
 
 /// A rule-based refusal: what was refused, what is missing, the command that fixes it.

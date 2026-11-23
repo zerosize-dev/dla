@@ -934,3 +934,249 @@ fn the_final_gate_lists_the_untied_site_columns_largest_slope_first() {
         "{full}"
     );
 }
+
+// ------------------------------------------------------------------------- the stacks at the line
+
+/// The finding at the growing line, its refuted N-WARM sibling and an alloc-test that favors
+/// leak, as the route of the real run did it: returns the finding, the trend evidence and the
+/// alloc-test result. The finding is not confirmed yet.
+fn leak_at_the_line(r: &Run) -> (String, String, Value) {
+    let t = r.trend();
+    let e = evidence_of(&Run::next_of(&t, ADD_PREFIX).unwrap());
+    let added = ok(
+        &r.project,
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "growth-series",
+            "--evidence",
+            &e,
+            "--site",
+            SITE,
+            "--region",
+            "heap",
+            "--holder",
+            "native-handle/global-ref",
+        ],
+    );
+    let f = added["id"].as_str().unwrap().to_owned();
+    ok(
+        &r.project,
+        &[
+            "ledger",
+            "add",
+            "--sibling-of",
+            &f,
+            "--origin",
+            "hypothesis",
+            "--hypothesis",
+            "N-WARM",
+            "--refute-if",
+            "growth continues over the extra cycles",
+            "--evidence",
+            &e,
+        ],
+    );
+    let workload = r
+        .ledger()
+        .iter()
+        .filter(|v| v["kind"] == "workload")
+        .filter_map(|v| v["evidence_id"].as_str().map(str::to_owned))
+        .next_back()
+        .unwrap();
+    ok(&r.project, &["ledger", "test", &f, "--evidence", &workload]);
+    let a = ok(&r.project, &["alloc-test", "H1", "--finding", &f]);
+    assert_eq!(a["favors"], "leak", "{a}");
+    ok(
+        &r.project,
+        &[
+            "ledger",
+            "refute",
+            &format!("{f}.n1"),
+            "--evidence",
+            a["evidence"].as_str().unwrap(),
+        ],
+    );
+    (f, e, a)
+}
+
+const CAPTURE: &str = "dla harness run H1 --mode fresh --capture alloc";
+
+fn next_lines(v: &Value) -> Vec<&str> {
+    v["next"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect()
+}
+
+#[test]
+fn a_finding_at_a_growing_line_reaches_the_verifier_with_its_stack() {
+    if !have_python() {
+        return;
+    }
+    let r = prepared();
+    let (f, e, a) = leak_at_the_line(&r);
+    // The alloc-test leads with the capture and the line that says what to do with its output,
+    // and carries the sentence in a key the output bound does not cut.
+    let next = next_lines(&a);
+    assert_eq!(next[0], CAPTURE, "{next:?}");
+    assert!(
+        next[1].starts_with("# run the dla summarize alloc-stack-diff command that run prints")
+            && next[1].contains(&f)
+            && next[1].contains(SITE),
+        "{next:?}"
+    );
+    assert!(
+        next[2].starts_with("dla ledger"),
+        "the ledger commands follow: {next:?}"
+    );
+    let hint = a["stacks_hint"].as_str().unwrap();
+    assert!(
+        hint.contains("a count of blocks allocated at one line") && hint.contains(CAPTURE),
+        "{hint}"
+    );
+    // Without the capture the bundle of the confirmed finding is refused.
+    let c = ok(&r.project, &["ledger", "confirm", &f, "--evidence", &e]);
+    assert_eq!(c["to"], "confirmed", "{c}");
+    let refused = dla(&r.project, &["bundle", &f]);
+    assert_ne!(refused.code, 0, "{}", refused.text);
+    assert_eq!(
+        refused.json["error"]["code"], "stacks-not-captured",
+        "{}",
+        refused.text
+    );
+    let fix = refused.json["error"]["fix"].as_str().unwrap();
+    assert!(
+        fix.contains(CAPTURE) && fix.contains("alloc-stack-diff") && fix.contains("dla bundle"),
+        "{fix}"
+    );
+    // Run the capture and the summarize command it prints, as an agent would.
+    let cap = ok(
+        &r.project,
+        &[
+            "harness",
+            "run",
+            "H1",
+            "--mode",
+            "fresh",
+            "--capture",
+            "alloc",
+        ],
+    );
+    // The capture alone is not enough: no stack is tied yet, and the refusal says so and names
+    // the summarize command of the capture.
+    let again = dla(&r.project, &["bundle", &f]);
+    assert_eq!(
+        again.json["error"]["code"], "stacks-not-captured",
+        "{}",
+        again.text
+    );
+    assert!(
+        again.json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("exists and was not summarized"),
+        "{}",
+        again.text
+    );
+    let fix = again.json["error"]["fix"].as_str().unwrap();
+    let from_fix = fix.split(" ; ").next().unwrap();
+    assert!(
+        from_fix.starts_with("dla summarize alloc-stack-diff "),
+        "{fix}"
+    );
+    let cmd = cap["summary"]["summarize"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{cap}"))
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|c| c.starts_with("dla summarize alloc-stack-diff "))
+        .unwrap_or_else(|| panic!("{cap}"));
+    assert_eq!(
+        cmd, from_fix,
+        "the fix is the command the capture run prints"
+    );
+    let args: Vec<&str> = from_fix.split_whitespace().skip(1).collect();
+    let s = ok(&r.project, &args);
+    // The stack ends at the line of the finding: the evidence names it at once.
+    assert_eq!(s["tied"], serde_json::json!([f]), "{s}");
+    let record = r
+        .ledger()
+        .into_iter()
+        .find(|v| v["kind"] == "alloc-stack")
+        .unwrap_or_else(|| panic!("{s}"));
+    let stack = record["evidence_id"].as_str().unwrap().to_owned();
+    assert_eq!(record["result"]["finding"], f.as_str(), "{record}");
+    // The bundle now holds the stack record and an excerpt of the growing line.
+    let b = ok(&r.project, &["bundle", &f]);
+    assert_eq!(b["excerpt"], true, "{b}");
+    assert!(
+        b["excerpt_frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x == SITE),
+        "{b}"
+    );
+    assert!(
+        b["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| *x == stack),
+        "{b}"
+    );
+    let dir = r.project.join(b["dir"].as_str().unwrap());
+    let text = fs::read_to_string(dir.join("excerpt.txt")).unwrap();
+    assert!(text.contains("obj = [i]"), "{text}");
+    // A second alloc-test no longer offers the capture.
+    let a2 = ok(&r.project, &["alloc-test", "H1", "--finding", &f]);
+    assert!(next_lines(&a2).iter().all(|n| *n != CAPTURE), "{a2}");
+    assert!(a2.get("stacks_hint").is_none(), "{a2}");
+}
+
+#[test]
+fn a_capture_that_no_stack_of_the_line_came_out_of_is_said_in_the_bundle() {
+    if !have_python() {
+        return;
+    }
+    let r = prepared();
+    // A real capture of H1 and a real summary of it, made before any finding exists at the
+    // line: the stack record names no finding.
+    let cap = ok(
+        &r.project,
+        &[
+            "harness",
+            "run",
+            "H1",
+            "--mode",
+            "fresh",
+            "--capture",
+            "alloc",
+        ],
+    );
+    let cmd = cap["summary"]["summarize"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{cap}"))
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|c| c.starts_with("dla summarize alloc-stack-diff "))
+        .unwrap();
+    let args: Vec<&str> = cmd.split_whitespace().skip(1).collect();
+    ok(&r.project, &args);
+    let (f, e, _) = leak_at_the_line(&r);
+    ok(&r.project, &["ledger", "confirm", &f, "--evidence", &e]);
+    let b = ok(&r.project, &["bundle", &f]);
+    assert_eq!(b["excerpt"], false, "{b}");
+    let note = b["stacks_note"].as_str().unwrap();
+    assert!(
+        note.contains("an allocation capture of H1 was summarized and no growing stack ends at"),
+        "{note}"
+    );
+    let dir = r.project.join(b["dir"].as_str().unwrap());
+    let index: Value = serde_json::from_slice(&fs::read(dir.join("index.json")).unwrap()).unwrap();
+    assert_eq!(index["stacks_note"], note, "{index}");
+}

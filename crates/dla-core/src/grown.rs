@@ -188,6 +188,35 @@ pub fn finding_is_at_site(
     })
 }
 
+/// The harnesses (`H1`), oldest series first and each once, in whose latest trend a passed
+/// allocation-site count column (`py.blocks@<file:line>`) is at a site where the leak-side finding
+/// `f` is (`finding_is_at_site`): the runs that grew the finding's line.
+pub fn site_column_harnesses(view: &RunView, f: &crate::finding::Finding) -> Vec<String> {
+    let mut latest: Vec<&crate::trend::TrendReport> = Vec::new();
+    for t in &view.trends {
+        match latest.iter_mut().find(|l| l.series == t.series) {
+            Some(l) => *l = t,
+            None => latest.push(t),
+        }
+    }
+    let mut out: Vec<String> = Vec::new();
+    for t in latest {
+        let Some(harness) = view.series_harness.get(&t.series) else {
+            continue;
+        };
+        let at_site = t.columns.iter().any(|c| {
+            c.gate == GateVerdict::Pass
+                && c.unit != Unit::Seconds
+                && is_alloc_site_column(&c.name)
+                && column_site(c).is_some_and(|site| finding_is_at_site(&view.ledger, f, site))
+        });
+        if at_site && !out.contains(harness) {
+            out.push(harness.clone());
+        }
+    }
+    out
+}
+
 /// The `file:line` a column is tied to: its `site`, else the part of its name after `@`.
 pub fn column_site(c: &crate::trend::ColumnTrend) -> Option<&str> {
     c.site
