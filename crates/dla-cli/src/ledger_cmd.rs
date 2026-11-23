@@ -653,9 +653,6 @@ fn refuse_registration_only(ctx: &Ctx, id: &FindingId, evidence: &[EvidenceId]) 
     let Ok(view) = RunView::load_for(&ctx.run_dir, ctx.worker.as_deref()) else {
         return Ok(());
     };
-    let Some(finding) = view.ledger.finding(id) else {
-        return Ok(());
-    };
     let mut fns: Vec<String> = view
         .ledger
         .annotation(id)
