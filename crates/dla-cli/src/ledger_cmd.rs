@@ -975,16 +975,20 @@ fn refuse_unrun_harness(
             u.minutes_left,
             u.minutes_total
         ),
-        format!(
-            "{} {}, or its blocker recorded on intake.workload with --runtime {}",
-            u.id,
-            if u.build_failed {
-                "built and run"
-            } else {
-                "run"
-            },
-            u.runtime
-        ),
+        if u.test_loop && !u.build_failed {
+            format!("{} run to its end", u.id)
+        } else {
+            format!(
+                "{} {}, or its blocker recorded on intake.workload with --runtime {}",
+                u.id,
+                if u.build_failed {
+                    "built and run"
+                } else {
+                    "run"
+                },
+                u.runtime
+            )
+        },
         u.fix(&view.state.run_id),
     ))
 }
@@ -1173,6 +1177,7 @@ fn resolve_checklist(ctx: &Ctx, ledger: &mut Ledger, item: String, a: ResolveArg
     }
     let runtime = workload_blocker_runtime(ctx, &item, status, a.reason, a.runtime.as_deref())?;
     refuse_contradicted_workload_blocker(ctx, &item, status, a.reason, runtime.as_deref())?;
+    refuse_unfinished_test_loop(ctx, &item, status, a.reason, runtime.as_deref())?;
     let line = ledger.answer_checklist(ChecklistAnswer {
         item: item.clone(),
         status,
@@ -1340,6 +1345,42 @@ fn refuse_contradicted_workload_blocker(
         ),
         format!(
             "a probe that reads flat is a verdict about one target, not about the workload: read dla trend {series} (its targets and next lines), give the target a unit that reaches it with a new key or a size reading, and run {harness} again; or measure the findings a passed column points at (dla ledger list, dla gate check --final)"
+        ),
+    ))
+}
+
+/// Refuses `intake.workload` as `unresolved` with a blocker reason for `runtime` (every runtime
+/// when the answer names none) while that runtime has a generated test loop whose run did not
+/// reach an end. A test loop needs nothing written, so "no harness can be made" cannot hold for
+/// it, and a run that never started or was cut before its first result shows nothing about the
+/// environment. A loop with a series (`workload-ran`) or a recorded failed attempt is judged by
+/// the other rules.
+fn refuse_unfinished_test_loop(
+    ctx: &Ctx,
+    item: &str,
+    status: AnswerStatus,
+    reason: Option<UnresolvedReason>,
+    runtime: Option<&str>,
+) -> Res<()> {
+    if item != "intake.workload"
+        || status != AnswerStatus::Unresolved
+        || !reason.is_some_and(gate::is_blocker_reason)
+    {
+        return Ok(());
+    }
+    let view = RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())?;
+    let Some((harness, rt)) = gate::unfinished_test_loop(&view, runtime) else {
+        return Ok(());
+    };
+    let reason = reason.map_or(String::new(), |r| r.to_string());
+    Err(Failure::refuse(
+        core_codes::LOOP_NOT_FINISHED,
+        format!(
+            "intake.workload cannot be recorded as {reason} for {rt}: the test loop {harness} of {rt} needs nothing written, and its run did not reach an end (never started, or cut before its first result), so nothing shows yet that the environment cannot run the workload"
+        ),
+        format!("{harness} run to its end, then the blocker if nothing can run, not {reason}"),
+        format!(
+            "dla harness run {harness} as a plain foreground command with the tool's longest timeout, and wait for its end (it stops by itself within its time limit); a run that fails records why and the queue goes on with the driver batches; then, if nothing can run, record the blocker"
         ),
     ))
 }

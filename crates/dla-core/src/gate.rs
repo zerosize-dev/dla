@@ -1724,6 +1724,9 @@ pub struct UnrunHarness {
     pub last_attempt: Option<String>,
     /// The harness never built and no harness of the runtime ran: the way on is its build.
     pub build_failed: bool,
+    /// The harness is a test loop (the project's own tests in a loop, nothing to fill): the way
+    /// on is its run, never a blocker.
+    pub test_loop: bool,
 }
 
 impl UnrunHarness {
@@ -1751,6 +1754,11 @@ impl UnrunHarness {
     pub fn fix(&self, run_id: &str) -> String {
         let h = &self.id;
         let rt = &self.runtime;
+        if self.test_loop && !self.build_failed {
+            return format!(
+                "dla harness run {h} as a plain foreground command with the tool's longest timeout and wait for its end (it stops by itself within its time limit); a run that fails records why and the queue goes on with the driver batches"
+            );
+        }
         let run = if self.build_failed {
             format!(
                 "fix the build error that `dla harness run {h}` prints, then dla harness run {h}"
@@ -1816,6 +1824,25 @@ pub fn workload_ran(view: &RunView, runtime: &str) -> Option<(String, String)> {
             .ok()
             .filter(|m| m.runtime.as_str() == runtime)
             .map(|_| (h.clone(), series.clone()))
+    })
+}
+
+/// The test loop (a JUnit repeat or a pytest loop) of `runtime`, or of any runtime when
+/// `runtime` is `None`, that `dla harness gen` wrote and whose run never reached an end: it
+/// has no series and no recorded finished attempt (`harness_tried`: a run that was cut leaves
+/// no `attempt.json`, or one that says it was interrupted). A blocker for the runtime is not
+/// accepted while one exists: a test loop needs nothing written, so nothing says the
+/// environment cannot run the workload until the loop was run to an end. Returns the harness
+/// and its runtime.
+pub fn unfinished_test_loop(view: &RunView, runtime: Option<&str>) -> Option<(HarnessId, String)> {
+    let run_dir = view.run_dir.as_deref()?;
+    harness_ids(run_dir).into_iter().find_map(|(_, id)| {
+        let m = crate::harness::HarnessManifest::load(run_dir, &id).ok()?;
+        (m.is_test_loop()
+            && runtime.is_none_or(|rt| m.runtime.as_str() == rt)
+            && generated_at(view, &id).is_some()
+            && !harness_tried(view, run_dir, &id))
+        .then(|| (id, m.runtime.as_str().to_owned()))
     })
 }
 
@@ -1998,11 +2025,16 @@ pub fn harness_not_run(
         .and_then(|d| attempt_of(d, &id))
         .and_then(|a| a.reason)
         .filter(|r| attempt_is_no_try(Some(r)));
+    let test_loop = view
+        .run_dir
+        .as_deref()
+        .is_some_and(|d| is_test_loop_harness(d, runtime, &id));
     Some(UnrunHarness {
         id,
         build_failed,
         last_attempt,
         hooks_unfilled,
+        test_loop,
         runtime: runtime.to_owned(),
         minutes_left,
         minutes_total,
