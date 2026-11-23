@@ -1431,3 +1431,19 @@ flat test-loop readings get only 9 second looks.
   bax2x5sl6. Then: non-skip snapshot for CI, commits 16 (noise) and 17 (stacks), version commit
   0.9.0-preview.6, release.
 - Experiment P second pass still running (what anchors every round's pytest Session).
+
+## 09:55 UTC: sixteenth snapshot frozen, CI running, pillow-7 started
+
+- Whole suite on the combined tree: 3337 passed, 0 failed, 5 ignored; clippy clean; schema check
+  20 ok; static bench "ok: 64 fixture(s) pass" (command:
+  `./target/debug/dla-bench static --fixtures bench/fixtures --dla-bin ./target/debug/dla --json F`).
+- Sixteenth frozen snapshot: dfbb9dd80bf91f556d1606f9a8c86c5800c79e60 on wip/progress (non-skip).
+  CI waiter: task blnvu07l2, logs to u90/ci16.
+  DO NOT push a non-skip snapshot to wip/progress while that CI run is in progress.
+- After green CI: commit 16 = tree of snapshot a4c73ba (noise fixes only, message
+  commit-message-16.txt), commit 17 = tree of dfbb9dd (message commit-message-17.txt), with
+  `bash wip-notes/commit-snapshot-tree.sh <sha> <message file>` twice, then push main and
+  main:dev/wonderful-mccarthy-algc5s. Then the version commit 0.9.0-preview.6 (decide after
+  pillow-7).
+- pillow-7 started 09:55 with the plugin and binary of dfbb9dd; waiter task bkvede3sr.
+  `target/` was cleaned (7.2 GB) for its disk: the next cargo command rebuilds everything.
