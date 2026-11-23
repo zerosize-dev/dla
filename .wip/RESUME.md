@@ -1576,3 +1576,33 @@ flat test-loop readings get only 9 second looks.
 - After pillow-8: if FOUND, version commit 0.9.0-preview.6 (sed 0.9.0-preview.5 -> 0.9.0-preview.6
   in .claude-plugin/marketplace.json, .claude-plugin/plugin.json, Cargo.toml, Cargo.lock), CI on
   main, release.yml with publish. Then R2 (apply wip-notes/r1-holder-capture.patch first).
+
+## 13:47 UTC: G is on main
+
+- CI of the seventeenth snapshot b28bc40: success, run 45176494591, all 15 jobs.
+- main = dd6c4cd "The Python agent's tick thread no longer breaks the program it measures" (tree of
+  b28bc40), pushed to main and dev/wonderful-mccarthy-algc5s. Working tree clean.
+- Not published: bd1fc84, f30f050, 22bd696, 1a3bfb2, cbf3de3, dd6c4cd (0.9.0-preview.6 after
+  pillow-8, if it finds the leak).
+
+## 14:50 UTC (approx.): pillow-8 NOT FOUND; cause found; builder H started
+
+- pillow-8 (tree of dd6c4cd): exit 0, 6633 s, COMPLETE, "no leak confirmed", the leak line is not
+  in the report. Kept: /root/dla-real/pillow-8-keep (report, state, coverage, ledger, transcript,
+  run.json, S2.json, S40.json, H5-harness.json, gate). Run directory deleted. Replay copy of the
+  state: scratch u96/project/.dla/20261123-124107-7a96.
+- What worked: the loop H1 ran 9 rounds, `failed_units=0 cut_units=0 repeats=0`, 33624 tests, no
+  SystemError; `py.blocks@src/PIL/ImageFont.py:580` = 299, 598, ... 2691, gate pass (E18).
+- Why it missed: the orchestrator (no workers in this run: "1 runtime") added findings F571..F581
+  at the growing lines, then in a shell loop ran `dla alloc-test H5 --finding <F>` for each. H5 is
+  a batch driver for F11, F42, F12; its alloc-test series S40 has no py.blocks column. The tool
+  fell back to "the primary column of the region" (py.traced plateau, os.rss plateau), answered
+  non-leak, and `dla ledger refute F572 --evidence E126` was accepted. The gate's fix had said to
+  generate a probe driver first and alloc-test "the harness just made"; the agent skipped that.
+- Pillow unattended runs: 1 no, 2 yes, 3 yes, 4 no, 5 no, 6 yes, 7 no, 8 no. Each miss had a
+  different cause; 4, 5, 7 fixed on main; 8: builder H.
+- Builder H running (brief alloc-about-brief.md, scratch u97): H1 refusal `harness-not-about`
+  before the run; H2 no whole-process fallback for a finding with a site column anywhere
+  (executed -> non-leak "the line ran and nothing stayed"; not reached -> inconclusive);
+  H3 refute/confirm binding; H4 texts.
+- 0.9.0-preview.6 still NOT published.
