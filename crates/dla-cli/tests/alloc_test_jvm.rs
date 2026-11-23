@@ -137,6 +137,15 @@ public final class Main {{
 /// A project with discovery and one harness run (S1) done, and a non-heap finding with a
 /// non-leak sibling under test. Returns the project, the finding and the workload evidence.
 fn prepared(cap: Option<u32>) -> (tempfile::TempDir, PathBuf, String, String) {
+    prepared_citing(cap, true)
+}
+
+/// [`prepared`]; with `cite_growth` false the finding cites only the workload evidence, so the
+/// harness is about it only as a command that runs the project's own workload.
+fn prepared_citing(
+    cap: Option<u32>,
+    cite_growth: bool,
+) -> (tempfile::TempDir, PathBuf, String, String) {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");
     let src = project.join("src/zz");
@@ -154,7 +163,22 @@ fn prepared(cap: Option<u32>) -> (tempfile::TempDir, PathBuf, String, String) {
     );
     let run = ok(&project, &["harness", "run", "H1"]);
     let workload = run["evidence"][0].as_str().unwrap().to_owned();
-    ok(&project, &["trend", "S1"]);
+    let trend = ok(&project, &["trend", "S1"]);
+    // The growth evidence of the trend of the harness: the finding cites it, which is what makes
+    // the harness about the finding (an alloc-test says nothing about a finding on a harness
+    // that neither targets it nor measured it).
+    let growth = trend["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join(",");
+    let cited = if cite_growth {
+        format!("{workload},{growth}")
+    } else {
+        workload.clone()
+    };
     // The non-heap hypothesis, the way the route prints it: a finding of the region and an
     // `N-WARM` sibling, then under test.
     let f = ok(
@@ -167,7 +191,7 @@ fn prepared(cap: Option<u32>) -> (tempfile::TempDir, PathBuf, String, String) {
             "--region",
             "non-heap",
             "--evidence",
-            &workload,
+            &cited,
         ],
     )["id"]
         .as_str()
@@ -251,6 +275,29 @@ fn a_loop_that_warms_up_is_judged_a_plateau_on_the_non_heap_bytes_and_the_root_i
         }
     }
     assert_eq!(done, ["refute", "test", "confirm"], "{}", a["next"]);
+}
+
+#[test]
+fn an_unbound_alloc_test_of_a_command_that_runs_the_projects_workload_can_refute_a_finding() {
+    if skip() {
+        return;
+    }
+    // The harness runs the project's own workload (command mode): it is about every finding of
+    // the run, so its evidence, bound or not, is cited as before.
+    let (_dir, project, f, _) = prepared_citing(Some(5000), false);
+    let a = ok(&project, &["alloc-test", "H1"]);
+    assert_eq!(a["favors"], "non-leak", "{a}");
+    let r = ok(
+        &project,
+        &[
+            "ledger",
+            "refute",
+            &f,
+            "--evidence",
+            a["evidence"].as_str().unwrap(),
+        ],
+    );
+    assert_eq!(r["to"], "refuted", "{r}");
 }
 
 #[test]
@@ -605,6 +652,7 @@ fn a_small_non_heap_rise_on_an_idle_driver_is_never_a_leak_verdict_and_prints_no
         ],
     );
     ok(&project, &["ledger", "test", &f, "--evidence", &workload]);
+    declare_target(&project, &f);
     let a = ok(&project, &["alloc-test", "H1", "--finding", &f]);
     assert_ne!(a["favors"], "leak", "{a}");
     if a.get("caution").is_some() {
@@ -613,6 +661,21 @@ fn a_small_non_heap_rise_on_an_idle_driver_is_never_a_leak_verdict_and_prints_no
             !next.contains("ledger refute") && !next.contains("ledger confirm"),
             "{next}"
         );
+    }
+}
+
+/// Makes harness H1 declare `finding` as a target, as `dla harness gen --probe` would have if the
+/// finding had existed then: an alloc-test says nothing about a finding on a harness that neither
+/// targets it nor measured something tied to it.
+fn declare_target(project: &Path, finding: &str) {
+    for e in fs::read_dir(project.join(".dla")).unwrap() {
+        let path = e.unwrap().path().join("harness/H1/harness.json");
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let mut doc: Value = serde_json::from_str(&text).unwrap();
+        doc["targets"] = serde_json::json!([finding]);
+        fs::write(&path, doc.to_string()).unwrap();
     }
 }
 
@@ -662,6 +725,7 @@ fn bound_finding(project: &Path, run: &Value, trend: bool) -> String {
         ],
     );
     ok(project, &["ledger", "test", &f, "--evidence", &workload]);
+    declare_target(project, &f);
     f
 }
 

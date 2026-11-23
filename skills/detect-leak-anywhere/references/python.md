@@ -94,7 +94,8 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   A finding made that way is decided with a small driver of its own, not with an alloc-test on the loop (which
   re-runs the whole suite per run): `dla harness gen --lang python --driver --probe F` with a unit that calls the
   function of that line, `dla harness run`, `dla trend`, `dla alloc-test` on that harness. The loop declares no
-  candidate, so a candidate of the queue still needs its driver (hooks to fill).
+  candidate, so a candidate of the queue still needs its driver (hooks to fill). The alloc-test runs on a harness
+  that targets the finding or measured it, never on another one (`harness-not-about`); a probe driver whose unit does not call the function of the line comes back inconclusive.
   `--tests` narrows the loop: it is for a loop that cannot run in full (it stopped with a `DLA-PYTEST` line) or for a second look at a part. The first step of the queue is the loop over all test files, and a narrowed loop does not replace it: the queue keeps naming the full loop, and the summary of a narrowed loop carries `pytest_hint` while the full loop has not run.
 - Purges: `trim` (glibc `malloc_trim` through ctypes) and `gc`.
 - Raw captures: `dla harness run H1 --capture histogram,alloc,nonheap`. `histogram` writes

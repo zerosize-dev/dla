@@ -33,6 +33,10 @@ pub struct Inputs<'a> {
     pub columns: &'a [ColumnTrend],
     /// `(points, needed)` when the series has fewer points after warm-up than the gate needs.
     pub too_short: Option<(usize, usize)>,
+    /// The coverage file to read in place of the one a `dla harness run` record names: the
+    /// `executed.json` an alloc-test run leaves in the harness directory (its series has no run
+    /// record of its own).
+    pub executed: Option<&'a Path>,
 }
 
 /// The verdicts of the series, declared targets first. Empty for a series that no harness
@@ -150,6 +154,19 @@ fn num(v: f64) -> String {
     } else {
         format!("{v:.3}")
     }
+}
+
+/// The verdict of one finding for the series of `inp`, whether or not the harness declares it
+/// (an alloc-test reads the line of a finding the harness was made for, or reached by itself).
+pub fn verdict_of(inp: &Inputs<'_>, m: &HarnessManifest, f: &FindingId) -> TargetVerdict {
+    let mut v = one(inp, m, f);
+    if let Some((n, need)) = inp.too_short
+        && v.verdict == Verdict::Executed
+    {
+        v.verdict = Verdict::Unknown;
+        v.detail = format!("series too short: {n} points, {need} needed");
+    }
+    v
 }
 
 fn one(inp: &Inputs<'_>, m: &HarnessManifest, f: &FindingId) -> TargetVerdict {
@@ -425,15 +442,25 @@ fn unknown(f: &FindingId, why: &str) -> TargetVerdict {
     }
 }
 
+/// The verdict the run's coverage gives for the code of `f`, whatever probes the harness has.
+pub fn coverage_of(inp: &Inputs<'_>, f: &FindingId) -> TargetVerdict {
+    coverage_verdict(inp, f)
+}
+
 fn coverage_verdict(inp: &Inputs<'_>, f: &FindingId) -> TargetVerdict {
     let none = |why: &str| unknown(f, why);
     let Some(h) = inp.series.source.harness.as_deref() else {
         return none("no coverage data for this run");
     };
-    let Some(rec) = dla_core::harness::run_record_of(inp.run_dir, h, &inp.series.id) else {
-        return none("no coverage data for this run");
+    let path = match inp.executed {
+        Some(p) => p.to_path_buf(),
+        None => {
+            let Some(rec) = dla_core::harness::run_record_of(inp.run_dir, h, &inp.series.id) else {
+                return none("no coverage data for this run");
+            };
+            HarnessManifest::dir_in(inp.run_dir, h).join(format!("executed-{}.json", rec.first))
+        }
     };
-    let path = HarnessManifest::dir_in(inp.run_dir, h).join(format!("executed-{}.json", rec.first));
     let Some(doc) = fs::read_to_string(&path)
         .ok()
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
@@ -721,6 +748,7 @@ mod tests {
             series: &file,
             columns: &analysed,
             too_short,
+            executed: None,
         })
     }
 
@@ -791,6 +819,7 @@ mod tests {
                 series: &file,
                 columns: &analysed,
                 too_short: None,
+                executed: None,
             })
             .remove(0)
         };

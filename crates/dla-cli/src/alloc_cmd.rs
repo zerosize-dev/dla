@@ -1089,6 +1089,121 @@ fn attribution_summary(a: &dla_core::testloop::Attributed) -> Map<String, Value>
     m
 }
 
+/// The refusal for a harness that is not about the finding `root` (see
+/// [`dla_core::grown::harness_about`]): the fix names the harnesses that are about it, a hook
+/// driver first, and always the driver of its own.
+pub(crate) fn harness_not_about(
+    view: &dla_core::RunView,
+    harness: &str,
+    runtime: Runtime,
+    finding: &Finding,
+    what: &str,
+) -> Failure {
+    let root = finding.root_id();
+    let root_f = view.ledger.finding(&root).unwrap_or(finding);
+    let rt = dla_core::gate::finding_runtime(view, root_f)
+        .unwrap_or_else(|| runtime.as_str().to_owned());
+    let root = &root;
+    let mut about = dla_core::grown::harnesses_about(view, root);
+    about.retain(|(m, _)| m.id != harness);
+    about.sort_by_key(|(m, _)| !m.is_hook_driver());
+    let own = format!(
+        "dla harness gen --lang {rt} --driver --probe {root}, fill the unit so that it calls the function of the line, dla harness run <H'>, dla trend <S>, then dla alloc-test <H'> --finding {root}"
+    );
+    let named: Vec<String> = about
+        .iter()
+        .map(|(m, _)| {
+            if m.is_test_loop() {
+                format!(
+                    "{} (a test loop: each run re-runs the project's tests, minutes): dla alloc-test {} --finding {root}",
+                    m.id, m.id
+                )
+            } else {
+                format!("dla alloc-test {} --finding {root}", m.id)
+            }
+        })
+        .collect();
+    let fix = if named.is_empty() {
+        own
+    } else {
+        format!(
+            "a harness about {root} exists: {}; or one of its own: {own}",
+            named.join("; ")
+        )
+    };
+    Failure::refuse(
+        codes::HARNESS_NOT_ABOUT,
+        format!(
+            "{harness} does not target {root} and nothing it measured is tied to it, so {what} says nothing about {root}"
+        ),
+        format!("a harness that targets {root} or measured something tied to it"),
+        fix,
+    )
+}
+
+/// What the run says of a finding whose allocation-site count column (`gone`) grew in a trend of
+/// the run and is not in the new series: the verdict, the basis and the limitation that carries
+/// the reading. The agent writes only the sites that grew, so the absence means that none of the
+/// blocks of the line stayed, or that the line did not run. The coverage of this run (its
+/// `executed.json`, read as `dla trend` reads it) tells which: a function of the line that ran
+/// (`executed`, `constant`, `grew`, `changed`) makes it a measurement, non-leak; one that did not
+/// run, was not loaded, or that coverage cannot tell, leaves it inconclusive.
+#[allow(clippy::too_many_arguments)]
+fn absent_site_reading(
+    run_dir: &Path,
+    project: &Path,
+    ledger: &Ledger,
+    manifest: &HarnessManifest,
+    series: &SeriesFile,
+    trend: &TrendReport,
+    root: &FindingId,
+    gone: &pick::AbsentSite,
+) -> (Favors, String, String) {
+    use dla_core::trend::Verdict;
+    let executed = HarnessManifest::dir_in(run_dir, &manifest.id)
+        .join(dla_workload::harness::cover::EXECUTED_FILE);
+    let inp = crate::trend_cmd::verdicts::Inputs {
+        project,
+        run_dir,
+        ledger,
+        series,
+        columns: &trend.columns,
+        too_short: None,
+        executed: Some(&executed),
+    };
+    let mut verdict = crate::trend_cmd::verdicts::verdict_of(&inp, manifest, root);
+    // A probe of the module of the line that has no column (`not_loaded`) says the probe read
+    // nothing, not that the function never ran: the coverage of the run is asked directly.
+    if verdict.verdict == Verdict::NotLoaded {
+        let by_coverage = crate::trend_cmd::verdicts::coverage_of(&inp, root);
+        if by_coverage.verdict == Verdict::Executed {
+            verdict = by_coverage;
+        }
+    }
+    let (col, site, h) = (&gone.column, &gone.site, &manifest.id);
+    match verdict.verdict {
+        Verdict::Executed | Verdict::Constant | Verdict::Grew | Verdict::Changed => (
+            Favors::NonLeak,
+            format!(
+                "the function of the line {site} of {root} ran in this series and none of its blocks stayed: {col}, which counted growth at that line in another series, is not in this one ({})",
+                verdict.detail
+            ),
+            format!(
+                "{col} is not in this series, and the agent writes only the sites that grew: the function of {site} ran ({}), so the line ran and none of its blocks stayed",
+                verdict.detail
+            ),
+        ),
+        _ => (
+            Favors::Inconclusive,
+            format!("the unit of {h} does not reach {site}"),
+            format!(
+                "{col} is not in this series and the run does not show that the function of {site} ran ({}): the unit of {h} does not reach {site}, so nothing was measured at the line",
+                verdict.detail
+            ),
+        ),
+    }
+}
+
 /// Runs `dla alloc-test`.
 pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) -> Res<Value> {
     if !a.harness.starts_with('H') {
@@ -1115,6 +1230,20 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         })?),
         None => None,
     };
+    // A test says something about a finding only on a harness that is about it; refused before
+    // anything runs.
+    if let Some(f) = &bound {
+        let view = dla_core::RunView::load_for(&tc.run_dir, tc.worker.as_deref())?;
+        if dla_core::grown::harness_about(&view, &manifest, &f.root_id()).is_none() {
+            return Err(harness_not_about(
+                &view,
+                &a.harness,
+                manifest.runtime,
+                f,
+                "an alloc-test there",
+            ));
+        }
+    }
     let extra = a.extra.unwrap_or(manifest.iterations);
     if extra < MIN_EXTRA {
         return Err(Failure::usage(
@@ -1184,14 +1313,18 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
 
     // Columns.
     let previous = pick::latest_trend(&tc.run_dir, &a.harness);
-    let picked = pick::pick(
+    let all_trends = TrendReport::load_all(&tc.run_dir);
+    let all_refs: Vec<&TrendReport> = all_trends.iter().collect();
+    let mut picked = pick::pick_in(
         &series,
         &ledger,
         bound.as_ref(),
         &a.columns,
         previous.as_ref(),
+        &all_refs,
         &a.harness,
     )?;
+    let trend = trend_of(&tc, &ledger, &series, previous.as_ref())?;
     let event = purge_event(&series);
     let mut limitations: Vec<String> = series.limitations.clone();
     limitations.extend(out.gaps.iter().cloned());
@@ -1243,6 +1376,34 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     // The verdict: the bound column's, or the voting columns together, with the required
     // columns able to hold a non-leak verdict back.
     let (favors, supports, held_back) = decide(&results, &picked);
+    // The count column of the finding's line is missing from this series: the coverage of the
+    // run says whether the line ran, and that decides.
+    let (favors, supports) = match (&picked.absent_site.clone(), bound.as_ref()) {
+        (Some(gone), Some(f)) => {
+            let (favors, basis, note) = absent_site_reading(
+                &tc.run_dir,
+                project,
+                &ledger,
+                &manifest,
+                &series,
+                &trend,
+                &f.root_id(),
+                gone,
+            );
+            picked.basis = basis;
+            match picked
+                .note
+                .as_ref()
+                .and_then(|old| limitations.iter_mut().find(|l| *l == old))
+            {
+                Some(slot) => slot.clone_from(&note),
+                None => limitations.push(note.clone()),
+            }
+            picked.note = Some(note);
+            (favors, Vec::new())
+        }
+        _ => (favors, supports),
+    };
     // A required column that keeps rising is decided by its capture, a longer run does not; one
     // that only could not be judged (still levelling off) may show its plateau in a longer window.
     let split_open = |names: &[String]| split_rising(&results, &picked, names);
@@ -1330,8 +1491,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         );
     }
 
-    // Files: the new trend and the full result.
-    let trend = trend_of(&tc, &ledger, &series, previous.as_ref())?;
+    // Files: the full result.
     let alloc_id = tc.next_alloc_id();
     let raw_rel = format!("{ALLOC_DIR}/{alloc_id}.json");
     let full = json!({
@@ -1483,6 +1643,17 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
             direct.as_ref(),
             Some(&stacks_ctx),
         ),
+    };
+    // The unit does not reach the line: a longer run decides nothing, the unit has to call it.
+    let next = match (&picked.absent_site, favors, bound.as_ref()) {
+        (Some(gone), Favors::Inconclusive, Some(f)) => vec![format!(
+            "make the unit of {h} call the function of the line {site} (edit the hooks of its driver), then dla harness run {h} --mode {mode}, dla trend <S>, dla alloc-test {h} --finding {root}",
+            h = a.harness,
+            site = gone.site,
+            mode = key_mode(&manifest).as_str(),
+            root = f.root_id()
+        )],
+        _ => next,
     };
     let next = say_how_long_a_held_plateau_needs(next, favors, &results, &picked);
     // The hint rides with the capture command: a key the output bound never cuts.
@@ -2170,6 +2341,7 @@ mod tests {
             required: vec!["jvm.nmt.symbol".into()],
             basis: String::new(),
             note: None,
+            absent_site: None,
         };
         // The pools plateau and Symbol keeps rising: inconclusive, and the column is named.
         let results = [

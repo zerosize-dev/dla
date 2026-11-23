@@ -599,6 +599,9 @@ pub fn move_to(ctx: &Ctx, a: MoveArgs, to: FindingState) -> Res<Value> {
     if to == FindingState::Confirmed {
         refuse_registration_only(ctx, &finding, &evidence)?;
     }
+    if matches!(to, FindingState::Confirmed | FindingState::Refuted) {
+        refuse_unrelated_alloc_test(ctx, &finding, &evidence)?;
+    }
     let line = ledger.transition(&finding, to, None, None, evidence.clone(), by)?;
     let mut out = json!({
         "ok": true,
@@ -615,6 +618,47 @@ pub fn move_to(ctx: &Ctx, a: MoveArgs, to: FindingState) -> Res<Value> {
         out["warning"] = json!(w);
     }
     Ok(out)
+}
+
+/// Refuses to cite, for `confirm` or `refute`, the alloc-test evidence of a harness that is not
+/// about the finding ([`dla_core::grown::harness_about`]). `dla alloc-test <H> --finding <F>`
+/// already refuses to write such evidence for a named finding; what remains is the evidence of an
+/// alloc-test run without `--finding` (it names no finding, so the ledger's family check lets it
+/// through) and evidence written before that rule.
+fn refuse_unrelated_alloc_test(ctx: &Ctx, id: &FindingId, evidence: &[EvidenceId]) -> Res<()> {
+    let Ok(view) = RunView::load_for(&ctx.run_dir, ctx.worker.as_deref()) else {
+        return Ok(());
+    };
+    let Some(finding) = view.ledger.finding(id) else {
+        return Ok(());
+    };
+    for e in view
+        .ledger
+        .evidence()
+        .filter(|e| evidence.contains(&e.evidence_id))
+    {
+        if e.kind != dla_core::evidence::EvidenceKind::Discriminator
+            || e.result.get("test").and_then(Value::as_str) != Some("plateau+purge")
+        {
+            continue;
+        }
+        let Some(h) = e.result.get("harness").and_then(Value::as_str) else {
+            continue;
+        };
+        let Ok(manifest) = dla_core::harness::HarnessManifest::load(&ctx.run_dir, h) else {
+            continue;
+        };
+        if dla_core::grown::harness_about(&view, &manifest, &finding.root_id()).is_none() {
+            return Err(crate::alloc_cmd::harness_not_about(
+                &view,
+                h,
+                manifest.runtime,
+                finding,
+                &format!("the alloc-test evidence {} of it", e.evidence_id),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The harness and the function when the trigger of the leak-side finding `id` is `direct`:

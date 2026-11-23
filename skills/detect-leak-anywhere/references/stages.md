@@ -425,7 +425,8 @@ For each passed column tied to a candidate `F3`:
   `N-HEADROOM`, `N-WARM`, `N-HWM`, `N-SCALE`, `N-INTENT`, `N-OBSERVER`.
 - `dla ledger test F3 --evidence E9`, citing the harness `workload` evidence.
 - `dla alloc-test H1 --finding F3` re-runs the harness with extra points and a purge and records a
-  discriminator whose `favors` is `leak`, `non-leak` or `inconclusive`.
+  discriminator whose `favors` is `leak`, `non-leak` or `inconclusive`. The alloc-test runs on a harness that
+  targets the finding, runs the project's own workload, or measured it (a column of its series tied to the finding, growth evidence the finding cites, or a capture summary that names it), never on another one: the other is refused with `harness-not-about` before it runs.
 - Refute the loser: `dla ledger refute F3.n1 --evidence E13` when it favors leak,
   `dla ledger refute F3 --evidence E13` when it favors non-leak.
 - `dla ledger annotate F3 --holder <holder>` when the finding has no holder (`--owner`, `--region`,

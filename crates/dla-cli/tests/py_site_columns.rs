@@ -94,14 +94,30 @@ struct Run {
 /// Run init, census, discover, a driver harness whose hooks call `keep`, one run of it (series
 /// S1) and its trend (T1).
 fn prepared() -> Run {
+    prepare(
+        "import ctypes\n\n\ndef pin(i):\n    obj = [i]\n    ctypes.pythonapi.Py_IncRef(ctypes.py_object(obj))\n",
+        false,
+    )
+}
+
+/// The store of [`SITE`] with a switch: `pin(i)` keeps the object (the leak), `pin(i, False)`
+/// runs the line and keeps nothing.
+const STORE_SWITCH: &str = "import ctypes\n\n\ndef pin(i, keep=True):\n    obj = [i]\n    if keep:\n        ctypes.pythonapi.Py_IncRef(ctypes.py_object(obj))\n";
+
+/// [`prepared`] with `store` as `shop/store.py`, and, with `table`, a module with a table of its
+/// own (`shop/cache.py`) that the census lists as the finding F1 and the first harness targets.
+fn prepare(store: &str, table: bool) -> Run {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");
     write(&project, "shop/__init__.py", "");
-    write(
-        &project,
-        "shop/store.py",
-        "import ctypes\n\n\ndef pin(i):\n    obj = [i]\n    ctypes.pythonapi.Py_IncRef(ctypes.py_object(obj))\n",
-    );
+    write(&project, "shop/store.py", store);
+    if table {
+        write(
+            &project,
+            "shop/cache.py",
+            "REG = {}\n\n\ndef put(k):\n    REG[k] = k\n",
+        );
+    }
     let init = ok(&project, &["run", "init", "--session-id", "t"]);
     let run_dir = project.join(".dla").join(init["run_id"].as_str().unwrap());
     ok(&project, &["census", "--lang", "python"]);
@@ -1396,4 +1412,171 @@ fn a_flat_site_column_at_a_finding_changes_nothing() {
             .is_none_or(|l| l.iter().all(|x| x["id"] != f.as_str())),
         "{out}"
     );
+}
+
+/// Generates a driver for `--probe <finding>`, fills its hooks (`setup` and `unit` are the Python
+/// bodies) and returns its harness id.
+fn second_driver(r: &Run, finding: &str, setup: &str, unit: &str) -> String {
+    let g = ok(
+        &r.project,
+        &[
+            "harness", "gen", "--lang", "python", "--driver", "--probe", finding,
+        ],
+    );
+    let edit = r.project.join(g["summary"]["edit"].as_str().unwrap());
+    let text = fs::read_to_string(&edit)
+        .unwrap()
+        .replace(
+            "    raise NotImplementedError(\"DLA-HOOK setup has not been filled in\")",
+            setup,
+        )
+        .replace(
+            "    raise NotImplementedError(\"DLA-HOOK unit has not been filled in\")",
+            unit,
+        );
+    assert!(!text.contains("has not been filled in"));
+    fs::write(&edit, text).unwrap();
+    g["summary"]["harness"].as_str().unwrap().to_owned()
+}
+
+const CACHE_HOOKS: (&str, &str) = (
+    "    from shop import cache\n    _state[\"cache\"] = cache",
+    "    _state[\"cache\"].put(i)",
+);
+const STORE_SETUP: &str = "    from shop import store\n    _state[\"store\"] = store";
+
+fn files_in(dir: &Path) -> usize {
+    fs::read_dir(dir).map_or(0, |d| d.count())
+}
+
+#[test]
+fn an_alloc_test_on_a_harness_that_is_not_about_the_finding_is_refused_before_any_run() {
+    if !have_python() {
+        return;
+    }
+    let r = prepare(STORE_SWITCH, true);
+    // The first harness grew the line: the finding at the line is tied to its series, and its
+    // alloc-test works as before.
+    let (f, _e, a) = leak_at_the_line(&r);
+    assert_eq!(a["favors"], "leak", "{a}");
+    assert_eq!(a["decided_by"], COLUMN, "{a}");
+    // A second driver for another finding (the table of `shop/cache.py`): its unit never touches
+    // the line.
+    let h2 = second_driver(&r, "F1", CACHE_HOOKS.0, CACHE_HOOKS.1);
+    ok(&r.project, &["harness", "run", &h2, "--mode", "fresh"]);
+    let (series, allocs) = (
+        files_in(&r.run_dir.join("series")),
+        files_in(&r.run_dir.join("alloc")),
+    );
+    let o = dla(&r.project, &["alloc-test", &h2, "--finding", &f]);
+    assert_ne!(o.code, 0, "{}", o.text);
+    let e = &o.json["error"];
+    assert_eq!(e["code"], "harness-not-about", "{}", o.text);
+    assert_eq!(
+        e["message"],
+        format!(
+            "{h2} does not target {f} and nothing it measured is tied to it, so an alloc-test there says nothing about {f}"
+        ),
+        "{}",
+        o.text
+    );
+    // The fix names the harness that is about the finding (a hook driver, an alloc-test on it)
+    // and the driver of its own.
+    let fix = e["fix"].as_str().unwrap();
+    assert!(
+        fix.contains(&format!("dla alloc-test H1 --finding {f}")),
+        "{fix}"
+    );
+    assert!(
+        fix.contains(&format!(
+            "dla harness gen --lang python --driver --probe {f}"
+        )) && fix.contains("dla harness run <H'>")
+            && fix.contains("dla trend <S>")
+            && fix.contains(&format!("dla alloc-test <H'> --finding {f}")),
+        "{fix}"
+    );
+    // Refused before anything ran: no series, no alloc result, no evidence written.
+    assert_eq!(files_in(&r.run_dir.join("series")), series);
+    assert_eq!(files_in(&r.run_dir.join("alloc")), allocs);
+    // The same command on the harness that grew the line works as it did.
+    let again = ok(&r.project, &["alloc-test", "H1", "--finding", &f]);
+    assert_eq!(again["decided_by"], COLUMN, "{again}");
+    // Without --finding the command is not refused on any harness.
+    let free = ok(&r.project, &["alloc-test", &h2]);
+    assert_eq!(free["ok"], true, "{free}");
+    // Its evidence names no finding, so the ledger's family check would let it through; the
+    // discriminator of a harness that is not about the finding cannot be cited for it, to refute
+    // the finding or to confirm its sibling.
+    let ev = free["evidence"].as_str().unwrap();
+    let sibling = format!("{f}.n1");
+    for (verb, target) in [("refute", f.as_str()), ("confirm", sibling.as_str())] {
+        let o = dla(&r.project, &["ledger", verb, target, "--evidence", ev]);
+        assert_ne!(o.code, 0, "{verb}: {}", o.text);
+        assert_eq!(o.json["error"]["code"], "harness-not-about", "{}", o.text);
+        assert!(
+            o.json["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("{h2} does not target {f}")),
+            "{}",
+            o.text
+        );
+    }
+}
+
+/// A probe driver of the finding at the line whose unit is `unit`, and the alloc-test on it.
+fn probe_driver_alloc_test(unit: &str) -> (Run, String, Value) {
+    let r = prepare(STORE_SWITCH, true);
+    let (f, _e, _a) = leak_at_the_line(&r);
+    let h = second_driver(&r, &f, STORE_SETUP, unit);
+    let a = ok(&r.project, &["alloc-test", &h, "--finding", &f]);
+    (r, h, a)
+}
+
+#[test]
+fn a_probe_driver_whose_unit_does_not_reach_the_line_is_inconclusive_and_says_so() {
+    if !have_python() {
+        return;
+    }
+    // The unit calls another module: the function of the line never runs.
+    let (_r, h, a) = probe_driver_alloc_test("    pass");
+    assert_eq!(a["favors"], "inconclusive", "{a}");
+    assert_eq!(
+        a["basis"],
+        format!("the unit of {h} does not reach {SITE}"),
+        "{a}"
+    );
+    let next = a["next"].as_array().unwrap();
+    assert!(
+        next.iter()
+            .filter_map(Value::as_str)
+            .any(|n| n.contains("call the function of the line") && n.contains(SITE)),
+        "{a}"
+    );
+}
+
+#[test]
+fn a_probe_driver_whose_unit_runs_the_line_and_keeps_nothing_is_non_leak() {
+    if !have_python() {
+        return;
+    }
+    let (_r, _h, a) = probe_driver_alloc_test("    _state[\"store\"].pin(i, False)");
+    assert_eq!(a["favors"], "non-leak", "{a}");
+    let basis = a["basis"].as_str().unwrap();
+    assert!(
+        basis.contains("ran")
+            && basis.contains("none of its blocks stayed")
+            && basis.contains(SITE),
+        "{a}"
+    );
+}
+
+#[test]
+fn a_probe_driver_whose_unit_keeps_the_object_is_a_leak_by_the_site_column() {
+    if !have_python() {
+        return;
+    }
+    let (_r, _h, a) = probe_driver_alloc_test("    _state[\"store\"].pin(i)");
+    assert_eq!(a["favors"], "leak", "{a}");
+    assert_eq!(a["decided_by"], COLUMN, "{a}");
 }
