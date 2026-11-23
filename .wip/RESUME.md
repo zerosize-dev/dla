@@ -1376,3 +1376,17 @@ flat test-loop readings get only 9 second looks.
   6 FOUND (the first with the final plugin 22bd696).
 - Briefs written: py-noise-brief.md (builder N, running), py-stacks-brief.md (builder A, to start
   after N is verified). Survey result for A is summarized inside the brief.
+
+## 09:00 UTC (approx.): builder N done, builder A started
+
+- Builder N (interpreter cache emptied at a checkpoint; `grown::finding_is_at_site` used by the
+  gate tie, grown rule, trigger and `dla trend` candidates): targeted tests pass under Python 3.13
+  (system) and 3.12 (venv). My mutations: Q22 (cache call removed) fails the new block-count test
+  on both interpreters; Q23 (the pre-3.13 call removed) fails it on 3.12 only; Q24 (gate tie back
+  to the finding's own site) fails the new site-column test. Snapshot a4c73ba (skip ci).
+  Still to do for N: whole suite, clippy, schema check, dla-bench static, CI, commit message 16.
+- Builder A (brief py-stacks-brief.md, scratch u90) works on top of N's tree. Plan: verify A,
+  then ONE whole-suite run and ONE CI round for N and A together, two commits on main
+  (N, then A) from the same verified tree if the snapshot script allows, else one commit each
+  with its own snapshot.
+- Experiment P (what the test loop keeps alive) still running.

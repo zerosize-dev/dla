@@ -1,0 +1,40 @@
+Do not read the interpreter's cache or a known writer line as a new leak
+
+A real unattended run on a Python library found the documented leak and
+ended with 190 open items. Almost all were columns `py.blocks@<file:line>`
+that were "not flat and tied to no finding", each with the command that
+adds a finding at the line. Two causes, neither a leak of the project.
+
+Four lines accounted for 175 of the items. Each builds an attribute name at
+run time and looks it up. CPython keeps a reference to the name string of
+an attribute lookup in its type attribute cache (4096 slots, the slot
+chosen by the address of the string), and a name built at run time is a
+new string each time, so the cache keeps up to 4096 of them alive. At a
+checkpoint such a line showed a few dozen to a few hundred live blocks, a
+number that wandered and crept up. A ten-line script showed that only the
+cache holds them: 15, 30, 169 and 206 live blocks after four rounds of
+2000 lookups, and 0 right after the cache was cleared.
+
+A checkpoint now empties the interpreter's caches after its two
+collections and before anything is counted: `sys._clear_internal_caches()`
+where the interpreter has it (3.13 and later), `sys._clear_type_cache()`
+before that. An interpreter with neither gets one limitation line.
+
+The other items were lines that write into the holder of a finding the
+census had already made. A column of that kind was tied to a finding only
+when the finding's own site was the line, and the site of a table is the
+line that defines it, so a unit that registered a new key per call made
+the gate ask for a second finding at the writer line. That finding had no
+census facts, so the rules that depend on them did not apply to it.
+
+A leak-side finding is now at a line when its own site is the line or the
+census lists the line among the writers of its holder. The gate's tie, the
+rule that a grown finding cannot be closed unmeasured, the trigger of a
+test loop and the candidates of `dla trend` use that one rule. A remover
+line and a sibling never tie.
+
+Checked under Python 3.12 and 3.13: the new test of a line that builds
+attribute names fails when the clearing call is removed, and on 3.12 also
+when only the older call is removed.
+
+Not seen yet: an unattended run with this change.
