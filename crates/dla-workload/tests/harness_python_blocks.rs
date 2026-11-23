@@ -301,7 +301,9 @@ fn a_site_that_keeps_one_object_per_call_has_a_column_with_a_value_at_every_poin
 
 /// A function that calls a method through a name built at run time, the suffix taking three
 /// values, and keeps nothing. The interpreter's attribute cache keeps a reference to the name
-/// string of each lookup, and every call builds a new string.
+/// string of each lookup, and every call builds a new string. The number of lookups per call
+/// doubles every 20 calls (one round of the run below), so the strings the cache holds grow from
+/// round to round until its slots are taken: a line is counted only when its count grew.
 const DYNAMIC: &str = "\
 class Handler:
     def m_a(self):
@@ -320,7 +322,7 @@ SUFFIXES = (\"a\", \"b\", \"c\")
 
 def dispatch(i):
     total = 0
-    for k in range(300):
+    for k in range(1 << min(i // 20, 8)):
         total += getattr(HANDLER, \"m_\" + SUFFIXES[(i + k) % 3])()  # DYNAMIC
     return total
 ";
@@ -333,19 +335,19 @@ fn a_line_that_builds_an_attribute_name_at_run_time_and_keeps_nothing_has_no_col
     let fx = fixture();
     write(&fx, "store.py", STORE);
     write(&fx, "dynamic.py", DYNAMIC);
-    // 50 units per round, 300 lookups per unit: 15000 new name strings per round, far more than
-    // the 4096 slots of the interpreter's type attribute cache. Without emptying that cache at a
-    // checkpoint, the line shows the blocks the cache holds (tens to hundreds of them).
+    // 20 units per round, 1 lookup per unit in the first round and twice as many in each next
+    // one: without emptying the interpreter's type attribute cache at a checkpoint, the line shows
+    // the blocks the cache holds, 20 at the first checkpoint and a few hundred at the last.
     let s = run_driver(
         &fx,
         "import store\n    import dynamic\n    _state['store'] = store\n    _state['dynamic'] = dynamic",
         "_state['store'].keep(i)\n    _state['dynamic'].dispatch(i)",
-        50,
+        20,
         1,
         6,
         &[],
     );
-    // The keeping line has its column, as in the first test of this file (50 blocks per point).
+    // The keeping line has its column, as in the first test of this file.
     let keep = format!("py.blocks@store.py:{}", line_of(STORE, "# KEEP"));
     assert_eq!(
         block_columns(&s).iter().filter(|c| **c == keep).count(),

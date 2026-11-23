@@ -525,14 +525,23 @@ fn a_column_at_a_writer_line_of_a_finding_is_tied_to_it_and_the_gate_asks_for_no
     assert_eq!(items.len(), 1, "{missing:?}");
     let desc = items[0]["description"].as_str().unwrap();
     assert!(
-        desc.contains("tied only to findings that have no disposition") && desc.contains(&f),
+        desc.contains("tied only to findings that have no disposition"),
         "{}",
         items[0]
     );
     let fix = items[0]["fix"].as_str().unwrap();
+    assert!(!fix.contains(&format!(" --site {SITE} ")), "{fix}");
+    // The open finding is the item that names the route.
+    let item = missing
+        .iter()
+        .find(|m| m["id"] == f.as_str())
+        .unwrap_or_else(|| panic!("{missing:?}"));
     assert!(
-        !fix.starts_with(ADD_PREFIX) && !fix.contains(&format!(" --site {SITE} ")),
-        "{fix}"
+        item["fix"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("dla alloc-test H1 --finding {f}")),
+        "{item}"
     );
     // The finding counts as grown by the column: it cannot be closed unmeasured.
     for reason in ["inconclusive", "not_exercised"] {
@@ -616,7 +625,25 @@ fn a_column_at_a_writer_line_of_a_finding_is_tied_to_it_and_the_gate_asks_for_no
             a["evidence"].as_str().unwrap(),
         ],
     );
-    let c = ok(&r.project, &["ledger", "confirm", &f, "--evidence", &e]);
+    // The evidence of the second trend, which lists the finding as the candidate of the column,
+    // confirms (the first trend was made before the finding had the writer).
+    let counter = r
+        .ledger()
+        .iter()
+        .filter(|v| v["kind"] == "unit-count-series")
+        .filter_map(|v| v["evidence_id"].as_str().map(str::to_owned))
+        .find(|id| {
+            t2["evidence"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|x| x == id.as_str())
+        })
+        .unwrap_or_else(|| panic!("{}", t2["evidence"]));
+    let c = ok(
+        &r.project,
+        &["ledger", "confirm", &f, "--evidence", &counter],
+    );
     assert_eq!(c["to"], "confirmed", "{c}");
     let after = r.final_gate();
     assert!(

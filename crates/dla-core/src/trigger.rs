@@ -219,8 +219,9 @@ fn test_loop_varies(
     out
 }
 
-/// The leak-side findings whose own site is the line of a passed allocation-site column
-/// (`py.blocks@<file:line>`) of `report`.
+/// The leak-side findings at the line of a passed allocation-site column (`py.blocks@<file:line>`)
+/// of `report`: their own site is the line, or the census lists it as a writer of their holder
+/// (`grown::finding_is_at_site`).
 fn grown_at_site_columns(view: &RunView, report: &crate::trend::TrendReport) -> Vec<FindingId> {
     use crate::{grown, series::Unit};
     let mut out = Vec::new();

@@ -961,3 +961,27 @@ fn a_site_column_that_did_not_pass_gives_no_trigger() {
     assert!(t.test_loop_harnesses(&f(1)).is_empty());
     assert!(!matches!(t.trigger(&f(1)), Trigger::Reproduced { .. }));
 }
+
+#[test]
+fn a_finding_whose_holder_is_written_at_a_line_that_grew_in_the_pytest_loop_has_that_trigger() {
+    let run = Run::new(2);
+    run.harness("H1", Kind::PytestLoop, &[]);
+    run.run("S1", "H1", "aa", None, None);
+    // F1 is the table defined at `pkg/m1.py:3`; the census lists `pkg/m1.py:9` as a writer.
+    let mut l = Ledger::load(run.dir.path()).unwrap();
+    l.annotate(&f(1), vec!["pkg/m1.py:9".into()], vec![], None)
+        .unwrap();
+    // A remover line ties nothing: F2 lists `pkg/m1.py:11` as a remover only.
+    l.annotate(&f(2), vec![], vec!["pkg/m1.py:11".into()], None)
+        .unwrap();
+    site_column_trend(&run, "S1", "pkg/m1.py:9", true);
+    let t = run.triggers();
+    assert_eq!(t.test_loop_harnesses(&f(1)), ["H1"]);
+    assert!(t.test_loop_harnesses(&f(2)).is_empty());
+    // The same line, with no writer annotation: the finding is not at it.
+    let other = Run::new(1);
+    other.harness("H1", Kind::PytestLoop, &[]);
+    other.run("S1", "H1", "aa", None, None);
+    site_column_trend(&other, "S1", "pkg/m1.py:9", true);
+    assert!(other.triggers().test_loop_harnesses(&f(1)).is_empty());
+}
