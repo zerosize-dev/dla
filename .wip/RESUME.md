@@ -2747,3 +2747,19 @@ flat test-loop readings get only 9 second looks.
 - Then: commit 2 from bb8fd30 (message 24); snapshot of the N tree WITH CI; commit 3 (message 25
   to write: the four Node parts and the real-project check); version 0.9.0-preview.8; second
   blind round (task 106).
+
+## 18:25 UTC 2026-11-24 (clock checked 18:21): CI on bb8fd30 failed in one job, the known JVM flake
+
+- CI run 45448974153 on snapshot bb8fd30 (main + R3 + R4): 14 jobs green; dynamic acceptance
+  62/64 pass, 1 xfail, 1 failure: jvm-pool-warmup "no rule-out on a non-leak fixture" (unbound
+  alloc-test inconclusive, F6 growth in os.rss left unresolved). This is the flake of task 99
+  (seen on main 28979b4 before any of today's changes, green on re-run); the change in this
+  snapshot is the Rust driver template and out.rs. Failed job re-run queued; waiter for the
+  re-run: logs u115/ci-snap-25-rerun.
+- CI on main 546b74c still running (waiter bikgtj12t); the same commit is green on the dev
+  branch (run 45444063325).
+- Builder N finished (final report equal to the first). Local suite on main + R3 + R4 + N:
+  task b3oc9brk6, still running.
+- IMPORTANT for task 99: the flake rate of jvm-pool-warmup on CI is now 2 of about 6 recent
+  dynamic runs; it blocks commits by an hour each time. Diagnose it next to the second blind
+  round (frozen binaries under CPU load).
