@@ -1831,3 +1831,25 @@ flat test-loop readings get only 9 second looks.
   N-OBSERVER; bundle must carry the holder record and a harness list; verifier text; trigger names
   the probe driver). Builder for it (Sonnet) is the next step; scratch dir u93.
 - Pillow run 10 (tree b91cbe6): leak at the font line CONFIRMED with mechanism; verifier disputes.
+
+## 01:20 UTC 2026-11-24
+
+- CI on main for 28979b4 (run 45289556532): all jobs green except "dynamic acceptance on the
+  fixtures", still running at 00:50. Waiter restarted after a worker restart (logs u99/ci-main-v6).
+  When green: release.yml (ref main, publish true) -> v0.9.0-preview.6.
+- R2 builder (Sonnet, agent adde4cb6ee309af51) reported; snapshot 9ca99ac holds its tree.
+- My real-library check of R2 (frozen binary u101/dla-R2, env u101/env.sh, run
+  20261124-004714-d4a5 in u72/pillow; one hook driver whose unit does the font text and the cms
+  open in try/except) found nine defects: brief wip-notes/py-holder-fix-brief.md (R3), sent to
+  the same builder at 01:15. Main ones: the walk hits the 60 s bound on a 16k-traceback chain
+  (5 of 6 lines get no chain); `at` is a cut absolute path for an editable install; a retention
+  record switches the stack requirement of `dla bundle` off; the bundle of the native-line
+  finding shows the other holder and excerpts of the other leak; type-count columns stay untied;
+  `blocks_first: null` is refused by the adapter.
+- After R3 returns: rerun the real check from a fresh `dla run init` in u72/pillow with a new
+  frozen binary; then own mutations, Python 3.12 run of the builder's tests, whole suite, static
+  bench, full dynamic bench with frozen binaries, non-skip snapshot for CI, commit.
+- Brief W (wip-notes/work-trim-brief.md, thinning of harness work copies, task 83) is written;
+  its builder starts after R3 is integrated (same files).
+- Decision: no static rule for `raise <stored exception>` (noise on asyncio-style code); the
+  measured holder chain covers it.

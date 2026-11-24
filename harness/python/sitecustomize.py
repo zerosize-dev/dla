@@ -1745,14 +1745,22 @@ def _heap_walk(start, relation, roots, own, deadline):
     `(status, path, root)`: `path` runs from `start` to the object the root holds, `root` is
     `(kind, thing)` with kind 'module-global', 'class-attribute', 'frame' or 'no-referrer'.
     status is 'ok', 'depth' (no root within the depth bound), 'none' (the holders end in cycles
-    no root reaches), 'time' or 'nodes'."""
-    first, more, class_dicts = relation
+    no root reaches), 'time' or 'nodes'.
+
+    Every object on a path found is remembered with its way on (`known`, the fourth member of
+    `relation`): a later search that reaches such an object does not walk on from it, it takes the
+    rest of that path, so a long list every chain runs through (the traceback of an exception
+    raised again and again) is walked once. Such an object counts at the depth it is reached at
+    plus the steps it had left, and loses to a root found at a shallower level."""
+    first, more, class_dicts, known = relation
     modules, frames = roots
     seen = {id(start)}
     pred = {id(start): None}
+    lvl = {id(start): 0}
     level = [start]
     depth = 0
     visited = 0
+    pending = []  # (total depth, root rank, node): a known object reached
     names = ("module-global", "class-attribute", "frame", "no-referrer")
     while level and depth < _HEAP_DEPTH:
         best = None
@@ -1766,6 +1774,12 @@ def _heap_walk(start, relation, roots, own, deadline):
             if not visited & 127 and time.monotonic() > deadline:
                 return "time", None, None
             key = id(node)
+            memo = known.get(key)
+            if memo is not None:
+                total = depth + memo[1]
+                if total < _HEAP_DEPTH:
+                    pending.append((total, _HEAP_RANK[memo[2][0]], node))
+                continue
             parent = first.get(key)
             if parent is None:
                 if best is None or best[0] > 3:
@@ -1790,14 +1804,18 @@ def _heap_walk(start, relation, roots, own, deadline):
                         pred[pid] = node
                         if type(p) is types.TracebackType and type(node) is types.TracebackType and p.tb_next is node:
                             level.append(p)
+                            lvl[pid] = depth
                         else:
                             following.append(p)
+                            lvl[pid] = depth + 1
                     continue
                 if best is None or rank < best[0]:
                     best = (rank, node, p)
             if not usable and (best is None or best[0] > 3):
                 best = (3, node, None)  # held by nothing but the agent's own objects
-        if best is not None:
+        here = [c for c in pending if c[0] == depth]
+        memo_pick = min(here, key=lambda c: c[1]) if here else None
+        if best is not None and (memo_pick is None or best[0] <= memo_pick[1]):
             path = []
             cur = best[1]
             while cur is not None:
@@ -1809,10 +1827,47 @@ def _heap_walk(start, relation, roots, own, deadline):
                 thing = (modules[id(thing)], thing)
             elif best[0] == 1:
                 thing = (class_dicts[id(thing)], thing)
-            return "ok", path, (names[best[0]], thing)
+            root = (names[best[0]], thing)
+            _heap_remember(path, lvl, depth, root, known)
+            return "ok", path, root
+        if memo_pick is None and pending and not following:
+            memo_pick = min(pending, key=lambda c: (c[0], c[1]))
+            depth = memo_pick[0]
+        if memo_pick is not None:
+            node = memo_pick[2]
+            path = []
+            cur = node
+            while cur is not None:
+                path.append(cur)
+                cur = pred[id(cur)]
+            path.reverse()
+            cut = len(path) - 1
+            entry = known[id(node)]
+            root = entry[2]
+            nxt = entry[0]
+            while nxt is not None:
+                path.append(nxt)
+                nxt = known[id(nxt)][0]
+            _heap_remember(path[: cut + 1], lvl, memo_pick[0], root, known, tail=path[cut + 1 :])
+            return "ok", path, root
         level = following
         depth += 1
     return ("depth" if level else "none"), None, None
+
+
+_HEAP_RANK = {"module-global": 0, "class-attribute": 1, "frame": 2, "no-referrer": 3}
+
+
+def _heap_remember(path, lvl, final, root, known, tail=()):
+    """Records, for each object of `path` not known yet, the object after it on the way to the root
+    and the levels left. `tail` is the part of the way that is known already."""
+    after = tail[0] if tail else None
+    for i in range(len(path) - 1, -1, -1):
+        node = path[i]
+        key = id(node)
+        if key not in known:
+            known[key] = (after, max(final - lvl.get(key, 0), 0), root)
+        after = node
 
 
 def _heap_gen_live(gen):
@@ -2005,8 +2060,9 @@ def _heap_build(objs, base, counts, limitations):
             targets = {row[0] for row in picked}
             roots = _heap_roots(in_agent)
             scan = _heap_scan(objs, list(roots[1].values()), targets, deadline, in_agent)
-            relation = (scan["first"], scan["more"], scan["class_dicts"])
-            own = {id(scan), id(scan["first"]), id(scan["more"]), id(scan["found"]), id(objs), id(roots), id(relation), id(notes)}
+            known = {}
+            relation = (scan["first"], scan["more"], scan["class_dicts"], known)
+            own = {id(scan), id(scan["first"]), id(scan["more"]), id(scan["found"]), id(objs), id(roots), id(relation), id(notes), id(known)}
             tally = {"timed_out": 0, "nodes": 0, "depth": 0, "none": 0}
             if scan["timed_out"]:
                 notes.append(
