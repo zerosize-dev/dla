@@ -2666,3 +2666,24 @@ flat test-loop readings get only 9 second looks.
   commit-message-23.txt first: add the Rust feature part and the final wording of the
   flat-series rule), push main and main:dev/wonderful-mccarthy-algc5s, CI waiter on main.
   Then R3 + R4: local suite, snapshot with CI, second commit.
+
+## 17:05 UTC 2026-11-24 (approx.): R4 built and checked on the real Rust project; local suite running
+
+- R4 built: minimum Rust 1.70 for the generated driver (stated in harness/rust/README.md and the
+  driver header); inline const replaced by a const item; `unsafe extern` only for edition 2024
+  and later (placeholder @@DLA_UNSAFE_EXTERN@@, edition from package.edition or the workspace
+  root's workspace.package.edition); `harness-failed` names the pinned channel
+  ("did not build with the pinned toolchain 1.80.0 (rust-toolchain.toml)"); tests; nine Rust
+  fixtures pass one by one (one expected failure as before). driver_fit.rs and the templates
+  test got the new variable in their fill lists.
+- Frozen: u112/dla-F4 (sha 44260c0605b8), u112/dla-bench-F4 (older frozen binaries deleted).
+- Real project with dla-F4 and NO toolchain override (u117/fastrace, rustc 1.80.0): `_attention`
+  short line, `regenerate` run as printed, driver has plain `extern "C" {`, builds and runs;
+  trend passes native.live_bytes +236 per unit; F41 (spsc.rs) and F21 executed. Run directory
+  deleted.
+- Local suite on the final tree (G + H..H5 + R..R4) running: task bnjue6rl3 (u115/suite.sh).
+- CI on f0a84e5 (tree before R3/R4) still running (waiter bg2n0fd6p).
+- Next: (1) CI f0a84e5 green -> commit that tree to main with commit-message-23.txt.
+  (2) suite green -> snapshot of the final tree WITH CI -> second commit (message 24: the cut
+  warning, `regenerate`, the driver's minimum Rust and edition rule, the pinned channel in the
+  failure). (3) builder N (Node/TypeScript), brief ready. (4) second blind round (task 106).
