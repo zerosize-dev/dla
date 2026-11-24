@@ -632,8 +632,15 @@ fn the_first_point_of_a_command_mode_python_series_lies_on_the_line_and_no_cache
     eprintln!("frozen counts per point: {values:?}");
     let steps: Vec<f64> = values.windows(2).map(|w| w[1] - w[0]).collect();
     assert!(steps.len() >= 5, "{values:?}");
+    // A point can read a few dozen objects off under load (the agent's own records at the moment
+    // of the freeze); the first point read about a whole step high before, so a tenth of the
+    // usual step tells the two apart.
+    let mut sorted = steps.clone();
+    sorted.sort_by(f64::total_cmp);
+    let usual = sorted[sorted.len() / 2];
+    assert!(usual > 100.0, "{values:?}");
     assert!(
-        steps.iter().all(|d| (*d - steps[1]).abs() < 1.0),
+        steps.iter().all(|d| (*d - usual).abs() <= usual / 10.0),
         "the first point reads high: {values:?}"
     );
     // No process wrote a cache into the agent's or the scratch copy's directory.
