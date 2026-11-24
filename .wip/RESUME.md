@@ -2048,3 +2048,51 @@ flat test-loop readings get only 9 second looks.
   reachable and whose install works; otherwise the second; if neither, that runtime has no blind
   project and I say so. A run whose key turns out wrong afterwards is reported as void, not as a
   miss or a hit.
+
+## 09:27 UTC 2026-11-24: pillow-11 read; preview.7 frozen; blind runs 1 and 2 started
+
+- pillow-11 (tree of cb933c3): exit 0, 8315 s, COMPLETE, 100 harnesses, run folder 283 MB at the
+  end (thinning works). THE KNOWN LEAK WAS NOT CONFIRMED. Chain: the python worker's test loop
+  measured growth at src/PIL/ImageFont.py:580 at 07:16 (python/E48, 20 min in); the worker's slice
+  ended 07:17; the orchestrator worked 95 queue harnesses; a finding for the line (F4, holder
+  native-handle/global-ref) was added only at 09:00 (2 h 03 min in); one driver H99 did not run
+  the line's function; closed unresolved(inconclusive) at 09:09 with 40 min of the 3 h budget
+  left. Also: python/F17 (extension registry fed by the driver's own keys) confirmed and labeled
+  L-COLLECT with retention-path E24 although trigger "not found"; verifier says N-INTENT (right).
+  Stored-exception holder not found (module global "not targeted, tier 5"). Kept:
+  /root/dla-real/pillow-11-keep. Run directory deleted. Task 102 holds the defect; NOT fixed
+  before the blind test on purpose.
+- Rig fact: run.py --timeout 9000 was BELOW the tool's 3 h budget in the Pillow runs. Blind runs
+  use --timeout 12600.
+- Version commit b896d8c "Version 0.9.0-preview.7" on main and dev. CI waiter b5fo434az (logs
+  u107/ci-main-23). After green: release.yml (ref main, publish true), verify the tag.
+- FROZEN FOR THE BLIND TEST: binary u107/dla-P7 = /root/dla-real/bin/dla (sha256 0fa9d559a22e7ee3,
+  debug build of b896d8c), plugin = git archive of b896d8c. Do not rebuild or edit until the last
+  blind run has ended. No cargo while runs are going.
+- Key check (agent HV): CONFIRMED by reading for 1, 2, 3, 4, 7, 8, 9, 10; UNSURE for 5 and 6.
+  Reproduction (agent HR): 5 Apollo DOES NOT GROW (the control with the fix was not run: a patch
+  action was denied to it), 6 interceptors GROWS. HR's report came with an automatic security
+  warning (sensitive information leakage); my review: two scripts in u106/repro/scripts, only
+  localhost, no child processes or file writes, nothing changed outside its directory.
+  Rule change made before any run and told to the owner: an UNSURE key may be settled by a hand
+  reproduction by an agent that reports only grows / does not grow.
+- SET A (baseline, becomes a development set afterwards): 1 opentelemetry-python v1.40.0,
+  3 opentelemetry-go v1.29.0, 6 @mswjs/interceptors v0.40.0, 7 fastrace 929879e,
+  9 logstash-logback-encoder 7.1.1; plus Jetty 12.0.31 (not blind).
+  SET B (stays blind for the measurement after the fixes): 2 mcp python-sdk, 4 x/crypto,
+  8 jni-rs, 10 micrometer; Node slot empty (Apollo did not reproduce).
+  I have NOT read answer-key.md. candidates.md leaks an area hint through three test commands
+  (otel-go, x/crypto, Apollo); I do not use it.
+- Sources: /root/dla-real/src/{otel-python,otel-go,interceptors,apollo-client,fastrace,logstash}.
+  interceptors: `pnpm install --frozen-lockfile` + `pnpm build` done in the source dir.
+  logstash: Maven home filled at u107/logstash-try/m2 (459 tests pass on JDK 21) for --warm-m2.
+  otel-python: run.py has a new option --py-setup (backup run.py.before-blind); environment =
+  `uv sync --frozen --inexact && uv pip install pytest==7.4.4 flaky==3.7.0` (all workspace
+  packages editable; sdk tests 672 pass, 1 fails; api and sdk tests cannot be collected in one
+  pytest call, a property of the repository).
+- STARTED 09:25: blind-otel-python (run 20261124-092508-b7f0) and blind-otel-go (run
+  20261124-092504-fbbd), each `--timeout 12600 --max-turns 600`, prompt-generic.txt. Waiters via
+  u107/wait-run.sh <name> 7000 (restart when they time out). Next pair: interceptors + fastrace;
+  then logstash (--warm-m2) + Jetty.
+- After each run: keep small files in /root/dla-real/<name>-keep, delete the run directory by
+  literal path. Score only after ALL runs: then read answer-key.md.
