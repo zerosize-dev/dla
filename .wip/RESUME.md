@@ -2494,3 +2494,32 @@ flat test-loop readings get only 9 second looks.
 - Order of work now: verify the combined tree (replays, suite, own mutations, static and
   dynamic acceptance, CI) -> main; builder N (Node/TypeScript, brief ready) starts when my local
   suite is done; then brief R.
+
+## 15:15 UTC 2026-11-24 (clock checked 15:06): local verification of the combined tree; CI found a hole
+
+- Disk filled during the first local suite run (25 MB free). Freed 7 GB by literal paths:
+  u107/jetty-try/project (built Jetty copy; m2 kept, rebuild takes 5 min), u106/repro copies,
+  u106/src, u106/repos, u106/cand (research clones; answer-key.md and candidates.md kept),
+  u113/interceptors/.dla, u101/dla-R2..R6, u104/frozen, u105/dla-W2 and dla-bench-W,
+  u112/dla-G-try and dla-H1, /tmp/dla-bench-* leftovers, /root/dla-real/src/apollo-client,
+  u110/gocache, u111, and the .dla run directories of my walks in u72/pillow (1.1 GB) and
+  u107/otel-try/project. Lesson: delete a walk's run directory after reading it.
+- Replays and Pillow walk on u112/dla-H3: all as wanted (line mode inconclusive + refute
+  refused + confirmed on H1; holder mode `_attention`, gate item, status lead, refusal,
+  confirmed; Pillow both findings confirmed, final gate asks for no finding).
+- Local run on the combined tree (u115/suite.sh, log u115/suite.log): fmt, clippy, schema clean;
+  whole suite under 3.13: 3480 passed, 0 failed, 5 ignored; Python test files under 3.12: the
+  two known gc.freeze tests of harness_capture_python fail, all else passes; static acceptance:
+  64 fixtures pass; agent tests (unittest) 7 pass.
+- CI on snapshot a37fcfb (run 45412730283): clippy and test (ubuntu-latest) FAILED in
+  alloc_test_jvm::a_loop_that_warms_up_is_judged_a_plateau_on_the_non_heap_bytes_and_the_root_is_refuted
+  (favors inconclusive, jvm.nonheap_used never-grew). Cause: on that machine the first trend
+  wrote no growth evidence, the finding cited only the workload evidence of H1, harness_about
+  gave OwnWorkload, and the exemption takes only Evidence and Capture. Other jobs passed; dynamic
+  acceptance was still running when read.
+- Follow-up H4 SENT to the builder: a harness is the finding's own when the finding cites ANY
+  evidence a run of it produced (workload record, series, tied grown column, capture); only a
+  harness it cites nothing from is "another driver". Timing-free test both ways, five runs of
+  alloc_test_jvm, texts say "the harness the finding was raised on".
+- After H4: fmt, build, freeze, replays again (they must not change), suite, snapshot with CI.
+  Builder N (Node) still waits; brief R (Rust features) not written.
