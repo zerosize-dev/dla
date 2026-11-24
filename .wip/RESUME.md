@@ -2763,3 +2763,10 @@ flat test-loop readings get only 9 second looks.
 - IMPORTANT for task 99: the flake rate of jvm-pool-warmup on CI is now 2 of about 6 recent
   dynamic runs; it blocks commits by an hour each time. Diagnose it next to the second blind
   round (frozen binaries under CPU load).
+- 18:30 UTC: CI on main 546b74c (run 45444056351): 14 jobs green incl. dynamic acceptance;
+  clippy and test (ubuntu-latest) FAILED in dla-sample tests/os.rs:172
+  tree_sampling_sums_descendants_and_names_the_largest
+  (`os::descendants(current()).contains(&largest.pid)`): a crate today's change does not touch;
+  the same commit is green on the dev branch and its tree was green as snapshot f0a84e5. Failed
+  job re-run queued (waiter logs u115/ci-main-24-rerun). Task 110 collects the four flaky tests
+  of today.
