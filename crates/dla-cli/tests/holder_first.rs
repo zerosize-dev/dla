@@ -89,6 +89,9 @@ fn write(root: &Path, rel: &str, text: &str) {
 const PROVIDERS: &str = "class _Provider:\n    def __init__(self):\n        self._items = []\n\n    def make(self, i, real):\n        if real:\n            return None\n        obj = [i]\n        self._items.append(obj)\n        return obj\n\n\nPROVIDER = _Provider()\n\n\ndef make(i, real=False):\n    return PROVIDER.make(i, real)\n";
 /// A module-level table of its own: the census lists it, so the first harness targets it.
 const CACHE: &str = "REG = {}\n\n\ndef put(k):\n    REG[k] = k\n";
+/// A cache that fills to 2200 entries and then stops: a warm-up that lasts four rounds of the
+/// driver's 440 units.
+const WARM: &str = "_C = {}\n\n\ndef fill(i):\n    if len(_C) < 2200:\n        _C[i] = [i]\n";
 /// A function that makes an object and gives it to the caller.
 const MAKER: &str = "def build(i):\n    return [i]\n";
 
@@ -159,18 +162,33 @@ impl Run {
 }
 
 const SETUP: &str = "    from shop import cache, providers, maker\n    _state[\"cache\"] = cache\n    _state[\"providers\"] = providers\n    _state[\"maker\"] = maker";
+/// The setup of the warm-up driver: only the cache that fills and stops.
+const SETUP_WARM: &str = "    from shop import warm\n    _state[\"warm\"] = warm";
 /// The unit of the first driver: it takes the branch that keeps the object.
 const KEEPS: &str = "    _state[\"cache\"].put(i)\n    _state[\"providers\"].make(i)";
 
 /// Run init, census, discover, the first driver (its unit calls `unit`), one run of it (series S1)
 /// and its trend (T1). The census lists `shop/cache.py`'s table (F1) and nothing at the provider.
 fn prepared(unit: &str) -> Run {
+    prepared_with(
+        unit,
+        SETUP,
+        &[
+            ("shop/cache.py", CACHE),
+            ("shop/providers.py", PROVIDERS),
+            ("shop/maker.py", MAKER),
+        ],
+    )
+}
+
+/// [`prepared`] with the project files `files` and the driver's `setup`.
+fn prepared_with(unit: &str, setup: &str, files: &[(&str, &str)]) -> Run {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");
     write(&project, "shop/__init__.py", "");
-    write(&project, "shop/cache.py", CACHE);
-    write(&project, "shop/providers.py", PROVIDERS);
-    write(&project, "shop/maker.py", MAKER);
+    for (rel, text) in files {
+        write(&project, rel, text);
+    }
     let init = ok(&project, &["run", "init", "--session-id", "t"]);
     let run_dir = project.join(".dla").join(init["run_id"].as_str().unwrap());
     ok(&project, &["census", "--lang", "python"]);
@@ -180,7 +198,7 @@ fn prepared(unit: &str) -> Run {
         project,
         run_dir,
     };
-    let h = r.driver(None, SETUP, unit);
+    let h = r.driver(None, setup, unit);
     assert_eq!(h, "H1");
     r.ok(&["harness", "run", "H1", "--mode", "fresh"]);
     r.ok(&["trend", "S1"]);
@@ -190,15 +208,19 @@ fn prepared(unit: &str) -> Run {
 /// Adds the finding at the growing line the way a run that reads only the trend does: one finding
 /// at the line, holder `container-field`, no owner. Returns its id.
 fn finding_at_the_line(r: &Run) -> String {
+    finding_at(r, SITE)
+}
+
+/// [`finding_at_the_line`] for the growing line `site`.
+fn finding_at(r: &Run, site: &str) -> String {
     let t = r.ok(&["trend", "S1"]);
-    let add = Run::next_of(&t, "dla ledger add --origin growth-series --evidence ")
-        .unwrap_or_else(|| panic!("{}", t["next"]));
-    let e = add
-        .split_whitespace()
-        .nth(6)
-        .unwrap_or_else(|| panic!("{add}"))
-        .to_owned();
-    assert!(e.starts_with('E'), "{add}");
+    // The trend prints the add command of a line that is still growing; a column that grew and
+    // levelled off has none, and the trend's own evidence serves.
+    let e = match Run::next_of(&t, "dla ledger add --origin growth-series --evidence ") {
+        Some(add) => add.split_whitespace().nth(6).unwrap().to_owned(),
+        None => t["evidence"][0].as_str().unwrap().to_owned(),
+    };
+    assert!(e.starts_with('E'), "{}", t["next"]);
     let added = r.ok(&[
         "ledger",
         "add",
@@ -207,7 +229,7 @@ fn finding_at_the_line(r: &Run) -> String {
         "--evidence",
         &e,
         "--site",
-        SITE,
+        site,
         "--region",
         "heap",
         "--holder",
@@ -765,4 +787,191 @@ fn lines_no_retention_record_roots_get_their_add_commands_after_the_capture() {
         "{}",
         line[0]
     );
+}
+
+// ------------------------------------------------------------ a series that never showed the growth
+
+/// The command `_attention` of a summary prints, as arguments (without the leading `dla`).
+fn add_args(summary: &Value) -> Vec<String> {
+    let text = summary["_attention"][0].as_str().unwrap();
+    let at = text.find("dla ledger add ").unwrap();
+    text[at..]
+        .split_whitespace()
+        .skip(1)
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn a_probe_of_a_holder_the_unit_never_feeds_is_inconclusive_and_cannot_refute_the_leak() {
+    if !have_python() {
+        return;
+    }
+    let r = prepared(KEEPS);
+    // The capture names the holder; the finding at it has its owner, so a driver made for it
+    // gets a probe of the holder.
+    let s = capture_and_summarize(&r, Some("F1"));
+    let args = add_args(&s);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let f = r.ok(&args)["id"].as_str().unwrap().to_owned();
+    let h2 = r.driver(
+        Some(&f),
+        "    from shop import providers\n    _state[\"providers\"] = providers",
+        "    _state[\"providers\"].make(i, True)",
+    );
+    r.ok(&["harness", "run", &h2, "--mode", "fresh"]);
+    let a = r.ok(&["alloc-test", &h2, "--finding", &f]);
+    assert_eq!(a["favors"], "inconclusive", "{a}");
+    let basis = a["basis"].as_str().unwrap();
+    assert!(
+        basis.starts_with(&format!("this series does not show the growth of {f}: "))
+            && basis.ends_with(&format!(
+                " is flat from its first measured point, so the unit of {h2} does not feed it"
+            )),
+        "{basis}"
+    );
+    assert!(
+        a["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["plateau"]["verdict"] == "never-grew" || c["plateau"] == "never-grew"),
+        "{a}"
+    );
+    let next = a["next"].as_array().unwrap();
+    assert!(
+        next[0].as_str().unwrap().starts_with(&format!(
+            "dla alloc-test H1 --finding {f}   (the growth was measured there"
+        )),
+        "{next:?}"
+    );
+    let o = dla(
+        &r.project,
+        &[
+            "ledger",
+            "refute",
+            &f,
+            "--evidence",
+            a["evidence"].as_str().unwrap(),
+        ],
+    );
+    assert_ne!(o.code, 0, "{}", o.text);
+    assert_eq!(state_of(&r, &f), "candidate");
+}
+
+#[test]
+fn the_same_finding_on_the_harness_that_grew_is_a_leak_and_reaches_confirmed() {
+    if !have_python() {
+        return;
+    }
+    let r = prepared(KEEPS);
+    let f = finding_at_the_line(&r);
+    let t = r.ok(&["trend", "S1"]);
+    let e = t["evidence"][0].as_str().unwrap().to_owned();
+    let sib = r.ok(&[
+        "ledger",
+        "add",
+        "--sibling-of",
+        &f,
+        "--origin",
+        "hypothesis",
+        "--hypothesis",
+        "N-WARM",
+        "--refute-if",
+        "growth continues over the extra cycles",
+        "--evidence",
+        &e,
+    ]);
+    let sib = sib["id"].as_str().unwrap().to_owned();
+    let workload = fs::read_to_string(r.run_dir.join("ledger.jsonl"))
+        .unwrap()
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|v| v["kind"] == "workload")
+        .filter_map(|v| v["evidence_id"].as_str().map(str::to_owned))
+        .next_back()
+        .unwrap();
+    r.ok(&["ledger", "test", &f, "--evidence", &workload]);
+    let a = r.ok(&["alloc-test", "H1", "--finding", &f]);
+    assert_eq!(a["favors"], "leak", "{a}");
+    r.ok(&[
+        "ledger",
+        "refute",
+        &sib,
+        "--evidence",
+        a["evidence"].as_str().unwrap(),
+    ]);
+    let c = r.ok(&["ledger", "confirm", &f, "--evidence", &e]);
+    assert_eq!(c["to"], "confirmed", "{c}");
+}
+
+#[test]
+fn a_real_warm_up_on_its_own_harness_is_still_non_leak_with_n_warm() {
+    if !have_python() {
+        return;
+    }
+    // The unit fills a cache to 2200 entries (the first four rounds after the warm-up round) and
+    // then stops: the column grew in the main window and went flat.
+    let r = prepared_with(
+        "    _state[\"warm\"].fill(i)",
+        SETUP_WARM,
+        &[("shop/warm.py", WARM)],
+    );
+    let f = finding_at(&r, "shop/warm.py:6");
+    let a = r.ok(&["alloc-test", "H1", "--finding", &f]);
+    assert_eq!(a["favors"], "non-leak", "{a}");
+    let supports: Vec<&str> = a["supports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(supports.contains(&"N-WARM"), "{a}");
+}
+
+#[test]
+fn a_line_that_ran_and_kept_nothing_is_inconclusive_when_a_record_shows_a_project_holder_keeping_it()
+ {
+    if !have_python() {
+        return;
+    }
+    let r = prepared(KEEPS);
+    let f = finding_at_the_line(&r);
+    // The capture of H1 names the holder of the project that keeps the line.
+    let s = capture_and_summarize(&r, Some("F1"));
+    let record = s["evidence"][0].as_str().unwrap().to_owned();
+    let h = r.driver(
+        Some(&f),
+        "    from shop import providers\n    _state[\"providers\"] = providers",
+        "    _state[\"providers\"].make(i, False)\n    _state[\"providers\"].PROVIDER._items.clear()",
+    );
+    r.ok(&["harness", "run", &h, "--mode", "fresh"]);
+    let a = r.ok(&["alloc-test", &h, "--finding", &f]);
+    assert_eq!(a["favors"], "inconclusive", "{a}");
+    let basis = a["basis"].as_str().unwrap();
+    assert!(
+        basis.starts_with("the line ran ")
+            && basis.contains(&format!(
+                "static:shop.providers.PROVIDER keeps {SITE} according to the retention record {record}"
+            )),
+        "{basis}"
+    );
+    assert!(
+        a["next"][0].as_str().unwrap().starts_with(&format!(
+            "dla alloc-test H1 --finding {f}   (the capture that shows the holder was made there)"
+        )),
+        "{}",
+        a["next"]
+    );
+    let o = dla(
+        &r.project,
+        &[
+            "ledger",
+            "refute",
+            &f,
+            "--evidence",
+            a["evidence"].as_str().unwrap(),
+        ],
+    );
+    assert_ne!(o.code, 0, "{}", o.text);
 }

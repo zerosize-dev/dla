@@ -2435,3 +2435,27 @@ flat test-loop readings get only 9 second looks.
   their build output; (d) a residual above threshold cannot be left unresolved while the
   harness that shows it has no summarized capture (the summarize commands the capture prints).
   The dev project for Node so far was plain JavaScript, which hid all of this.
+
+## 14:15 UTC 2026-11-24 (approx.): H2 reported; three existing tests fail; follow-up H3 sent
+
+- H2 built: `PlateauVerdict::NeverGrew` (word never-grew) in crates/dla-cli/src/alloc/judge.rs,
+  `grew()` (counter: net rise over the main window above zero; gauge: Theil-Sen lower bound
+  above zero and fitted rise above the column's smallest rise and 1% of its level); combine
+  returns inconclusive for a never-grown deciding column of a bound finding by every route;
+  `LineRan::HolderRecord` (line ran and kept nothing is inconclusive when a retention record
+  names a project holder of the line); 4 new holder_first tests; stages.md sentence; VERIFY row.
+- Three existing tests fail, left failing as told:
+  1. alloc_test_jvm::a_loop_that_warms_up_is_judged_a_plateau_on_the_non_heap_bytes_and_the_root_is_refuted
+     (alloc-test on H1 = the harness that measured the growth; non-heap flat after warm-up).
+  2. trigger::a_registry_grown_only_by_its_own_writer_is_not_confirmed_and_the_non_leak_way_closes_it
+     (flat on an ENTRY-PATH harness of the finding: the tool's own non-leak way for registries).
+  3. trigger::the_trigger_is_reproduced_for_one_holder_and_not_found_for_the_other (broken by
+     brief H: the capture item now leads blocking and missing).
+- My decision (H3, sent to the same builder): never-grew applies only on a harness that is
+  neither the harness of the growth nor an entry-path harness declared for the finding. On the
+  growth's own harness a flat rerun is fair evidence (a leak grows with every unit), and the
+  entry-path harness keeps its meaning. Tests 1 and 2 must pass unchanged; test 3 is adapted
+  like the queue test (assert the new lead, find the trigger item by kind, keep every
+  assertion). Known remaining hole, recorded on purpose: an entry-path harness that fails to
+  reach a real leak can still close it the non-leak way.
+- Node brief ready: wip-notes/node-ts-brief.md (start after H3; scratch u114).

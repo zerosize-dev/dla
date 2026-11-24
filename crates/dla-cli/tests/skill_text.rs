@@ -683,6 +683,16 @@ fn the_references_teach_a_measured_holder_first_and_that_a_line_the_unit_does_no
         assert!(stages.contains(want), "stages.md lacks: {want}");
     }
     assert!(
+        stages.contains("A series that never showed the growth is not evidence against it: when the deciding column of a finding is flat from its first measured point of the alloc-test's series, the result is `inconclusive`"),
+        "stages.md lacks the sentence on a series that never showed the growth"
+    );
+    assert!(
+        stages.contains(
+            "Only a column that grew in the main window and then stopped is a plateau (`N-WARM`)."
+        ),
+        "stages.md lacks the plateau sentence"
+    );
+    assert!(
         report.contains("| `measured-holder-first` |"),
         "evidence-and-report.md does not list the measured-holder-first refusal"
     );
@@ -695,6 +705,7 @@ fn the_references_teach_a_measured_holder_first_and_that_a_line_the_unit_does_no
     for want in [
         "| A holder of the project that a capture named had no consequence | corrected |",
         "| A line the unit did not execute was read as a line that ran and kept nothing | corrected |",
+        "| A series that never showed the growth was read as a plateau | corrected |",
     ] {
         assert!(verify.contains(want), "VERIFY.md lacks the row: {want}");
     }
