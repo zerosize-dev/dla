@@ -2177,3 +2177,27 @@ flat test-loop readings get only 9 second looks.
   text; applied to the three blind keeps. Use it for every keep from now on; never copy a raw
   transcript to the progress branch.
 - blind-otel-python still going (started 09:25); its waiter bsqrpquxa ends about 11:22.
+
+## 11:05 UTC 2026-11-24: CI green on attempt 3, release started; JVM rerun confirmed a leak
+
+- CI on main for b896d8c: run 45363801429 green on attempt 3 (attempt 1: lock test; attempt 2:
+  os.rss ratio test; both macOS, both flakes: tasks 103 and 50).
+- release.yml started for main (publish true) at about 11:01; waiter br36sejg0 prints the release
+  run and the assets of v0.9.0-preview.7.
+- blind-logstash-2: exit 0, 1300 s, 84 turns, cost 1.38. COMPLETE, 21 min of 3 h, 24 harness
+  runs, 46 series, 1 capture; queue 60 of 60 targeted: grew 2, executed 54, not reached 4;
+  844 of 1137 entry points exercised (the JUnit loop works with the fixed Maven home).
+  CONFIRMED 2, both reproduced through the public API in H7:
+  F57 static map ObjectFieldsAppendingMarker.serializerHelper
+  (src/main/java/net/logstash/logback/marker/ObjectFieldsAppendingMarker.java:92, writer :149),
+  keyed by ObjectMapper, never removed, 43 count/iteration with a new encoder per unit; the
+  verifier agrees on site, holder and mechanism and disputes only the label (L-STALE vs
+  L-COLLECT). F58 the cache inside the same helper (line 154), the verifier attributes it to
+  F57. Kept: /root/dla-real/blind-logstash-2-keep (transcript redacted). Run directory deleted.
+  Score entry (key NOT read yet): one real-looking leak reported; whether it is the documented
+  one is decided by the key.
+- blind-otel-python still going at 11:03 (23 harnesses, 59 series, 345 MB). Its waiter bsqrpquxa
+  ends about 11:22: restart it. After it ends: build Jetty's Maven home (heavy; nothing else
+  may measure then), run Jetty alone, then open answer-key.md and score.
+- 11:05 UTC: v0.9.0-preview.7 PUBLISHED (release run 45380080893 on b896d8c; prerelease; five
+  platform archives, each with .sha256, and SHA256SUMS).
