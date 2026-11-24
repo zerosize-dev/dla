@@ -1055,8 +1055,16 @@ fn used_time(hdir: &Path) -> std::time::SystemTime {
         .unwrap_or(std::time::UNIX_EPOCH)
 }
 
+/// How often [`thin_harness`] asks again for a lock that reads as held, and the pause between
+/// two tries. A process that another thread is starting holds a copy of every open file until
+/// it execs, so a lock released a moment ago can read as held for an instant; a user of the copy
+/// holds it for a whole build or run, which no short wait outlasts.
+const BUSY_RETRIES: u32 = 20;
+const BUSY_PAUSE: std::time::Duration = std::time::Duration::from_millis(10);
+
 /// Thins the `work/` of the harness in `hdir` against `project`, unless it is thinned already
-/// or another process holds its lock (the exclusive lock is only tried, never waited for).
+/// or another process holds its lock (the exclusive lock is tried for a moment, see
+/// [`BUSY_RETRIES`], never waited for).
 pub fn thin_harness(hdir: &Path, project: &Path) -> std::io::Result<Thinned> {
     let list = hdir.join(THIN_LIST);
     if list.exists() {
@@ -1069,10 +1077,17 @@ pub fn thin_harness(hdir: &Path, project: &Path) -> std::io::Result<Thinned> {
         // The lock file is new: it must not make the harness look used just now.
         let _ = f.set_modified(used);
     }
-    match f.try_lock() {
-        Ok(()) => {}
-        Err(fs::TryLockError::WouldBlock) => return Ok(Thinned::Busy),
-        Err(fs::TryLockError::Error(e)) => return Err(e),
+    let mut asked = 0;
+    loop {
+        match f.try_lock() {
+            Ok(()) => break,
+            Err(fs::TryLockError::WouldBlock) if asked < BUSY_RETRIES => {
+                asked += 1;
+                std::thread::sleep(BUSY_PAUSE);
+            }
+            Err(fs::TryLockError::WouldBlock) => return Ok(Thinned::Busy),
+            Err(fs::TryLockError::Error(e)) => return Err(e),
+        }
     }
     if list.exists() {
         return Ok(Thinned::Already);
@@ -1864,6 +1879,24 @@ mod tests {
             thin_harness(&t.hdir, &t.project).unwrap(),
             Thinned::Done(_)
         ));
+    }
+
+    #[test]
+    fn a_lock_that_is_held_only_for_a_moment_is_waited_for() {
+        // What a process another thread is starting does to a lock that was just released:
+        // it reads as held for an instant. The thinner must not answer "busy" for that.
+        let t = Thin::new();
+        let held = open_lock(&t.hdir).unwrap();
+        held.lock_shared().unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            drop(held);
+        });
+        assert!(matches!(
+            thin_harness(&t.hdir, &t.project).unwrap(),
+            Thinned::Done(_)
+        ));
+        release.join().unwrap();
     }
 
     #[test]
