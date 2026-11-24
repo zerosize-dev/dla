@@ -2542,3 +2542,13 @@ flat test-loop readings get only 9 second looks.
 - Builder R (Sonnet, background) started in the same tree: brief
   wip-notes/rust-features-brief.md, scratch u116 (task 109).
 - Builder N (Node/TypeScript) still waits (brief wip-notes/node-ts-brief.md, task 108).
+- 15:35 UTC: CI run 45412730283 on a37fcfb ended in failure, two jobs: clippy and test
+  (ubuntu-latest) = the JVM warm-up test (see above); dynamic acceptance = 61/64 pass, 1 xfail,
+  2 failures: node-report-heap and node-template-cache "no rule-out on a non-leak fixture"
+  (H1 is the project's own load script, the candidate's probe is flat from the start, the
+  alloc-test read never-grew = inconclusive). Under H4/H5 an own-workload harness that the
+  finding cites is exempt, so both should pass again: check with
+  `dla-bench dynamic --dla-bin <frozen> --only node-report-heap,node-template-cache` after H5,
+  then the whole set on CI. Logs: u115/ci-snap-23/.
+- Plan: wait for H5 and builder R, then verify the combined tree once (build, freeze, the two
+  Node fixtures, replays, Pillow walk, fastrace check, suite, static), snapshot with CI, commit.

@@ -30,6 +30,7 @@ pub mod duplicate;
 pub mod error;
 pub mod evidence;
 pub mod explain;
+pub mod features;
 pub mod finding;
 pub mod fsutil;
 pub mod gate;

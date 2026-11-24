@@ -34,8 +34,8 @@ use regex::Regex;
 use serde_json::{Value, json};
 
 use super::{
-    AGENT, COV, DRIVER, LOGS, OUT, PROBES, WORK, commands, harness_dir, probes, scratch, targets,
-    templates,
+    AGENT, COV, DRIVER, LOGS, OUT, PROBES, WORK, commands, feature_sites, harness_dir, probes,
+    scratch, targets, templates,
 };
 
 /// Refusal code: a build tool or compiler is not installed.
@@ -2747,6 +2747,20 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
     };
     if rt == Runtime::Rust {
         targets::add_feature_gates(&ctx.project, &mut described, &opts.features);
+        // What the crate's features gate inside functions and on items, beside the modules:
+        // recorded for the queue, the trend and close-rest, which say it first when the
+        // target's code did not run.
+        let gaps = feature_sites::add_feature_gaps(
+            &ctx.project,
+            &mut described,
+            &opts.features,
+            opts.no_default_features,
+            manifest.is_entry_path(),
+        );
+        if !gaps.gaps.is_empty() {
+            gaps.save(&hdir)
+                .map_err(|e| io_refusal(&hdir.join(dla_core::features::FILE), e))?;
+        }
     }
     if manifest.is_entry_path() {
         targets::add_entry_facts(&ctx.project, rt, &mut described);
@@ -2902,6 +2916,11 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
                     })
                     .collect();
                 m.insert("feature_note".into(), json!(notes.join("; ")));
+            }
+            let attention = targets::feature_attention(&described);
+            if !attention.is_empty() {
+                // `dla` prints it as the first key of the output, and the output bound keeps it.
+                m.insert("_attention".into(), json!(attention));
             }
             m.insert(
                 "targets_full".into(),
