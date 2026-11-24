@@ -1988,3 +1988,19 @@ flat test-loop readings get only 9 second looks.
 - When CI 1397662 is green: commit with wip-notes/commit-message-22.txt
   (`commit-snapshot-tree.sh 1397662aa4f0695e63854b4037456c6f16818211 ...`), push main and dev,
   then version commit 0.9.0-preview.7 after pillow-11 is read (previews are pre-authorized).
+
+## 07:47 UTC 2026-11-24
+
+- COMMITTED: main = cb933c3 "A run does not keep one full copy of the project per harness" (tree
+  of snapshot 1397662; CI run 45339326235 on the snapshot all green). Pushed to main and dev. CI
+  on main: waiter task bdsckos6r, logs u105/ci-main-22. This commit also carries the tolerance fix
+  of the first-point test that failed on main for 49bccfe.
+- pillow-11 at 48 min: 35 harnesses, 31 thinned, run dir 417 MB (the earlier runs were at several
+  GB by then). Waiter task boah3w3e4 (2 h limit; the run may take 2.5 h: restart the waiter if it
+  times out).
+- After pillow-11 is read and CI on main is green: version commit 0.9.0-preview.7 (sed in
+  .claude-plugin/marketplace.json, .claude-plugin/plugin.json, Cargo.toml, Cargo.lock), push,
+  CI, release.yml (ref main, publish true), verify the tag.
+- Open: task 99 (jvm-pool-warmup flake), Jetty 12.0.31 not run, the two gc.freeze tests under the
+  uv-managed 3.12, `dla run status` lists a killed harness as running, a holder finding added at a
+  line its holder does not keep has no column of its own (warning only).
