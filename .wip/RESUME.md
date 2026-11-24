@@ -2569,3 +2569,32 @@ flat test-loop readings get only 9 second looks.
   bd9vj6wjf, json u115/dyn-all.json, logs u115/dyn-logs. Baseline: 63 pass + 1 xfail.
 - Waiting for builder R. Then: build, freeze final binaries, replays, Pillow walk, fastrace
   check, suite, static, snapshot with CI, commit message (add the Rust part), main.
+
+## 16:30 UTC 2026-11-24 (approx.): builder R reported; checked on the real Rust project; R2 sent
+
+- R built: crates/dla-core/src/features.rs and crates/dla-workload/src/harness/feature_sites.rs
+  (new); gaps saved in harness/H<n>/features.json (no schema change); target block line,
+  `_attention` first in the `harness gen` output, the not_executed remedy of `dla trend`, the
+  target-pending refusal of `ledger resolve`, `ledger close-rest`; queue rule in Index::standing
+  (crates/dla-core/src/queue.rs): a Rust target is not settled as not reached while a feature
+  with gated sites was on in none of the harnesses that declared it; new Queue bucket. Two
+  rust_driver tests, unit tests, texts, VERIFY row. No existing test changed.
+  R's caveat: function coverage reads a function that ran with only a gated statement in it as
+  executed, so no remedy fires for that shape.
+- Combined tree (G + H..H5 + R): fmt clean, builds, schema ok, 39 files +2623/-68, five new
+  files. Frozen: u112/dla-F1 (sha b9ca35d128f1), u112/dla-bench-F1.
+- On the real project (u117/fastrace, binary dla-F1): at the workspace root
+  `harness gen --lang rust --driver --next` is refused driver-unavailable ("this crate has only
+  binaries": wrong text for a workspace root, an older defect; the blind run's model found
+  `--workload rust:test:fastrace/Cargo.toml` by trial). With that workload: `_attention` leads
+  with "feature enable (54 gated sites in the crate ...) off by default" for each target, the
+  block lines carry the counts (10 in local_collector.rs, 2 in global_collector.rs), and the
+  printed command `... --features enable --probe F34 ... --probe F41` FAILS as printed because
+  it lacks the --workload; with the workload added it works and `_attention` is null.
+- R2 SENT to builder R: the regenerate command repeats --workload (and the other flags that
+  choose the crate and the build); the driver-unavailable refusal at a workspace root names the
+  member crates with a library target; tests; texts.
+- Still to do on the Rust side after R2: on u117/fastrace generate with the printed command,
+  fill a unit that makes and drops root spans, run: the target at spsc.rs must be executed
+  (heavy build: after the dynamic run).
+- Full dynamic run (task bd9vj6wjf) with dla-H5try still going.
