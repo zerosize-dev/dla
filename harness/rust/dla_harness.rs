@@ -9,8 +9,8 @@
 //! `DLA_ROUNDS` measured rounds of `DLA_STEP` units each (defaults are baked in at generation).
 //!
 //! Rust version: the driver builds with Rust 1.70 and newer (the newest thing in it is
-//! `Result::is_ok_and`). An `extern` block is written `unsafe extern` only for a crate of edition
-//! 2024 or later, which needs it and which older compilers cannot be pinned for.
+//! `Result::is_ok_and`). The `extern` block below is marked unsafe only for a crate of edition
+//! 2024 or later, which needs that; a compiler before Rust 1.82 rejects the marker.
 //!
 //! Build and run from the scratch project root (the driver is `src/bin/dla_harness.rs`):
 //!

@@ -2646,3 +2646,23 @@ flat test-loop readings get only 9 second looks.
   the dynamic acceptance one at a time.
 - CI on f0a84e5 (the tree before R3/R4) is running: waiter bg2n0fd6p. Plan unchanged: that tree
   to main if CI and my checks are green; R3 + R4 as a second commit after their own CI.
+
+## 16:20 UTC 2026-11-24 (clock checked 16:19): hand checks pass on dla-F3; CI and R4 pending
+
+- Local full dynamic run stopped by me after 27 minutes and 13 of 64 fixtures (kill of PID
+  28109, then the orphan harness process 15513; /tmp/dla-bench-dynamic-28113 deleted): too slow
+  beside the builders, and CI runs the same set on the final tree.
+- Disk was at 1.8 GB: `cargo clean -p dla-cli` freed 3.1 GB (target 6.9 GB; rustup toolchains
+  stable, nightly, 1.80.0, 1.85 take 4.1 GB: not touched). 4.2 GB free now.
+- Hand checks with u112/dla-F3 (tree with H5 and R3; R4 not in it):
+  otel replay, line mode: inconclusive on the other-branch driver, refute refused, leak on H1,
+  confirmed. Holder mode: `_attention` leads the summary, measured_holder gate item, status
+  lead, `harness gen --next` refused measured-holder-first, confirmed. Pillow walk: F1 and F2
+  confirmed, own excerpts, final gate asks for no finding. Run directories of the walks deleted.
+- CI run 45431852403 on snapshot f0a84e5 in progress (waiter bg2n0fd6p).
+- Builder R working on R4 (driver compiles on the pinned toolchain).
+- When CI on f0a84e5 is green: commit that tree to main with
+  `bash wip-notes/commit-snapshot-tree.sh f0a84e5... <message file>` (update
+  commit-message-23.txt first: add the Rust feature part and the final wording of the
+  flat-series rule), push main and main:dev/wonderful-mccarthy-algc5s, CI waiter on main.
+  Then R3 + R4: local suite, snapshot with CI, second commit.

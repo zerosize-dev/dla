@@ -950,3 +950,62 @@ fn the_attention_of_many_targets_is_one_short_line_and_the_command_is_never_cut(
     assert!(again.get("_attention").is_none(), "{again}");
     assert!(again.get("regenerate").is_none(), "{again}");
 }
+
+fn have_toolchain(channel: &str) -> bool {
+    let ok = Proc::new("cargo")
+        .arg(format!("+{channel}"))
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !ok {
+        eprintln!("skipping: toolchain {channel} is not installed");
+    }
+    ok
+}
+
+/// A crate of edition 2021 that pins an old toolchain, which rejects `unsafe extern` blocks.
+fn pinned(dir: &Path) {
+    write(
+        dir,
+        "Cargo.toml",
+        "[package]\nname = \"old\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    write(
+        dir,
+        "rust-toolchain.toml",
+        "[toolchain]\nchannel = \"1.80.0\"\n",
+    );
+    write(
+        dir,
+        "src/lib.rs",
+        "use std::sync::Mutex;\n\nstatic KEPT: Mutex<Vec<String>> = Mutex::new(Vec::new());\n\npub fn keep(key: &str) {\n    KEPT.lock().unwrap().push(key.to_owned());\n}\n",
+    );
+}
+
+#[test]
+fn a_crate_that_pins_an_old_toolchain_gets_a_driver_that_builds_and_a_failure_names_the_channel() {
+    if !have_cargo() || !have_toolchain("1.80.0") {
+        return;
+    }
+    let r = Run::of(pinned);
+    r.ok(&["harness", "gen", "--lang", "rust", "--driver", "--next"]);
+    let text = fs::read_to_string(r.driver("H1")).unwrap();
+    assert!(text.contains("    extern \"C\" {"), "plain extern for 2021");
+    assert!(!text.contains("unsafe extern"));
+    r.fill("H1", "old::keep(&key.to_string());");
+    let out = r.ok(&["harness", "run", "H1", "--mode", "fresh"]);
+    assert!(out["summary"]["series"][0].is_string(), "{out}");
+
+    // A hook that does not compile: the refusal says which compiler spoke.
+    let r = Run::of(pinned);
+    r.ok(&["harness", "gen", "--lang", "rust", "--driver", "--next"]);
+    r.fill("H1", "old::keep(&key.to_string()) +;");
+    let o = r.run(&["harness", "run", "H1", "--mode", "fresh"]);
+    assert_ne!(o.code, 0, "{}", o.text);
+    assert_eq!(o.json["error"]["code"], "harness-failed", "{}", o.text);
+    let msg = o.json["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("did not build with the pinned toolchain 1.80.0 (rust-toolchain.toml)"),
+        "{msg}"
+    );
+}

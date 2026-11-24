@@ -91,6 +91,10 @@ is unverified.
 The stubs call `todo!` until replaced. The template contains `unsafe` (the allocator impl and
 `malloc_trim`) and is generated into the scratch copy only, never into the dla workspace.
 
+## Rust version
+
+The driver holds to Rust 1.70 (the newest thing in it is `Result::is_ok_and`; a let chain, an inline `const` block, `is_none_or` and `LazyLock` are left out because they need 1.79 to 1.88). 1.70 is the lowest that needs no workaround: older code would need hand-written replacements for `is_ok_and` and the `let ... else` already used (1.65). The `extern` block is written `unsafe extern` only when the crate's edition is 2024 or later (`edition.workspace = true` is resolved from the workspace root), because an older compiler (before 1.82) rejects the marker and the 2024 edition requires it. The harness is built with the toolchain the project pins; a build that fails says which channel built it. It was checked with 1.80.0, the oldest toolchain installed where it was made; 1.70 itself was not run.
+
 ## Features that gate code inside functions
 
 A library can compile to a no-op unless a cargo feature is on, with `#[cfg(feature = "x")]` inside its functions and on its items and no gated `mod`. `dla harness gen` counts those sites per feature that the `default` list of `Cargo.toml` does not turn on (directly or through another feature), per file of the crate, and writes into the target block and the `_attention` of its output the features that the driver build leaves off, with the counts and the exact regenerate command. `harness/H<n>/features.json` keeps the same for `dla trend`, the queue and `dla ledger close-rest`: a target that was not executed gets the command first, and the queue does not settle it as not reached while a feature with gated sites was on in none of the harnesses that ran for it.

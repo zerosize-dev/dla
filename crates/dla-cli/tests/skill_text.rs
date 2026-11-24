@@ -1049,6 +1049,8 @@ fn the_rust_texts_say_a_feature_gating_code_inside_functions_needs_to_be_on() {
     ] {
         assert!(rust.contains(want), "rust.md lacks: {want}");
     }
+    let want = "the driver holds to Rust 1.70 and newer, writing an `unsafe extern` block only for a crate of edition 2024 or later; a failed build names the pinned channel.";
+    assert!(rust.contains(want), "rust.md lacks: {want}");
     let readme = fs::read_to_string(root().join("harness/rust/README.md")).unwrap();
     for want in [
         "## Features that gate code inside functions",

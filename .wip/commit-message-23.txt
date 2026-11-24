@@ -1,9 +1,9 @@
-Two causes of the misses on projects the tool had never seen
+Three causes of the misses on projects the tool had never seen
 
 One frozen build was run once, unattended, on five open-source libraries
 that had never been used while the tool was built, each at a release with
 one documented leak. It found none of the five. This change removes the
-causes of two of the misses. Both were read from the kept run records and
+causes of three of the misses. Each was read from the kept run records and
 reproduced by hand before anything was changed.
 
 A Python library. Eleven minutes into the run a capture named the
@@ -33,12 +33,15 @@ of the line's blocks stayed, and the refute was accepted.
   the project keeping that line. "The function ran" is no longer read as
   "the line ran".
 - A column that never grew in a series is not a plateau. For a bound
-  finding the alloc-test of another driver in which the deciding columns
+  finding, an alloc-test on another driver in which the deciding columns
   are flat from the first measured point is inconclusive and names the
-  harness that measured the growth. The harness that measured it keeps the
-  old reading (a leak grows with every unit, so growth that does not come
-  back there was not one), and so does an entry-path harness of the
-  finding. This rule holds for every runtime.
+  harness that measured the growth. Another driver is a hand-written driver
+  that the finding cites no measurement from; its plain run record does not
+  count. The old reading stays where it is fair: on a harness whose series
+  or capture the finding cites (a leak grows with every unit, so growth
+  that does not come back there was not one), on a harness that runs the
+  project's own workload or its test loop, and on an entry-path harness of
+  the finding. This rule holds for every runtime.
 
 Replayed on that library with the changed binary: the driver on the other
 branch is inconclusive and cannot refute; after a capture the holder is the
@@ -63,12 +66,37 @@ are unexported.
 On that library the census lists 469 candidates where it listed 439, and
 the slice with its fourteen writers and its reset is among them.
 
-Not covered. The slice still ranks late in its package, because its reset
-counts as a remover. An entry-path harness that fails to reach a real leak
-can still close it as a non-leak. The line count was run on one
-interpreter version; its fallback only by forcing it. The other three
-misses have causes of their own that this change does not touch: a
-candidate whose adding line is guarded by a capacity that a run never
-reaches, a holder that needs a kind of thread no driver used, and a Node
-library written in TypeScript whose built files the harness copy leaves
-out and whose measured places are lines of the bundle.
+A Rust library. Its code is compiled only with a cargo feature that is off
+by default, gated inside functions and on items. The run built its drivers
+with the default features, the documented holder's code never ran, the
+target read "not executed" twice and the queue closed it. The tool said
+"gated behind a feature" only for a gated `mod` declaration.
+
+- For the crate of a target the tool counts, per feature that is off by
+  default, the `cfg` sites that name it, per file. The target block of a
+  Rust driver and `_attention` of `dla harness gen` name those features
+  with their counts and the command that regenerates the driver with them
+  on; the command carries the workload, `--no-default-features` and the
+  features already on, so it runs as printed in a workspace. The remedy of
+  a target whose code did not run leads with it, and the queue does not
+  settle such a target as not reached while no harness that declared it
+  had the feature on.
+- At a workspace root with no package the refusal of a driver now says so
+  and names the member crates that have a library target.
+
+On that library, with the feature on, a unit that makes and drops a root
+span runs the holder's code and live memory grows by 236 bytes per unit.
+
+Not covered. The Go slice still ranks late in its package, because its
+reset counts as a remover. An entry-path harness that fails to reach a real
+leak can still close it as a non-leak. The line count was run on one
+interpreter version; its fallback only by forcing it. When the output of
+`dla harness gen` is over its bound, the `_attention` entries for a feature
+are cut and lose their command; the driver's block has it in full. The
+generated Rust driver does not build with a pinned toolchain older than
+1.82. A function that ran with only a gated statement inside reads as
+executed, so no feature remedy is given for it. The other two misses have
+causes of their own that this change does not touch: a holder that needs a
+kind of thread no driver used, and a Node library written in TypeScript
+whose built files the harness copy leaves out and whose measured places
+are lines of the bundle.
