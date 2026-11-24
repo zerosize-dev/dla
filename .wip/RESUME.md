@@ -2624,3 +2624,25 @@ flat test-loop readings get only 9 second looks.
   done after 10 minutes.
 - Still to do locally on dla-F2: otel replays, Pillow walk, the fastrace unit with the feature
   on (target at spsc.rs executed), whole suite (after the dynamic run, for CPU), own mutations.
+
+## 16:25 UTC 2026-11-24 (approx.): R3 checked on the real project; second Rust blocker; R4 sent
+
+- R3 built (one short `_attention` entry per feature; top-level key `regenerate` in KEPT_WHOLE of
+  out.rs). Frozen: u112/dla-F3 (sha 0d29006e5f11), u112/dla-bench-F3.
+- On u117/fastrace with dla-F3: `_attention` = "feature enable is off by default: 7 targets have
+  code behind it (gated sites in the crate: 54); run the command under regenerate";
+  `regenerate` = the full command with --workload; run as printed it makes H2 with nothing said
+  about features.
+- H2 filled by me (unit: Span::root("dla-unit", SpanContext::random()), one child, drop):
+  `dla harness run H2` FAILS TO BUILD with the project's pinned toolchain (rust-toolchain.toml
+  channel 1.80.0): "extern block cannot be declared unsafe" at the driver's own
+  `unsafe extern "C"` block in fn malloc_trim (needs Rust 1.82). With RUSTUP_TOOLCHAIN=stable it
+  builds and runs: trend passes native.live_bytes +236 per unit and native.peak_bytes; target
+  F41 (function send at fastrace/src/util/spsc.rs:35) EXECUTED, F21 executed, four others not
+  executed. So with the feature on the documented holder's code runs and memory grows.
+- R4 SENT to builder R: a stated minimum Rust version for the generated code (not above 1.74),
+  `unsafe extern` only for edition 2024, the templates checked against the minimum with the
+  installed 1.80.0, harness-failed names the pinned channel, tests, texts, the Rust fixtures of
+  the dynamic acceptance one at a time.
+- CI on f0a84e5 (the tree before R3/R4) is running: waiter bg2n0fd6p. Plan unchanged: that tree
+  to main if CI and my checks are green; R3 + R4 as a second commit after their own CI.

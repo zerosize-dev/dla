@@ -362,7 +362,7 @@ pub fn feature_attention(targets: &[Target]) -> Vec<String> {
         .into_iter()
         .map(|(f, (n, g))| {
             format!(
-                "feature {f} is {}: {n} target{} ha{} code behind it ({} gated sites in the crate); run the command under regenerate",
+                "feature {f} is {}: {n} target{} ha{} code behind it (gated sites in the crate: {}); run the command under regenerate",
                 if g.default_on {
                     "off in this build"
                 } else {
@@ -1424,7 +1424,7 @@ mod open;
         let att = feature_attention(&list);
         assert_eq!(att.len(), 1, "{att:?}");
         assert!(
-            att[0].starts_with("F8 (src/span.rs:1): feature enable"),
+            att[0].starts_with("feature enable is off by default: 1 target has code behind it (gated sites in the crate: 1)"),
             "{att:?}"
         );
         assert!(list[0].json()["feature_sites"].as_str().is_some());

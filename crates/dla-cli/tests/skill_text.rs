@@ -1044,7 +1044,7 @@ fn the_rust_texts_say_a_feature_gating_code_inside_functions_needs_to_be_on() {
         fs::read_to_string(root().join("skills/detect-leak-anywhere/references/rust.md")).unwrap();
     for want in [
         "a crate whose type is a no-op unless its feature is on gates no `mod`, so a driver built without the feature never runs the code of the target.",
-        "which repeats the `--workload`, `--no-default-features` and features of the generating call so that it runs as printed.",
+        "which repeats the `--workload`, `--no-default-features` and features of the generating call so that it runs as printed; `dla harness gen` prints it whole under `regenerate`, and its `_attention` line (one per feature) only says that the feature is off.",
         "A target that reads not executed leads with that command, and the queue keeps it open, whatever the number of drivers that missed it, until a harness that targeted it was built with the feature.",
     ] {
         assert!(rust.contains(want), "rust.md lacks: {want}");
