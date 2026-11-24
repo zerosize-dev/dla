@@ -3031,3 +3031,27 @@ unattended run at a time and no builder beside it.
   one) plus N2's local dynamic run.
 - Then builders T, X, G2 (briefs ready), one at a time, each checked by a replay before any
   unattended run.
+
+## 21:05 UTC 2026-11-24 (clock checked): N's capture rule is defective in two ways; builder N2 continues with its repair
+
+- CI on a2b404a (N + lock fix), run 45474897893: every job green EXCEPT dynamic acceptance
+  (failure, as predicted: residual_capture). The lock test passed on all three systems.
+- N2 interim report (20:59): the benchmark policy now takes the capture and its summaries for a
+  `residual_capture` item and for a `capture-not-summarized` refusal, once per harness
+  (bench/runner/src/dynamic/policy.rs `take_capture`, ops.rs `run_summarize`; two tests, one
+  mutation). It stopped its whole dynamic run after 8 Go fixtures: 4 pass, 4 FAIL
+  (go-subscription-workers, go-gc-tuned-batch, go-ticker-legacy, go-ticker-modern), all still
+  `residual_capture` AFTER the capture.
+- CAUSE 1, confirmed by me in crates/dla-core/src/measured_holders.rs `scan_in`: a harness is
+  "summarized" only when a retention-path or alloc-stack record has its source artifact under
+  `harness/<H>/`. An allocation-stack diff writes `allocs/A<n>.json`, so it never counts: no Go
+  capture can clear the item (Go has no heap graph), JVM alloc records neither.
+- CAUSE 2: the rule fires on any row over its threshold: go-ticker-modern (a decoy) has 0.0041
+  bytes per unit against 0.0035, about 14 bytes over the series.
+- N2 CONTINUES (same agent, message sent 21:04): A. "summarized" is tied to the harness whose
+  capture files the summary read; B. a floor: a row demands a capture only when its
+  unattributed growth over the series' measured span is at least 64 KiB (rows under it stay an
+  open item as before); C. tests and texts; D. the WHOLE dynamic run to its end. DO NOT rebuild
+  dla-cli or run heavy jobs until it reports.
+- Lesson for briefs: a new gate rule must be checked by the whole dynamic run before it goes
+  to CI; N's brief asked only for some test files.
