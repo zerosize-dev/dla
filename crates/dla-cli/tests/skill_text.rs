@@ -646,6 +646,77 @@ fn the_references_teach_the_stack_capture_after_an_alloc_test_at_a_growing_line(
 }
 
 #[test]
+fn the_references_teach_a_measured_holder_first_and_that_a_line_the_unit_does_not_execute_proves_nothing()
+ {
+    // Line breaks do not matter: every text is read with its whitespace collapsed.
+    let read = |p: &str| {
+        fs::read_to_string(root().join(p))
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let python = read("skills/detect-leak-anywhere/references/python.md");
+    let stages = read("skills/detect-leak-anywhere/references/stages.md");
+    let report = read("skills/detect-leak-anywhere/references/evidence-and-report.md");
+    let verifier = read("agents/verifier.md");
+    let verify = read("docs/VERIFY.md");
+    for want in [
+        "A holder \"of the project\" has a module global or a class attribute of a project source file that is not test code as its root",
+        "a holder \"of the tests\" is rooted in test code (the driver module `__main__` or the generated harness module, a file under a directory named `test` or `tests`, `test_*.py`, `*_test.py`, `conftest.py`) or in a module of the test runner",
+        "A holder of the project that keeps a growing line and that no finding has the owner of is the first thing to act on",
+        "`dla harness gen --next` is refused with `measured-holder-first`",
+        "A growing line that only a holder of the tests keeps is no finding of the project",
+        "A line the unit does not execute proves nothing.",
+        "a line on a branch the unit does not take allocates nothing, so nothing stays, and that is no evidence against a leak at the line",
+        "When the function ran and the line did not, or the series has no count of the line, it says `inconclusive`",
+        "Never refute a leak with such a result.",
+    ] {
+        assert!(python.contains(want), "python.md lacks: {want}");
+    }
+    for want in [
+        "A holder of the project (a module global or a class attribute of a project source file that is not test code) that keeps a growing line and that no finding has the owner of is the first thing to act on, before the next driver and before any alloc-test",
+        "`dla harness gen --next` is refused with `measured-holder-first`",
+        "A holder of the tests (the driver, a file of test code, the test runner) is no finding",
+        "A line the unit does not execute proves nothing (a branch it does not take allocates nothing): an alloc-test that says `inconclusive` because the line did not run is not evidence against the leak.",
+    ] {
+        assert!(stages.contains(want), "stages.md lacks: {want}");
+    }
+    assert!(
+        stages.contains("A series of another driver that never showed the growth is not evidence against it: when the deciding column of a finding is flat from its first measured point of the alloc-test's series, the result is `inconclusive`")
+            && stages.contains("The harness the finding was raised on and an entry-path harness of the finding are the exceptions: a harness the finding cites evidence from")
+            && stages.contains("the run record of a hand-written hook driver does not count")
+            && stages.contains("A harness that only declares the finding a target or has a probe for it, and that the finding cites nothing from, is another driver."),
+        "stages.md lacks the sentence on a series that never showed the growth"
+    );
+    assert!(
+        stages.contains(
+            "Only a column that grew in the main window and then stopped is a plateau (`N-WARM`)."
+        ),
+        "stages.md lacks the plateau sentence"
+    );
+    assert!(
+        report.contains("| `measured-holder-first` |"),
+        "evidence-and-report.md does not list the measured-holder-first refusal"
+    );
+    assert!(
+        verifier.contains(
+            "A `favors: inconclusive` alloc-test whose text says the line did not run (\"the function of ... ran but the line itself did not\", or that the series has no count of the line) is not evidence against the leak: the unit never executed the line."
+        ),
+        "verifier.md lacks the sentence on an alloc-test that says the line did not run"
+    );
+    for want in [
+        "| A holder of the project that a capture named had no consequence | corrected |",
+        "| A line the unit did not execute was read as a line that ran and kept nothing | corrected |",
+        "| A series that never showed the growth was read as a plateau | corrected |",
+    ] {
+        assert!(verify.contains(want), "VERIFY.md lacks the row: {want}");
+    }
+    // The skill itself is not touched by these rules: it stays short.
+    assert!(!skill().contains("measured-holder-first"));
+}
+
+#[test]
 fn the_references_teach_the_pytest_loop_as_the_first_pass_of_a_python_queue() {
     // Line breaks do not matter: every text is read with its whitespace collapsed.
     let read = |p: &str| {
@@ -964,5 +1035,34 @@ fn the_texts_say_older_harness_copies_are_thinned_and_come_back_on_use() {
     assert!(
         verify.contains("| A run kept one full copy of the project per harness | corrected |"),
         "VERIFY.md has no row for the thinned harness copies"
+    );
+}
+
+#[test]
+fn the_rust_texts_say_a_feature_gating_code_inside_functions_needs_to_be_on() {
+    let rust =
+        fs::read_to_string(root().join("skills/detect-leak-anywhere/references/rust.md")).unwrap();
+    for want in [
+        "a crate whose type is a no-op unless its feature is on gates no `mod`, so a driver built without the feature never runs the code of the target.",
+        "which repeats the `--workload`, `--no-default-features` and features of the generating call so that it runs as printed.",
+        "A target that reads not executed leads with that command, and the queue keeps it open, whatever the number of drivers that missed it, until a harness that targeted it was built with the feature.",
+    ] {
+        assert!(rust.contains(want), "rust.md lacks: {want}");
+    }
+    let readme = fs::read_to_string(root().join("harness/rust/README.md")).unwrap();
+    for want in [
+        "## Features that gate code inside functions",
+        "`harness/H<n>/features.json` keeps the same for `dla trend`, the queue and `dla ledger close-rest`",
+    ] {
+        assert!(readme.contains(want), "README.md lacks: {want}");
+    }
+    assert!(
+        !skill().contains("features.json"),
+        "SKILL.md stays as it is: the Rust reference carries the rule"
+    );
+    let verify = fs::read_to_string(root().join("docs/VERIFY.md")).unwrap();
+    assert!(
+        verify.contains("| Code behind a feature the build left off was read as code that did not run | corrected |"),
+        "VERIFY.md has no row for the feature-gated code"
     );
 }

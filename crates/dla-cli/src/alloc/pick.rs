@@ -94,6 +94,8 @@ pub struct AbsentSite {
     pub column: String,
     /// The line it counts (`file:line`).
     pub site: String,
+    /// The series whose trend showed the column grow (`S3`): the growth was measured there.
+    pub series: String,
 }
 
 /// The newest trend report of a series of harness `harness` (a harness series first, then
@@ -304,6 +306,7 @@ fn vanished_site_column(
                 Some(AbsentSite {
                     column: c.name.clone(),
                     site: dla_core::grown::column_site(c)?.to_owned(),
+                    series: t.series.clone(),
                 })
             })
     })
@@ -714,6 +717,8 @@ mod tests {
         let gone = p.absent_site.expect("the missing column is named");
         assert_eq!(gone.column, "py.blocks@shop/store.py:5");
         assert_eq!(gone.site, "shop/store.py:5");
+        // The series whose trend showed it grow is the one the next step names.
+        assert_eq!(gone.series, "S1");
         // With no trend of any harness that counted it, the whole-process column is the fallback
         // as before.
         let p = pick_in(&s, &ledger, Some(&f), &[], Some(&t_here), &[&t_here], "H2").unwrap();

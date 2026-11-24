@@ -499,6 +499,20 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
     if let Some(hint) = holders_hint(ctx, &main.series, &next) {
         out.insert("holders_hint".into(), json!(hint));
     }
+    // Growing lines that only the test code holds are no finding: said once, in one line.
+    {
+        let held = dla_core::measured_holders::scan_in(&ledger, Some(&ctx.run_dir)).tests_only;
+        let n = cols
+            .iter()
+            .filter(|c| {
+                dla_core::grown::is_alloc_site_column(&c.name) && dla_core::gate::non_flat(c)
+            })
+            .filter(|c| dla_core::grown::column_site(c).is_some_and(|s| held.contains(s)))
+            .count();
+        if let Some(note) = dla_core::measured_holders::Scan::note_for(n) {
+            out.insert("test_code".into(), json!(note));
+        }
+    }
     out.insert("next".into(), json!(next));
     if let Some(line) = dla_core::series::choices_line(&main.series) {
         out.insert("choices".into(), json!(line));

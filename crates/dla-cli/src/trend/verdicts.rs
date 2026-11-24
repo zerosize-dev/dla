@@ -58,6 +58,7 @@ pub fn compute(inp: &Inputs<'_>) -> Vec<TargetVerdict> {
     }
     let chosen = chosen_tests(inp.run_dir, &m);
     let dropped = dropped_classes(inp.series);
+    let features = dla_core::features::HarnessFeatures::load(inp.run_dir, h);
     ids.into_iter()
         .filter(|(f, _)| inp.ledger.finding(f).is_some())
         .map(|(f, declared)| {
@@ -86,6 +87,20 @@ pub fn compute(inp: &Inputs<'_>) -> Vec<TargetVerdict> {
                 v.detail = format!("series too short: {n} points, {need} needed");
             }
             v.declared = declared;
+            // Rust: a feature of the crate with gated sites that the harness was built without
+            // is the first thing a target that did not run is told: its code cannot run
+            // in that build.
+            let gaps = features.as_ref().map_or(&[][..], |x| x.gaps_of(&f));
+            if v.verdict == Verdict::NotExecuted
+                && !gaps.is_empty()
+                && let Some(x) = &features
+            {
+                v.detail = format!(
+                    "{}. Then: {}",
+                    dla_core::features::lead(gaps, &x.command),
+                    v.detail
+                );
+            }
             v
         })
         .collect()

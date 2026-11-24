@@ -143,6 +143,12 @@ fn check(ctx: &Ctx, a: &CheckArgs) -> Res<GateOut> {
     if let Some(w) = worker {
         out["worker"] = json!(w);
     }
+    // Growing lines that only the test code holds are no finding: said once, in one line.
+    if worker.is_none()
+        && let Some(note) = view.measured_holders().tests_note()
+    {
+        out["test_code"] = json!(note);
+    }
     // The first passing check at `sweep` or a later stage sizes an `auto` budget from the
     // view this check saw, and in the run's own gate that is final. In a dispatched run only
     // the workers size it: a worker's first command after its sweep and census (this check,

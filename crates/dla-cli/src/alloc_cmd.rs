@@ -142,6 +142,9 @@ struct ColumnResult {
     note: Option<String>,
     /// Points of the extra window that would let a held-back plateau stand.
     points_needed: Option<u32>,
+    /// A deciding column that did not grow in the main window of this series (see
+    /// [`judge::grew`]), whether or not that is held against the verdict.
+    flat: bool,
 }
 
 impl ColumnResult {
@@ -229,6 +232,7 @@ fn test_column(
     series: &SeriesFile,
     name: &str,
     voting: bool,
+    bound: bool,
     iterations: usize,
     event: Option<&PurgeEvent>,
     limitations: &mut Vec<String>,
@@ -254,7 +258,19 @@ fn test_column(
     } else {
         0.0
     };
-    let plateau = judge::plateau(main, extra, counter, reference, min_rise);
+    let mut plateau = judge::plateau(main, extra, counter, reference, min_rise);
+    // A deciding column that did not grow in the main window of this series did not stop
+    // growing: for a finding the series is judged on (`bound`, see `Exemption` for the two
+    // cases it is not), it does not reproduce the growth, whatever its extra window says.
+    let flat = voting
+        && matches!(
+            plateau.verdict,
+            PlateauVerdict::Plateau | PlateauVerdict::Inconclusive
+        )
+        && !judge::grew(main, counter, reference, min_rise);
+    if bound && flat {
+        plateau.verdict = PlateauVerdict::NeverGrew;
+    }
     let purge = event.map(|e| {
         if counter {
             return judge::purge(&e.kind, None, None, None, min_rise);
@@ -323,6 +339,7 @@ fn test_column(
         supports,
         note,
         points_needed: rises.and_then(|r| r.points_needed),
+        flat,
     })
 }
 
@@ -771,7 +788,8 @@ fn class_count(results: &[ColumnResult]) -> ClassCount {
             ))
         }
         (PlateauVerdict::Inconclusive, Some(_)) => ClassCount::Flat,
-        (PlateauVerdict::Inconclusive, None) | (PlateauVerdict::NotRun, _) => ClassCount::Unknown,
+        (PlateauVerdict::Inconclusive, None)
+        | (PlateauVerdict::NotRun | PlateauVerdict::NeverGrew, _) => ClassCount::Unknown,
     }
 }
 
@@ -1141,13 +1159,35 @@ pub(crate) fn harness_not_about(
     )
 }
 
+/// How the run reads the line whose allocation-site count column is missing from the series.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LineRan {
+    /// The line's own execution count rose over the measured points.
+    Line,
+    /// The function of the line ran and the count of the line did not rise: the unit takes
+    /// another branch.
+    FunctionOnly,
+    /// The series has no count of the line, and the function of it ran.
+    NoCountFunctionRan,
+    /// The series has no count of the line, and nothing says that the function ran.
+    NoCount,
+    /// The line did not run and neither did its function (or coverage cannot tell).
+    NotReached,
+    /// The line ran and kept nothing, but a retention record of the run shows a holder of the
+    /// project keeping it: this unit does not answer that record. Carries the harness of the
+    /// capture when its path says.
+    HolderRecord(Option<String>),
+}
+
 /// What the run says of a finding whose allocation-site count column (`gone`) grew in a trend of
-/// the run and is not in the new series: the verdict, the basis and the limitation that carries
-/// the reading. The agent writes only the sites that grew, so the absence means that none of the
-/// blocks of the line stayed, or that the line did not run. The coverage of this run (its
-/// `executed.json`, read as `dla trend` reads it) tells which: a function of the line that ran
-/// (`executed`, `constant`, `grew`, `changed`) makes it a measurement, non-leak; one that did not
-/// run, was not loaded, or that coverage cannot tell, leaves it inconclusive.
+/// the run and is not in the new series: the verdict, the basis, the limitation that carries the
+/// reading and how far the unit got. The agent writes only the sites that grew, so the absence
+/// means that none of the blocks of the line stayed, or that the line did not run. The agent's
+/// count of the executions of the line itself (`harness/<H>/lines-<S>.json`) tells which: a count
+/// that rose makes it a measurement, non-leak. The function of the line having run is not enough:
+/// a line on a branch the unit does not take allocates nothing, so nothing stays. A function that
+/// ran with a line count that did not rise, and a series with no line count at all (an old agent,
+/// another runtime, a point that lost its sections), leave it inconclusive.
 #[allow(clippy::too_many_arguments)]
 fn absent_site_reading(
     run_dir: &Path,
@@ -1158,7 +1198,7 @@ fn absent_site_reading(
     trend: &TrendReport,
     root: &FindingId,
     gone: &pick::AbsentSite,
-) -> (Favors, String, String) {
+) -> (Favors, String, String, LineRan) {
     use dla_core::trend::Verdict;
     let executed = HarnessManifest::dir_in(run_dir, &manifest.id)
         .join(dla_workload::harness::cover::EXECUTED_FILE);
@@ -1180,18 +1220,72 @@ fn absent_site_reading(
             verdict = by_coverage;
         }
     }
+    let function_ran = matches!(
+        verdict.verdict,
+        Verdict::Executed | Verdict::Constant | Verdict::Grew | Verdict::Changed
+    );
     let (col, site, h) = (&gone.column, &gone.site, &manifest.id);
-    match verdict.verdict {
-        Verdict::Executed | Verdict::Constant | Verdict::Grew | Verdict::Changed => (
-            Favors::NonLeak,
+    let span = dla_core::harness::LineRuns::load(run_dir, h, &series.id)
+        .and_then(|r| r.span(site, series.warmup as usize));
+    // A retention record of the run that shows a holder of the project keeping the line, or a
+    // holder the finding's owner names, outweighs a unit in which the blocks do not stay.
+    let scan = dla_core::measured_holders::scan_in(ledger, Some(run_dir));
+    let finding = ledger.finding(root);
+    let holder = scan.project.iter().find(|p| {
+        p.lines.iter().any(|l| l == site)
+            || finding.is_some_and(|f| dla_core::measured_holders::finding_covers(f, &p.owner))
+    });
+    match span {
+        Some((first, last)) if last > first && holder.is_some() => {
+            let h = holder.expect("checked");
+            let n = (last - first) as u64;
+            (
+                Favors::Inconclusive,
+                format!(
+                    "the line ran {n} times in this series and none of its blocks stayed, but {} keeps {site} according to the retention record {} (a project holder): a unit in which the blocks do not stay does not answer that record",
+                    h.key, h.evidence
+                ),
+                format!(
+                    "{col} is not in this series and the line {site} ran {n} times without keeping its blocks; the retention record {} shows the holder {} keeping that line, so the series measured another unit than the one that grows, and it is inconclusive",
+                    h.evidence, h.key
+                ),
+                LineRan::HolderRecord(h.harness.clone()),
+            )
+        }
+        Some((first, last)) if last > first => {
+            let n = (last - first) as u64;
+            (
+                Favors::NonLeak,
+                format!(
+                    "the line ran {n} times in this series and none of its blocks stayed ({site} of {root}; {col}, which counted growth at that line in another series, is not in this one)"
+                ),
+                format!(
+                    "{col} is not in this series, and the agent writes only the sites that grew: the agent counted {n} executions of the line {site} over the measured points, so the line ran and none of its blocks stayed"
+                ),
+                LineRan::Line,
+            )
+        }
+        Some(_) if function_ran => (
+            Favors::Inconclusive,
             format!(
-                "the function of the line {site} of {root} ran in this series and none of its blocks stayed: {col}, which counted growth at that line in another series, is not in this one ({})",
-                verdict.detail
+                "the function of {site} ran but the line itself did not (a branch the unit does not take)"
             ),
             format!(
-                "{col} is not in this series, and the agent writes only the sites that grew: the function of {site} ran ({}), so the line ran and none of its blocks stayed",
+                "{col} is not in this series and the agent's count of the executions of {site} did not rise over the measured points: the function ran ({}) but the line did not, so nothing was measured at the line",
                 verdict.detail
             ),
+            LineRan::FunctionOnly,
+        ),
+        None if function_ran => (
+            Favors::Inconclusive,
+            format!(
+                "this series has no count of how often the line {site} ran, so the absence of {col} proves nothing about it"
+            ),
+            format!(
+                "{col} is not in this series and the series has no count of the executions of {site} (an old agent, another runtime, or a point that lost its sections): the function ran ({}), which does not say that the line did, so the result is inconclusive",
+                verdict.detail
+            ),
+            LineRan::NoCountFunctionRan,
         ),
         _ => (
             Favors::Inconclusive,
@@ -1200,8 +1294,185 @@ fn absent_site_reading(
                 "{col} is not in this series and the run does not show that the function of {site} ran ({}): the unit of {h} does not reach {site}, so nothing was measured at the line",
                 verdict.detail
             ),
+            if span.is_some() {
+                LineRan::NotReached
+            } else {
+                LineRan::NoCount
+            },
         ),
     }
+}
+
+/// Why a flat series is a fair reading for a finding (see [`exemption`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Exemption {
+    /// An earlier series of this harness grew the finding: a leak grows with every unit, so growth
+    /// that does not come back there was not a per-unit leak.
+    Growth,
+    /// The finding was raised on this harness (it cites evidence a run of it produced) and no
+    /// growth showed there.
+    Raised,
+    /// An entry-path harness declared for the finding: it asks whether a caller can feed the
+    /// holder, so a flat reading there keeps its meaning.
+    EntryPath,
+}
+
+/// True when the evidence `e` was produced by a run of harness `manifest`: a `workload` record
+/// naming it (`result.harness`) when the harness runs the project's own workload (a command-mode
+/// harness with a workload, or a test loop: the test `HarnessAbout::OwnWorkload` uses; the record
+/// of a run of a hand-written hook driver does not count), a growth or unit-count record of one of
+/// its series (`result.series` whose `source.harness` is it), or a capture summary (retention or
+/// allocation stacks) read from a file under `harness/<H>/` (the artifact path of its source).
+fn produced_by(
+    run_dir: &Path,
+    e: &dla_core::evidence::EvidenceRecord,
+    manifest: &HarnessManifest,
+) -> bool {
+    use dla_core::evidence::{EvidenceKind, Source};
+    let harness = manifest.id.as_str();
+    match e.kind {
+        EvidenceKind::Workload => {
+            (manifest.is_test_loop()
+                || (manifest.mode == dla_core::harness::HarnessMode::Command
+                    && manifest.workload.is_some()))
+                && dla_core::harness::harness_id_of(&e.result) == Some(harness)
+        }
+        EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries => e
+            .result
+            .get("series")
+            .and_then(Value::as_str)
+            .and_then(|s| SeriesFile::load(run_dir, s).ok())
+            .and_then(|s| s.source.harness)
+            .is_some_and(|h| h == harness),
+        EvidenceKind::RetentionPath | EvidenceKind::AllocStack => match &e.source {
+            Source::Artifact { path, .. } => {
+                dla_core::measured_holders::harness_of_path(path) == Some(harness)
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// The two cases in which an alloc-test series that did not show the growth of the finding is
+/// still a fair reading; anywhere else the series belongs to "another driver" and says nothing
+/// against a growth another series measured.
+///
+/// * An entry-path harness declared for the finding: the purpose `entry-path` and the root (or
+///   the finding itself) among its targets.
+/// * The harness the finding was raised on: some evidence that the finding or a finding of its
+///   family cites (`supports` or `contradicts`) was produced by a run of this harness
+///   ([`produced_by`]; a discriminator is not counted: it is the result of a test, not what the
+///   finding was raised on), or an earlier trend of the run, other than the series under test,
+///   belongs to a series of this harness and has a column tied to the root
+///   ([`dla_core::grown::column_tied_to`]) that counts as growth
+///   ([`dla_core::grown::counts_as_growth`]). That the harness declares the finding a target or
+///   has a probe for it makes it none of these.
+///
+/// [`Exemption::Growth`] is the case that an earlier series of the harness grew the finding;
+/// [`Exemption::Raised`] the case that it only produced evidence the finding cites.
+fn exemption(
+    run_dir: &Path,
+    ledger: &Ledger,
+    manifest: &HarnessManifest,
+    finding: &Finding,
+    trends: &[&TrendReport],
+    this_series: &str,
+) -> Option<Exemption> {
+    let root = finding.root_id();
+    if manifest.is_entry_path()
+        && manifest
+            .targets
+            .iter()
+            .any(|t| t == &root || t == &finding.id)
+    {
+        return Some(Exemption::EntryPath);
+    }
+    let grew = trends
+        .iter()
+        .filter(|t| t.series != this_series)
+        .filter(|t| {
+            t.columns.iter().any(|c| {
+                dla_core::grown::counts_as_growth(c)
+                    && !dla_core::gate::is_whole_process(&c.name)
+                    && dla_core::grown::column_tied_to(ledger, c, &root)
+            })
+        })
+        .any(|t| {
+            SeriesFile::load(run_dir, &t.series)
+                .ok()
+                .and_then(|s| s.source.harness)
+                .is_some_and(|h| h == manifest.id)
+        });
+    if grew {
+        return Some(Exemption::Growth);
+    }
+    let cited = ledger
+        .findings()
+        .filter(|f| f.id == root || f.parent.as_ref() == Some(&root))
+        .flat_map(|f| f.supports.iter().chain(&f.contradicts))
+        .filter_map(|id| ledger.evidence().find(|e| &e.evidence_id == id))
+        .any(|e| produced_by(run_dir, e, manifest));
+    cited.then_some(Exemption::Raised)
+}
+
+/// The harness and series of the newest trend of the run, other than the one of `this`, that
+/// shows growth tied to the finding `root` (a column that passed the gate or a non-flat
+/// allocation-site column: [`dla_core::grown::counts_as_growth`]). The series' harness is the one
+/// to run the alloc-test on.
+fn growth_elsewhere(
+    run_dir: &Path,
+    ledger: &Ledger,
+    root: &FindingId,
+    trends: &[&TrendReport],
+    this: &str,
+) -> Option<(String, String)> {
+    trends.iter().rev().find_map(|t| {
+        if t.series == this {
+            return None;
+        }
+        t.columns
+            .iter()
+            .any(|c| {
+                dla_core::grown::counts_as_growth(c)
+                    && !dla_core::gate::is_whole_process(&c.name)
+                    && dla_core::grown::column_tied_to(ledger, c, root)
+            })
+            .then(|| {
+                let h = SeriesFile::load(run_dir, &t.series).ok()?.source.harness?;
+                Some((h, t.series.clone()))
+            })
+            .flatten()
+    })
+}
+
+/// The lines whose executions the agent counts in an alloc-test of `finding`: its site, and the
+/// line of every allocation-site count column that grew in a trend of the run and is tied to it.
+fn lines_of_finding(ledger: &Ledger, finding: &Finding, trends: &[&TrendReport]) -> Vec<String> {
+    let root = finding.root_id();
+    let mut out: Vec<String> = Vec::new();
+    let mut add = |site: &str| {
+        let site = site.trim();
+        if !site.is_empty() && !out.iter().any(|s| s == site) {
+            out.push(site.to_owned());
+        }
+    };
+    let root_f = ledger.finding(&root).unwrap_or(finding);
+    for f in [root_f, finding] {
+        if let Some(site) = &f.site {
+            add(site);
+        }
+    }
+    for c in trends.iter().flat_map(|t| t.columns.iter()) {
+        if dla_core::grown::is_alloc_site_column(&c.name)
+            && dla_core::grown::counts_as_growth(c)
+            && dla_core::grown::column_tied_to(ledger, c, &root)
+            && let Some(site) = dla_core::grown::column_site(c)
+        {
+            add(site);
+        }
+    }
+    out
 }
 
 /// Runs `dla alloc-test`.
@@ -1277,6 +1548,16 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
             .as_ref()
             .map_or(1, |_| manifest.warmup + manifest.iterations + 1),
         attribute: attribution_target(&manifest, bound.as_ref()),
+        // Python: the agent counts how often the lines of the finding run, so that a line on a
+        // branch the unit does not take is told from a line that ran and kept nothing.
+        lines: match (&bound, manifest.runtime) {
+            (Some(f), Runtime::Python) => {
+                let earlier = TrendReport::load_all(&tc.run_dir);
+                let refs: Vec<&TrendReport> = earlier.iter().collect();
+                lines_of_finding(&ledger, f, &refs)
+            }
+            _ => Vec::new(),
+        },
         ..RunOptions::default()
     };
     let out = run_points(&tc, &manifest, &opts)?;
@@ -1348,6 +1629,11 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         _ => {}
     }
     let iterations = manifest.iterations as usize;
+    // A series that did not show the growth counts against it only on a harness that is neither the
+    // one the finding was raised on nor an entry-path harness of the finding.
+    let exemption = bound
+        .as_ref()
+        .and_then(|f| exemption(&tc.run_dir, &ledger, &manifest, f, &all_refs, &series.id));
     let mut results: Vec<ColumnResult> = picked
         .tested
         .iter()
@@ -1356,6 +1642,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
                 &series,
                 n,
                 picked.voting.contains(n),
+                bound.is_some() && exemption.is_none(),
                 iterations,
                 event.as_ref(),
                 &mut limitations,
@@ -1376,11 +1663,12 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     // The verdict: the bound column's, or the voting columns together, with the required
     // columns able to hold a non-leak verdict back.
     let (favors, supports, held_back) = decide(&results, &picked);
-    // The count column of the finding's line is missing from this series: the coverage of the
-    // run says whether the line ran, and that decides.
+    // The count column of the finding's line is missing from this series: the agent's count of
+    // the executions of the line says whether the line ran, and that decides.
+    let mut line_ran: Option<LineRan> = None;
     let (favors, supports) = match (&picked.absent_site.clone(), bound.as_ref()) {
         (Some(gone), Some(f)) => {
-            let (favors, basis, note) = absent_site_reading(
+            let (favors, basis, note, ran) = absent_site_reading(
                 &tc.run_dir,
                 project,
                 &ledger,
@@ -1400,10 +1688,82 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
                 None => limitations.push(note.clone()),
             }
             picked.note = Some(note);
+            line_ran = Some(ran);
             (favors, Vec::new())
         }
         _ => (favors, supports),
     };
+    // Every deciding column of the bound finding is flat from its first measured point: the unit does
+    // not feed what grew elsewhere, which says nothing against that growth.
+    let mut never_grew: Option<Option<(String, String)>> = None;
+    let (favors, supports) = match bound.as_ref() {
+        Some(f) if picked.absent_site.is_none() => {
+            let deciding: Vec<&ColumnResult> = results
+                .iter()
+                .filter(|r| match &picked.primary {
+                    Some(p) => &r.name == p,
+                    None => r.voting,
+                })
+                .collect();
+            if !deciding.is_empty()
+                && deciding
+                    .iter()
+                    .all(|r| r.plateau.verdict == PlateauVerdict::NeverGrew)
+            {
+                let text = format!(
+                    "this series does not show the growth of {}: {} is flat from its first measured point, so the unit of {} does not feed it",
+                    f.root_id(),
+                    deciding[0].name,
+                    a.harness
+                );
+                picked.basis = text.clone();
+                limitations.push(text);
+                never_grew = Some(growth_elsewhere(
+                    &tc.run_dir,
+                    &ledger,
+                    &f.root_id(),
+                    &all_refs,
+                    &series.id,
+                ));
+                (Favors::Inconclusive, Vec::new())
+            } else {
+                (favors, supports)
+            }
+        }
+        _ => (favors, supports),
+    };
+    // On the harness that measured the growth a flat series keeps its old reading, and says that the
+    // growth did not come back there.
+    if matches!(exemption, Some(Exemption::Growth | Exemption::Raised))
+        && let Some(f) = bound.as_ref()
+        && let deciding = results
+            .iter()
+            .filter(|r| match &picked.primary {
+                Some(p) => &r.name == p,
+                None => r.voting,
+            })
+            .collect::<Vec<_>>()
+        && !deciding.is_empty()
+        && deciding.iter().all(|r| r.flat)
+    {
+        let text = if exemption == Some(Exemption::Growth) {
+            format!(
+                "the growth of {} did not come back on the harness that measured it: {} is flat from its first measured point in this series of {}, so it was not a growth of every unit",
+                f.root_id(),
+                deciding[0].name,
+                a.harness
+            )
+        } else {
+            format!(
+                "no growth of {} showed on the harness it was raised on: {} is flat from its first measured point in this series of {}, so it was not a growth of every unit",
+                f.root_id(),
+                deciding[0].name,
+                a.harness
+            )
+        };
+        picked.basis = text.clone();
+        limitations.push(text);
+    }
     // A required column that keeps rising is decided by its capture, a longer run does not; one
     // that only could not be judged (still levelling off) may show its plateau in a longer window.
     let split_open = |names: &[String]| split_rising(&results, &picked, names);
@@ -1646,13 +2006,63 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     };
     // The unit does not reach the line: a longer run decides nothing, the unit has to call it.
     let next = match (&picked.absent_site, favors, bound.as_ref()) {
-        (Some(gone), Favors::Inconclusive, Some(f)) => vec![format!(
-            "make the unit of {h} call the function of the line {site} (edit the hooks of its driver), then dla harness run {h} --mode {mode}, dla trend <S>, dla alloc-test {h} --finding {root}",
-            h = a.harness,
-            site = gone.site,
-            mode = key_mode(&manifest).as_str(),
-            root = f.root_id()
-        )],
+        (Some(gone), Favors::Inconclusive, Some(f)) => {
+            let root = f.root_id();
+            let how = match line_ran {
+                Some(LineRan::HolderRecord(_)) => {
+                    "run the unit of {h} so that it keeps the objects of the line {site} as the capture shows"
+                }
+                Some(LineRan::FunctionOnly | LineRan::NoCountFunctionRan) => {
+                    "make the unit of {h} execute the line {site} itself: call the function with what takes the branch of the line (edit the hooks of its driver)"
+                }
+                _ => {
+                    "make the unit of {h} call the function of the line {site} (edit the hooks of its driver)"
+                }
+            };
+            let mut v: Vec<String> = Vec::new();
+            if let Some(LineRan::HolderRecord(Some(captured))) = &line_ran
+                && captured != &a.harness
+            {
+                v.push(format!(
+                    "dla alloc-test {captured} --finding {root}   (the capture that shows the holder was made there)"
+                ));
+            }
+            // The harness of the series that showed the growth has the unit that reaches the line.
+            if let Some(measured) = SeriesFile::load(&tc.run_dir, &gone.series)
+                .ok()
+                .and_then(|s| s.source.harness)
+                .filter(|m| m != &a.harness)
+            {
+                v.push(format!(
+                    "dla alloc-test {measured} --finding {root}   (the growth was measured there)"
+                ));
+            }
+            v.push(format!(
+                "{}, then dla harness run {h} --mode {mode}, dla trend <S>, dla alloc-test {h} --finding {root}",
+                how.replace("{h}", &a.harness).replace("{site}", &gone.site),
+                h = a.harness,
+                mode = key_mode(&manifest).as_str(),
+            ));
+            v
+        }
+        _ => next,
+    };
+    let next = match (&never_grew, bound.as_ref()) {
+        (Some(elsewhere), Some(f)) => {
+            let root = f.root_id();
+            let mut v: Vec<String> = Vec::new();
+            if let Some((h, s)) = elsewhere {
+                v.push(format!(
+                    "dla alloc-test {h} --finding {root}   (the growth was measured there, in {s})"
+                ));
+            }
+            v.push(format!(
+                "make the unit of {h} feed what grew (edit the hooks of its driver), then dla harness run {h} --mode {mode}, dla trend <S>, dla alloc-test {h} --finding {root}",
+                h = a.harness,
+                mode = key_mode(&manifest).as_str()
+            ));
+            v
+        }
         _ => next,
     };
     let next = say_how_long_a_held_plateau_needs(next, favors, &results, &picked);
@@ -1932,6 +2342,47 @@ fn next_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_lines_an_alloc_test_counts_are_the_finding_and_the_columns_tied_to_it() {
+        use dla_core::{finding::Region, ids::FindingId, trend::TrendReport};
+        let mut f = Finding::candidate(
+            FindingId::new(3),
+            dla_core::Origin::parse("growth-series").unwrap(),
+            vec![],
+        );
+        f.region = Some(Region::Heap);
+        f.site = Some("shop/providers.py:8".to_owned());
+        let col = |name: &str, candidates: Vec<&str>, rise: f64| -> dla_core::trend::ColumnTrend {
+            serde_json::from_value(serde_json::json!({
+                "name": name, "unit": "count", "kind": "counter", "region": "heap",
+                "n": 8, "noise": 0.0, "rise": rise, "shape": "steady", "gate": "pass",
+                "gate_failed": [], "candidates": candidates,
+            }))
+            .unwrap()
+        };
+        let trend = TrendReport {
+            schema_version: 1,
+            id: "T1".into(),
+            series: "S1".into(),
+            thresholds: dla_stats::GateThresholds::default(),
+            columns: vec![
+                // Tied by the candidate, at another line than the finding's.
+                col("py.blocks@shop/providers.py:9", vec!["F3"], 10.0),
+                // Another finding's line, a whole-process column and the finding's own line again.
+                col("py.blocks@shop/other.py:2", vec!["F9"], 10.0),
+                col("py.traced", vec!["F3"], 10.0),
+                col("py.blocks@shop/providers.py:8", vec![], 10.0),
+            ],
+            targets: vec![],
+        };
+        let ledger = Ledger::from_text("").unwrap();
+        assert_eq!(
+            lines_of_finding(&ledger, &f, &[&trend]),
+            ["shop/providers.py:8", "shop/providers.py:9"]
+        );
+        assert_eq!(lines_of_finding(&ledger, &f, &[]), ["shop/providers.py:8"]);
+    }
 
     fn growth_evidence(ledger: &Ledger, root: &Finding) -> Option<EvidenceId> {
         let all: Vec<&dla_core::evidence::EvidenceRecord> = ledger.evidence().collect();
@@ -2308,6 +2759,7 @@ mod tests {
             supports: vec![format!("{name} supports")],
             note: None,
             points_needed: None,
+            flat: false,
         };
         let picked = pick::Picked {
             tested: vec!["jvm.nonheap_used".into(), "jvm.nmt.symbol".into()],
@@ -2366,6 +2818,7 @@ mod tests {
             supports: vec![],
             note: None,
             points_needed: None,
+            flat: false,
         }
     }
 
@@ -3443,7 +3896,7 @@ mod tests {
     fn purge_verdict(s: &SeriesFile, name: &str) -> PurgeVerdict {
         let ev = purge_event(s).unwrap();
         let mut lim = Vec::new();
-        let r = test_column(s, name, true, 6, Some(&ev), &mut lim).unwrap();
+        let r = test_column(s, name, true, false, 6, Some(&ev), &mut lim).unwrap();
         r.purge.unwrap().verdict
     }
 
@@ -3475,7 +3928,7 @@ mod tests {
         let s = go_flat(200.0);
         let ev = purge_event(&s).unwrap();
         let mut lim = Vec::new();
-        let r = test_column(&s, "go.heap_objects", true, 6, Some(&ev), &mut lim).unwrap();
+        let r = test_column(&s, "go.heap_objects", true, false, 6, Some(&ev), &mut lim).unwrap();
         assert_eq!(
             r.plateau.verdict,
             PlateauVerdict::Plateau,
@@ -3508,6 +3961,7 @@ mod tests {
             &go_in_run(120_000.0),
             "go.heap_live.in_run",
             true,
+            false,
             6,
             None,
             &mut lim,
@@ -3519,6 +3973,7 @@ mod tests {
             &go_in_run(0.0),
             "go.heap_live.in_run",
             true,
+            false,
             6,
             None,
             &mut lim,
@@ -3592,7 +4047,17 @@ mod tests {
         let results: Vec<ColumnResult> = picked
             .tested
             .iter()
-            .filter_map(|n| test_column(&s, n, picked.voting.contains(n), 6, Some(&ev), &mut lim))
+            .filter_map(|n| {
+                test_column(
+                    &s,
+                    n,
+                    picked.voting.contains(n),
+                    false,
+                    6,
+                    Some(&ev),
+                    &mut lim,
+                )
+            })
             .collect();
         let (favors, _, _) = decide(&results, &picked);
         (favors, results, picked)
@@ -3851,6 +4316,81 @@ mod tests {
         );
     }
 
+    /// `node.heap_used` over 2 warm-up, 6 main and 6 extra points (`ys`, 14 values), judged as
+    /// the deciding column of a finding (`bound`) or of an unbound alloc-test, with the purge
+    /// record `purge` (the readings before and after the purge) when given.
+    fn heap_column(ys: [f64; 14], bound: bool, purge: Option<(f64, f64)>) -> ColumnResult {
+        let mut s = series(&[]);
+        s.columns = vec![col("os.rss"), col("node.heap_used")];
+        for (i, p) in s.points.iter_mut().enumerate() {
+            p.values = vec![Some(150e6), Some(ys[i])];
+        }
+        let event = purge.map(|(before, after)| {
+            s.events.push(dla_core::series::SeriesEvent {
+                after_point: 13,
+                kind: "purge:gc".to_owned(),
+                detail: Some(format!(
+                    r#"{{"kind":"gc","before":{{"node.heap_used":{before}}},"after":{{"node.heap_used":{after}}}}}"#
+                )),
+            });
+            purge_event(&s).unwrap()
+        });
+        test_column(
+            &s,
+            "node.heap_used",
+            true,
+            bound,
+            6,
+            event.as_ref(),
+            &mut Vec::new(),
+        )
+        .unwrap()
+    }
+
+    fn ramp(from: f64, step: f64, n: usize, start: f64) -> Vec<f64> {
+        (0..n).map(|i| from + step * (start + i as f64)).collect()
+    }
+
+    fn heap_ys(main_step: f64, extra_step: f64) -> [f64; 14] {
+        let mut v = vec![60e6, 60e6];
+        v.extend(ramp(60e6, main_step, 6, 1.0));
+        let top = 60e6 + main_step * 6.0;
+        v.extend(ramp(top, extra_step, 6, 1.0));
+        v.try_into().unwrap()
+    }
+
+    #[test]
+    fn a_column_that_never_grew_in_the_main_window_cannot_speak_for_a_bound_finding() {
+        let flat = heap_ys(0.0, 0.0);
+        let r = heap_column(flat, true, None);
+        assert_eq!(r.plateau.verdict, PlateauVerdict::NeverGrew, "{r:?}");
+        assert_eq!(r.plateau.verdict.as_str(), "never-grew");
+        assert_eq!(
+            (r.favors, r.supports.len()),
+            (Favors::Inconclusive, 0),
+            "{r:?}"
+        );
+        // An alloc-test with no finding is unchanged: the flat column is a plateau.
+        let r = heap_column(flat, false, None);
+        assert_eq!(r.plateau.verdict, PlateauVerdict::Plateau, "{r:?}");
+        assert_eq!(r.favors, Favors::NonLeak, "{r:?}");
+        // A purge that "released" 28 MB of a column that did not grow is no way to non-leak.
+        let r = heap_column(flat, true, Some((88e6, 60e6)));
+        assert_eq!(r.favors, Favors::Inconclusive, "{r:?}");
+        assert!(r.supports.is_empty(), "{r:?}");
+    }
+
+    #[test]
+    fn growth_in_the_main_window_then_a_flat_extra_window_is_still_a_plateau_and_non_leak() {
+        let r = heap_column(heap_ys(1e6, 0.0), true, None);
+        assert_eq!(r.plateau.verdict, PlateauVerdict::Plateau, "{r:?}");
+        assert_eq!(r.favors, Favors::NonLeak, "{r:?}");
+        assert!(r.supports.iter().any(|x| x == "N-WARM"), "{r:?}");
+        let r = heap_column(heap_ys(1e6, 1e6), true, None);
+        assert_eq!(r.plateau.verdict, PlateauVerdict::Continues, "{r:?}");
+        assert_eq!(r.favors, Favors::Leak, "{r:?}");
+    }
+
     #[test]
     fn a_purge_record_without_the_columns_key_abstains() {
         let rec = purged(
@@ -3860,7 +4400,7 @@ mod tests {
         assert_eq!(purge_verdict(&rec, "os.rss"), PurgeVerdict::NotRun);
         let ev = purge_event(&rec).unwrap();
         let mut lim = Vec::new();
-        let r = test_column(&rec, "os.rss", true, 6, Some(&ev), &mut lim).unwrap();
+        let r = test_column(&rec, "os.rss", true, false, 6, Some(&ev), &mut lim).unwrap();
         // a missing reading is not "released": no purge support is claimed
         assert!(
             !r.supports
@@ -3882,7 +4422,7 @@ mod tests {
     fn a_precise_probe_leak_far_below_one_percent_of_rss_favors_leak() {
         let s = series(&[]);
         let mut lim = Vec::new();
-        let r = test_column(&s, "probe:Leak", true, 6, None, &mut lim).unwrap();
+        let r = test_column(&s, "probe:Leak", true, false, 6, None, &mut lim).unwrap();
         assert_eq!(
             r.plateau.verdict,
             PlateauVerdict::Continues,
@@ -3898,7 +4438,7 @@ mod tests {
         // Point index 3 is in the main window (indexes 2..8): one main reading is missing.
         let s = series(&[3]);
         let mut lim = Vec::new();
-        let r = test_column(&s, "probe:Leak", true, 6, None, &mut lim).unwrap();
+        let r = test_column(&s, "probe:Leak", true, false, 6, None, &mut lim).unwrap();
         assert_eq!(r.plateau.verdict, PlateauVerdict::Continues);
         assert!(
             lim.iter().any(|l| l.contains("5 of 6 main-window")),
@@ -3913,7 +4453,7 @@ mod tests {
             p.values[1] = None;
         }
         let mut lim = Vec::new();
-        let r = test_column(&s, "probe:Leak", true, 6, None, &mut lim).unwrap();
+        let r = test_column(&s, "probe:Leak", true, false, 6, None, &mut lim).unwrap();
         // Six extra points exist and are judged as the extra window (no main slope).
         assert_ne!(r.plateau.verdict, PlateauVerdict::NotRun);
         assert!(
@@ -3926,7 +4466,7 @@ mod tests {
             p.values[1] = None;
         }
         let mut lim = Vec::new();
-        let r = test_column(&s, "probe:Leak", true, 6, None, &mut lim).unwrap();
+        let r = test_column(&s, "probe:Leak", true, false, 6, None, &mut lim).unwrap();
         assert_eq!(r.plateau.verdict, PlateauVerdict::NotRun);
         assert!(lim.iter().any(|l| l.contains("no extra-window")), "{lim:?}");
     }

@@ -67,6 +67,27 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   finding at such a line until that capture was made and every summarize command of it was run. The frame
   above the growing line shows who receives the object: for a callback or a wrapper object it is a function
   of an extension module, so read that module's source for the reference it keeps.
+- Whose a holder is, and what a measured holder asks first: a holder of `--capture alloc,heap` says `of`. A holder
+  "of the project" has a module global or a class attribute of a project source file that is not test code as its
+  root; a holder "of the tests" is rooted in test code (the driver module `__main__` or the generated harness module,
+  a file under a directory named `test` or `tests`, `test_*.py`, `*_test.py`, `conftest.py`) or in a module of the test
+  runner. A holder of the project that keeps a growing line and that no finding has the owner of is the first thing to
+  act on: `dla summarize heap-graph` prints it first (the `_attention` key, with the add command, even when you
+  asked for another finding), the gate lists it before everything else, `dla run status` leads with it, and
+  `dla harness gen --next` is refused with `measured-holder-first` until `dla ledger add ... --owner <owner> --site <line> --holder static/global
+  --region heap` is run. Run that command as it is printed, before the next driver and before any alloc-test: one finding
+  at the holder accounts for every line it keeps. A growing line that only a holder of the tests keeps is no finding of the project (the
+  gate and `dla trend` say how many lines the test code holds): a driver that keeps what it makes in a list of its own measures itself. A series of
+  growing `py.blocks@` lines that no capture explains has one gate item, the capture
+  `dla harness run H --mode <m> --capture alloc,heap` and its two summarize commands, and the per-line add commands only
+  for the lines the capture could not root.
+- A line the unit does not execute proves nothing. Function coverage says that a function ran, not that one of its lines
+  did: a line on a branch the unit does not take allocates nothing, so nothing stays, and that is no evidence against a leak
+  at the line. The agent counts how often each target line ran (`line_counts`), and `dla alloc-test` says `non-leak` for a
+  missing `py.blocks@` column only when the count of the line rose ("the line ran N times in this series and none of its
+  blocks stayed"). When the function ran and the line did not, or the series has no count of the line, it says
+  `inconclusive`, and its `next` names the harness whose series showed the growth: run the alloc-test there, or make the
+  unit take the branch of the line. Never refute a leak with such a result.
 - Who holds the objects of a growing line: a `py.blocks@<file:line>` column says where the surviving objects
   were made, not who keeps them, and in a loop over the project's tests several lines often grow because one
   holder keeps them all (a module-level object that stores an exception and raises that same object again keeps

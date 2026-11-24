@@ -222,6 +222,10 @@ struct DeclaredRun {
     entry: bool,
     /// A second-look harness.
     second_look: bool,
+    /// Rust: the features of the target's crate that have gated sites and that this harness
+    /// is built without, and the command that generates it again with them on.
+    feature_gaps: Vec<crate::features::FeatureGap>,
+    feature_command: String,
 }
 
 impl DeclaredRun {
@@ -371,6 +375,7 @@ impl Index {
                     .or_default()
                     .push((h.clone(), t.verdict));
             }
+            let features = crate::features::HarnessFeatures::load(run_dir, h);
             for f in &m.targets {
                 let verdict = report
                     .and_then(|r| r.targets.iter().find(|t| &t.finding == f))
@@ -388,6 +393,14 @@ impl Index {
                     focused: m.targets.len() <= FOCUS_MAX,
                     entry: m.is_entry_path(),
                     second_look: m.is_second_look(),
+                    feature_gaps: features
+                        .as_ref()
+                        .map(|x| x.gaps_of(f).to_vec())
+                        .unwrap_or_default(),
+                    feature_command: features
+                        .as_ref()
+                        .map(|x| x.command.clone())
+                        .unwrap_or_default(),
                 });
             }
         }
@@ -442,10 +455,38 @@ impl Index {
         let missed = self.misses(id);
         let keys: std::collections::BTreeSet<&str> =
             missed.iter().map(|r| r.driver_key.as_str()).collect();
-        if keys.len() >= 2 && missed.iter().any(|r| r.focused) {
+        // Rust: a feature of the crate with gated sites that no harness enabled keeps the
+        // target open, however many drivers missed it: the code behind the feature cannot run
+        // in a build without it, so the misses say nothing about the target.
+        if keys.len() >= 2
+            && missed.iter().any(|r| r.focused)
+            && self.untried_features(id).is_none()
+        {
             return Standing::Settled(Why::NotReached);
         }
         Standing::Pending
+    }
+
+    /// Rust: the features of the crate of `id` with gated sites that none of the harnesses that
+    /// ran for it enabled, and the command that generates a harness with them on (the latest
+    /// harness's, so it carries the features that harness already had). `None` when every
+    /// feature with gated sites was on in some harness, or no harness recorded any.
+    pub fn untried_features(
+        &self,
+        id: &FindingId,
+    ) -> Option<(Vec<crate::features::FeatureGap>, String)> {
+        let runs = self.declared.get(id)?;
+        let last = runs.last()?;
+        let gaps: Vec<crate::features::FeatureGap> = last
+            .feature_gaps
+            .iter()
+            .filter(|g| {
+                runs.iter()
+                    .all(|r| r.feature_gaps.iter().any(|x| x.feature == g.feature))
+            })
+            .cloned()
+            .collect();
+        (!gaps.is_empty()).then(|| (gaps, last.feature_command.clone()))
     }
 
     /// The second look of `id`: one read `executed` in a hook driver (not entry-path), nothing
@@ -1349,6 +1390,7 @@ impl ReportFacts {
         let (mut grew, mut changed, mut executed, mut no_coverage, mut missed, mut unread) =
             (0, 0, 0, 0, 0, 0);
         let mut missed_once = 0;
+        let mut missed_gated = 0;
         let mut targeted = 0;
         for id in &ranked {
             let t = self.index.targeted_in(id);
@@ -1367,6 +1409,8 @@ impl ReportFacts {
                     // of them a focused harness. A miss with no focus harness is "missed once".
                     if self.index.standing(id) == Standing::Settled(Why::NotReached) {
                         missed += 1;
+                    } else if self.index.untried_features(id).is_some() {
+                        missed_gated += 1;
                     } else {
                         missed_once += 1;
                     }
@@ -1382,6 +1426,10 @@ impl ReportFacts {
             (no_coverage, "no coverage data"),
             (missed, "not reached"),
             (missed_once, "missed once, no focus harness"),
+            (
+                missed_gated,
+                "missed, a feature with gated sites not enabled",
+            ),
             (unread, "not read yet"),
         ] {
             if n > 0 {
@@ -1456,9 +1504,17 @@ impl ReportFacts {
                 }
             })
             .collect();
+        let untried = self.index.untried_features(id);
         let tail = match (self.index.not_reached_in(id), self.index.missed_in(id)) {
             (Some(h), _) if self.index.standing(id) == Standing::Settled(Why::NotReached) => {
                 format!("; not reached (missed by two drivers, the focused harness {h} among them)")
+            }
+            (_, Some(_)) if untried.is_some() => {
+                let (gaps, command) = untried.unwrap_or_default();
+                format!(
+                    "; missed, and not settled: {}",
+                    crate::features::lead(&gaps, &command)
+                )
             }
             (_, Some(_)) => "; missed once, no focus harness".to_owned(),
             _ => String::new(),
@@ -2224,6 +2280,99 @@ mod tests {
             Standing::Settled(Why::NotReached)
         );
         assert_eq!(ix.not_reached_in(&FindingId::new(1)).as_deref(), Some("H2"));
+    }
+
+    /// Writes the `features.json` of harness `h`: target F1 has a gap for each of `features`.
+    fn gaps(run: &Run, h: &str, features: &[&str]) {
+        let mut x = crate::features::HarnessFeatures {
+            command: format!(
+                "dla harness gen --lang rust --driver --features {} --probe F1",
+                features.join(",")
+            ),
+            ..Default::default()
+        };
+        x.gaps.insert(
+            "F1".into(),
+            features
+                .iter()
+                .map(|f| crate::features::FeatureGap {
+                    feature: (*f).to_owned(),
+                    file: "src/span.rs".into(),
+                    in_file: 25,
+                    in_crate: 43,
+                    in_entry: 0,
+                    by_module: false,
+                    default_on: false,
+                })
+                .collect(),
+        );
+        x.save(&run.dir.path().join("harness").join(h)).unwrap();
+    }
+
+    #[test]
+    fn a_target_stays_open_while_a_feature_with_gated_sites_was_on_in_no_harness() {
+        let (run, _) = Run::new(2);
+        ran(
+            &run,
+            "H1",
+            &[1, 2, 3, 4],
+            "a",
+            "S1",
+            &[(1, Verdict::NotExecuted), (2, Verdict::NotExecuted)],
+        );
+        gaps(&run, "H1", &["enable"]);
+        // A focused harness with another driver also reads not executed, still without the
+        // feature: the rule that settles it as not reached does not apply yet.
+        ran(&run, "H2", &[1], "c", "S2", &[(1, Verdict::NotExecuted)]);
+        gaps(&run, "H2", &["enable"]);
+        let view = run.reload();
+        assert_eq!(pending_of(&view), ["F1", "F2"]);
+        let ix = Index::of(&view);
+        assert_eq!(ix.standing(&FindingId::new(1)), Standing::Pending);
+        let (g, command) = ix.untried_features(&FindingId::new(1)).unwrap();
+        assert_eq!(crate::features::names(&g), ["enable"]);
+        assert!(
+            command.contains("--features enable --probe F1"),
+            "{command}"
+        );
+        // The queue line and the target's history say so, and lead with the feature.
+        let facts = ReportFacts::of(&view).unwrap();
+        assert!(
+            facts
+                .line()
+                .unwrap()
+                .contains("missed, a feature with gated sites not enabled 1"),
+            "{}",
+            facts.line().unwrap()
+        );
+        let t = facts.targeted(&FindingId::new(1)).unwrap();
+        assert!(t.contains("; missed, and not settled: feature enable (25 gated sites in src/span.rs, 43 in the crate)"), "{t}");
+        // A third harness that enabled the feature (no gap) and missed too: settled.
+        ran(&run, "H3", &[1], "d", "S3", &[(1, Verdict::NotExecuted)]);
+        let view = run.reload();
+        let ix = Index::of(&view);
+        assert!(ix.untried_features(&FindingId::new(1)).is_none());
+        assert_eq!(
+            ix.standing(&FindingId::new(1)),
+            Standing::Settled(Why::NotReached)
+        );
+        assert_eq!(pending_of(&view), ["F2"]);
+    }
+
+    #[test]
+    fn a_feature_that_an_earlier_harness_had_on_does_not_keep_the_target_open() {
+        let (run, _) = Run::new(1);
+        // H1 was built with the feature (no gap recorded) and missed; H2, a focused harness
+        // with another driver, was built without it and missed too: the feature was tried.
+        ran(&run, "H1", &[1], "a", "S1", &[(1, Verdict::NotExecuted)]);
+        ran(&run, "H2", &[1], "c", "S2", &[(1, Verdict::NotExecuted)]);
+        gaps(&run, "H2", &["enable"]);
+        let ix = Index::of(&run.reload());
+        assert!(ix.untried_features(&FindingId::new(1)).is_none());
+        assert_eq!(
+            ix.standing(&FindingId::new(1)),
+            Standing::Settled(Why::NotReached)
+        );
     }
 
     #[test]

@@ -181,6 +181,17 @@ impl Run {
         .unwrap();
     }
 
+    /// The whole list of the final gate (`gate/final.json`, `missing`, in its own order), which
+    /// `run status` cuts to what fits.
+    fn gate_items(&self) -> Vec<Value> {
+        let _ = self.run(&["gate", "check", "--final"]);
+        let full: Value = serde_json::from_str(
+            &fs::read_to_string(self.run_dir.join("gate/final.json")).unwrap(),
+        )
+        .unwrap();
+        full["missing"].as_array().unwrap().clone()
+    }
+
     fn status(&self) -> Value {
         self.ok(&["run", "status"])
     }
@@ -346,8 +357,15 @@ fn the_trigger_is_reproduced_for_one_holder_and_not_found_for_the_other() {
     let st = r.status();
     assert_eq!(st["triggers"][&cache]["trigger"], "unchecked", "{st}");
     assert_eq!(st["triggers"][&table]["trigger"], "unchecked", "{st}");
-    assert_eq!(st["blocking"][0]["kind"], "trigger", "{st}");
-    let fix = st["blocking"][0]["fix"].as_str().unwrap();
+    // The untied growing line of the harness has no retention record: its capture item leads, and
+    // the trigger items follow it in the whole list (`run status` is cut to what fits).
+    assert_eq!(st["blocking"][0]["kind"], "measured_capture", "{st}");
+    let items = r.gate_items();
+    let trigger = items
+        .iter()
+        .find(|m| m["kind"] == "trigger")
+        .unwrap_or_else(|| panic!("{items:?}"));
+    let fix = trigger["fix"].as_str().unwrap();
     assert!(
         fix.starts_with(&format!(
             "dla harness gen --lang python --driver --entry {cache},{table}, fill"
@@ -359,11 +377,13 @@ fn the_trigger_is_reproduced_for_one_holder_and_not_found_for_the_other() {
         serde_json::from_str(&fs::read_to_string(r.run_dir.join("gate/final.json")).unwrap())
             .unwrap();
     let missing = full["missing"].as_array().unwrap();
-    assert_eq!(missing[0]["kind"], "trigger", "{missing:?}");
+    // The capture item leads; the two trigger items (one per confirmed finding) follow it.
+    assert_eq!(missing[0]["kind"], "measured_capture", "{missing:?}");
     assert_eq!(missing[1]["kind"], "trigger", "{missing:?}");
+    assert_eq!(missing[2]["kind"], "trigger", "{missing:?}");
     // `run status` clips long fixes; the gate file has them whole.
     assert!(
-        missing[0]["fix"]
+        missing[1]["fix"]
             .as_str()
             .unwrap()
             .starts_with(fix.trim_end_matches("...")),
@@ -421,12 +441,14 @@ fn the_trigger_is_reproduced_for_one_holder_and_not_found_for_the_other() {
     assert!(e["fix"].as_str().unwrap().contains("VARIES.txt"), "{e}");
     // Item: the harness exists and has not run.
     let st = r.status();
+    assert_eq!(st["blocking"][0]["kind"], "measured_capture", "{st}");
+    let items = r.gate_items();
     assert!(
-        st["blocking"][0]["fix"]
+        items.iter().any(|m| m["fix"]
             .as_str()
             .unwrap()
-            .starts_with("fill the hooks and VARIES.txt of H2"),
-        "{st}"
+            .starts_with("fill the hooks and VARIES.txt of H2")),
+        "{items:?}"
     );
     let line = "the request path: a different unknown path per unit (the router rejects it)";
     r.varies("H2", line);
@@ -469,14 +491,19 @@ fn the_trigger_is_reproduced_for_one_holder_and_not_found_for_the_other() {
     assert_eq!(st["triggers"][&cache]["harness"], "H2");
     assert_eq!(st["triggers"][&cache]["varies"], line);
     assert_eq!(st["triggers"][&table]["trigger"], "unchecked");
-    assert_eq!(st["blocking"][0]["kind"], "trigger", "{st}");
-    assert_eq!(st["blocking"][0]["id"], table);
+    assert_eq!(st["blocking"][0]["kind"], "measured_capture", "{st}");
+    let items = r.gate_items();
+    let trigger = items
+        .iter()
+        .find(|m| m["kind"] == "trigger")
+        .unwrap_or_else(|| panic!("{items:?}"));
+    assert_eq!(trigger["id"], table);
     assert!(
-        st["blocking"][0]["fix"]
+        trigger["fix"]
             .as_str()
             .unwrap()
             .starts_with("write a second, different entry-path harness"),
-        "{st}"
+        "{trigger}"
     );
     assert!(
         r.stop_reason()

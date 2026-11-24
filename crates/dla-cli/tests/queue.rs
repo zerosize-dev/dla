@@ -950,7 +950,21 @@ fn an_unknown_verdict_does_not_settle_and_is_explained() {
 
     let st = r.ok(&["run", "status"]);
     assert_eq!(st["queue"]["python"]["pending"], 2, "{st}");
-    let item = st["blocking"][0]["description"].as_str().unwrap();
+    // The driver's untied growing line has no retention record: its capture item leads the
+    // queue item (a measurement nothing acts on comes first).
+    assert_eq!(st["blocking"][0]["kind"], "measured_capture", "{st}");
+    let _ = r.run(&["gate", "check", "--final"]);
+    let full: Value =
+        serde_json::from_str(&fs::read_to_string(r.run_dir.join("gate/final.json")).unwrap())
+            .unwrap();
+    let item = full["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["kind"] == "queue")
+        .unwrap_or_else(|| panic!("no queue item: {full}"))["description"]
+        .as_str()
+        .unwrap();
     assert!(
         item.contains("had a driver run with no coverage data"),
         "{item}"

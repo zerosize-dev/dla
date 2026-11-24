@@ -25,6 +25,7 @@ pub mod capture;
 pub mod commands;
 pub mod cover;
 pub mod dumps;
+pub mod feature_sites;
 pub mod r#gen;
 pub mod kotlin;
 pub mod pace;

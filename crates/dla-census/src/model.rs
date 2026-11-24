@@ -122,12 +122,40 @@ pub struct ProjectInfo {
     /// Go: names of fields reassigned from a call that takes their own value
     /// (`p.ctx = start(p.ctx, ..)`), the shape of a retention chain.
     pub go_self_wrapped: std::collections::HashSet<String>,
+    /// Go: names of every type the project declares, of any case.
+    pub go_types: std::collections::HashSet<String>,
+    /// Go: for each struct, the unqualified type names its fields mention, of any case
+    /// (kept until [`ProjectInfo::finish`] knows which of them are project types).
+    pub go_field_types: std::collections::HashMap<String, Vec<String>>,
+    /// Go: for each package-level function, the types its body builds with a composite
+    /// literal or `new`.
+    pub go_fn_built: std::collections::HashMap<String, Vec<String>>,
+    /// Go: names of the functions that a package-level `var` initializer or an `init`
+    /// function calls directly.
+    pub go_startup_calls: std::collections::HashSet<String>,
 }
 
 impl ProjectInfo {
     /// Closes `longlived` over `holds`: whatever a long-lived owner holds is reachable
     /// for as long as the owner is.
     pub fn finish(&mut self) {
+        // Go: a field type counts as held only when the project declares a type of that
+        // name, so builtin types do not become edges.
+        for (owner, tys) in std::mem::take(&mut self.go_field_types) {
+            for t in tys {
+                if t == owner {
+                    self.longlived.insert(owner.clone());
+                } else if self.go_types.contains(&t) {
+                    self.holds.entry(owner.clone()).or_default().push(t);
+                }
+            }
+        }
+        // Go: types built by a function that start-up code calls are built at start-up.
+        for f in std::mem::take(&mut self.go_startup_calls) {
+            if let Some(built) = self.go_fn_built.get(&f) {
+                self.longlived.extend(built.iter().cloned());
+            }
+        }
         let named = self
             .holds
             .keys()

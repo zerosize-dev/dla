@@ -244,6 +244,19 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: HarnessCmd) -> 
     let tc = stage::tool_ctx(project, ctx, data);
     match a {
         HarnessCmd::Gen(g) => {
+            // A measurement showed a holder of the project that no finding covers: the next
+            // candidate of the queue waits for the finding at it (any language, any mode).
+            if g.next.is_some() {
+                let view = dla_core::RunView::load_for(&tc.run_dir, tc.worker.as_deref())?;
+                if let Some(item) = dla_core::gate::measured_holder_items(&view).first() {
+                    return Err(Failure::refuse(
+                        dla_core::error::codes::MEASURED_HOLDER_FIRST,
+                        format!("a measured holder has no finding: {}", item.description),
+                        "a finding at the holder that a measurement showed",
+                        item.fix.clone(),
+                    ));
+                }
+            }
             let lang = g.lang;
             let opts = GenOptions {
                 lang,

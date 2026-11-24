@@ -124,6 +124,17 @@
         "type": "string"
       }
     },
+    "line_counts": {
+      "description": "How often each line the run asked about (`DLA_LINES`) was executed since the process\nstarted: `file:line` to count, a line never executed 0 (the Python agent's `line_counts`).",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "number",
+        "format": "double"
+      }
+    },
     "modules": {
       "description": "Loaded modules the shim's frames refer to: `[{path, bias}]`."
     },

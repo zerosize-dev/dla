@@ -288,6 +288,15 @@ fn default_remedy(
     } else {
         ""
     };
+    // Rust: a feature with gated sites that no harness enabled comes before any other advice.
+    if ix.missed_in(&f.id).is_some()
+        && let Some((gaps, command)) = ix.untried_features(&f.id)
+    {
+        return format!(
+            "targeted in {list}, {outcome}: {}. Then write a unit that adds a new key to {place}{key}",
+            dla_core::features::lead(&gaps, &command)
+        );
+    }
     format!("targeted in {list}, {outcome}: write a unit that adds a new key to {place}{key}")
 }
 
@@ -362,10 +371,18 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
         // Pending in an open queue: it waits for a measurement.
         if q.is_some_and(|q| q.open() && q.pending.contains(&f.id)) {
             let cmd = q.map(|q| q.command_for(&f.id)).unwrap_or_default();
+            // Rust: a feature with gated sites that no harness enabled comes first.
+            let gated = ix
+                .missed_in(&f.id)
+                .and_then(|_| ix.untried_features(&f.id))
+                .map(|(gaps, command)| {
+                    format!("{}. Then: ", dla_core::features::lead(&gaps, &command))
+                })
+                .unwrap_or_default();
             left.push((
                 f.id.to_string(),
                 format!(
-                    "pending in the {} queue: {cmd}",
+                    "pending in the {} queue: {gated}{cmd}",
                     runtime.unwrap_or_default()
                 ),
             ));

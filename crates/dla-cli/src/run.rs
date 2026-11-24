@@ -568,10 +568,30 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
             "the run carries a stop-hook stamp; the next command that works on it lifts the stamp"
         );
     }
-    out["next_command"] = json!(queues.iter().find(|q| q.open()).map_or_else(
-        || next_command(&view, &missing, &revisit, ctx.worker.as_deref()),
-        |q| clip_command(&q.command)
-    ));
+    // What a measurement showed and no finding covers leads the queue: the lead item is the
+    // first key of the output and its fix the next command.
+    let lead = if worker.is_none() {
+        gate::measured_lead(&view)
+    } else {
+        Vec::new()
+    };
+    out["next_command"] = json!(if let Some(first) = lead.first() {
+        // Whole: a cut command cannot be run.
+        first.fix.clone()
+    } else {
+        queues.iter().find(|q| q.open()).map_or_else(
+            || next_command(&view, &missing, &revisit, ctx.worker.as_deref()),
+            |q| clip_command(&q.command),
+        )
+    });
+    if !lead.is_empty() {
+        out["_attention"] = json!(
+            lead.iter()
+                .take(2)
+                .map(|m| format!("{}: {} (next_command)", m.id, m.description))
+                .collect::<Vec<_>>()
+        );
+    }
     let mut truncated = total > shown.len();
     // Add revisit entries one by one while the whole object stays inside the output bound.
     let room = MAX_OUTPUT_BYTES - 1 - 40;

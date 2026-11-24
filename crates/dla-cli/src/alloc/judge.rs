@@ -49,6 +49,9 @@ pub enum PlateauVerdict {
     Inconclusive,
     /// The extra window is too short.
     NotRun,
+    /// The column did not grow in the main window of this series (see [`grew`]): the series
+    /// does not reproduce the growth, so its extra window says nothing about it.
+    NeverGrew,
 }
 
 impl PlateauVerdict {
@@ -59,8 +62,33 @@ impl PlateauVerdict {
             Self::Plateau => "plateau",
             Self::Inconclusive => "inconclusive",
             Self::NotRun => "not-run",
+            Self::NeverGrew => "never-grew",
         }
     }
+}
+
+/// True when the column GREW in the main window of the series: a counter's net rise over the
+/// main window is above zero (a counter has no noise to tell a rise from, and its every step is
+/// a whole block or entry); a gauge's Theil-Sen interval over the main window is above zero and
+/// its fitted rise is above `min_rise` (the same smallest rise the plateau test takes as growth)
+/// and above [`MATERIAL`] of its level (`reference` for a process column). A main window of fewer
+/// than two points did not show a rise. Whether the extra window then went flat is the plateau
+/// test's question; a column that never grew did not stop growing.
+pub fn grew(main: &[Point], counter: bool, reference: f64, min_rise: f64) -> bool {
+    let (Some(first), Some(last)) = (main.first(), main.last()) else {
+        return false;
+    };
+    if main.len() < 2 {
+        return false;
+    }
+    if counter {
+        return last.1 > first.1;
+    }
+    let Some(sen) = theil_sen(main, 0.05) else {
+        return false;
+    };
+    let rise = sen.slope * (last.0 - first.0);
+    sen.lo > 0.0 && rise > min_rise && rise > MATERIAL * mean_abs(main).max(reference)
 }
 
 /// The plateau test of one column.
@@ -454,6 +482,11 @@ pub fn combine(
     gc: Option<Gc>,
     expected_rises: Option<f64>,
 ) -> (Favors, Vec<String>) {
+    // A column that never grew in this series has nothing to release and nothing that stopped:
+    // no purge, twin or plateau turns it into a non-leak.
+    if plateau == PlateauVerdict::NeverGrew {
+        return (Favors::Inconclusive, Vec::new());
+    }
     let released = purge.filter(|p| p.verdict == PurgeVerdict::Released);
     let headroom = gc.is_some_and(|g| g.headroom);
     if released.is_some() || headroom {
@@ -490,6 +523,7 @@ pub fn combine(
             vec!["N-WARM".to_owned(), "N-HWM".to_owned()],
         ),
         PlateauVerdict::Continues => (Favors::Leak, vec!["leak".to_owned()]),
+        PlateauVerdict::NeverGrew => (Favors::Inconclusive, Vec::new()),
         PlateauVerdict::Inconclusive | PlateauVerdict::NotRun => {
             if purge.is_some_and(|p| p.verdict == PurgeVerdict::Retained) {
                 (Favors::Leak, vec!["leak".to_owned()])
@@ -543,6 +577,55 @@ pub fn require_non_leak(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_column_grew_in_the_main_window_by_its_interval_rise_and_counter_net_rise() {
+        let flat = pts(&[80., 80., 80., 80., 80., 80.], 1000.0);
+        let ramp = pts(&[10., 20., 30., 40., 50., 60.], 1000.0);
+        assert!(!grew(&flat, false, 0.0, 0.0));
+        assert!(grew(&ramp, false, 0.0, 0.0));
+        // A rise below the column's smallest rise is none, and one point shows no rise.
+        assert!(!grew(&ramp, false, 0.0, 1000.0));
+        assert!(!grew(&ramp[..1], false, 0.0, 0.0));
+        assert!(!grew(&flat, true, 0.0, 0.0));
+        assert!(grew(&ramp, true, 0.0, 0.0));
+        // The flat-then-flat column is a plateau for the plateau test, and nothing more.
+        let extra = pts(&[80., 80., 80., 80.], 7000.0);
+        assert_eq!(
+            plateau(&flat, &extra, false, 0.0, 0.0).verdict,
+            PlateauVerdict::Plateau
+        );
+    }
+
+    #[test]
+    fn a_column_that_never_grew_is_inconclusive_by_every_route_and_a_plateau_after_growth_is_not() {
+        let released = purge("trim", Some(100.0), Some(40.0), Some(20.0), 0.0);
+        let headroom = Gc {
+            pre_rise: 9.0,
+            post_rise: 0.0,
+            headroom: true,
+        };
+        for (p, g) in [
+            (None, None),
+            (Some(&released), None),
+            (Some(&released), Some(headroom)),
+        ] {
+            assert_eq!(
+                combine(PlateauVerdict::NeverGrew, p, g, None),
+                (Favors::Inconclusive, Vec::new())
+            );
+        }
+        assert_eq!(PlateauVerdict::NeverGrew.as_str(), "never-grew");
+        // A column that grew and then stopped is a non-leak as before.
+        assert_eq!(
+            combine(PlateauVerdict::Plateau, None, None, None).0,
+            Favors::NonLeak
+        );
+        assert_eq!(
+            combine(PlateauVerdict::Plateau, Some(&released), None, None).0,
+            Favors::NonLeak
+        );
+    }
 
     fn pts(ys: &[f64], x0: f64) -> Vec<(f64, f64)> {
         ys.iter()

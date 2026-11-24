@@ -183,6 +183,25 @@ impl Run {
 
 const ADD_PREFIX: &str = "dla ledger add --origin growth-series --evidence ";
 
+/// Gives harness H1 a retention record: the holder chains of one line none of these tests' columns
+/// is at (held from native code). A harness with growing lines tied to no finding and no retention
+/// record gets one capture item for its series instead of one add command per line (the tests
+/// below read those add commands, which a harness that has been captured keeps).
+fn give_h1_a_retention_record(project: &Path, run_dir: &Path) {
+    let dir = run_dir.join("harness/H1/out/p1-fresh/capture/1");
+    fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("py-1.retain.json");
+    fs::write(
+        &file,
+        r#"{"dla_pyretain":1,"frames":1,"sites":[{"site":"zz/elsewhere.py:1","blocks_first":0,"blocks_last":50,"found_tracked":0,"found_untracked":0,"kept":0,"note":"no object","chains":[]}],"limitations":[]}"#,
+    )
+    .unwrap();
+    ok(
+        project,
+        &["summarize", "heap-graph", file.to_str().unwrap()],
+    );
+}
+
 #[test]
 fn an_untied_site_column_prints_the_command_that_adds_the_finding_at_its_line() {
     if !have_python() {
@@ -248,6 +267,7 @@ fn the_final_gate_lists_the_untied_column_with_the_add_command_and_a_finding_at_
     let t = r.trend();
     let add = Run::next_of(&t, ADD_PREFIX).unwrap();
     let e = evidence_of(&add);
+    give_h1_a_retention_record(&r.project, &r.run_dir);
     let missing = r.final_gate();
     let items = column_items(&missing);
     assert_eq!(items.len(), 1, "{missing:?}");
@@ -696,6 +716,7 @@ fn a_remover_line_or_a_finding_without_that_writer_does_not_tie_the_column() {
     );
     let f = added["id"].as_str().unwrap();
     ok(&r.project, &["ledger", "annotate", f, "--remover", SITE]);
+    give_h1_a_retention_record(&r.project, &r.run_dir);
     let items = column_items(&r.final_gate())
         .into_iter()
         .cloned()
@@ -931,6 +952,13 @@ fn the_trend_names_the_lines_that_grow_most_first_and_a_finding_at_a_line_leads_
 fn the_final_gate_lists_the_untied_site_columns_largest_slope_first() {
     let (_dir, project) = five_sites();
     ok(&project, &["trend", "S1"]);
+    let series_dir = fs::read_dir(project.join(".dla"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| p.join("series/S1.json").exists())
+        .unwrap();
+    give_h1_a_retention_record(&project, &series_dir);
     let _ = dla(&project, &["gate", "check", "--final"]);
     let run_dir = fs::read_dir(project.join(".dla"))
         .unwrap()

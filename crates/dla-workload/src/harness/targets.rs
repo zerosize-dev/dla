@@ -13,6 +13,7 @@ use dla_census::parse::{
 use dla_core::{
     FindingId, Ledger,
     evidence::EvidenceKind,
+    features::FeatureGap,
     harness::{ProbeSpec, ProbeTarget},
     toolctx::ToolCtx,
 };
@@ -80,6 +81,12 @@ pub struct Target {
     /// Rust: the crate features that gate the module of the site (`#[cfg(feature = "x")]` on a
     /// `mod` declaration), read by [`feature_gate`]; `None` when no declaration gates it.
     pub feature_gate: Option<FeatureGate>,
+    /// Rust: the features of the crate with gated sites (`#[cfg(feature = "x")]` inside
+    /// functions and on items) that this harness build leaves off, set by
+    /// [`add_feature_gaps`](super::feature_sites::add_feature_gaps).
+    pub feature_gaps: Vec<FeatureGap>,
+    /// Rust: the command that generates the harness again with those features on.
+    pub feature_command: String,
 }
 
 /// The crate features a Rust site lies behind, and whether the driver build enables them.
@@ -330,6 +337,39 @@ pub fn add_feature_gates(project: &Path, targets: &mut [Target], enabled: &[Stri
             });
         }
     }
+}
+
+/// The `_attention` lines of `dla harness gen` for a Rust harness: a target whose file, or whose
+/// crate's entry files (`lib.rs`, `main.rs`), have gated sites of a feature the build leaves off.
+/// One line per target, the first four; the lines name the exact command that generates the
+/// harness again with the features on.
+pub fn feature_attention(targets: &[Target]) -> Vec<String> {
+    let lines: Vec<String> = targets
+        .iter()
+        .filter_map(|t| {
+            let gaps: Vec<FeatureGap> = t
+                .gated_sites()
+                .into_iter()
+                .filter(|g| g.in_file > 0 || g.in_entry > 0)
+                .collect();
+            (!gaps.is_empty()).then(|| {
+                format!(
+                    "{} ({}): {}",
+                    t.id,
+                    t.site,
+                    dla_core::features::lead(&gaps, &t.feature_command)
+                )
+            })
+        })
+        .collect();
+    let mut out: Vec<String> = lines.iter().take(4).cloned().collect();
+    if lines.len() > 4 {
+        out.push(format!(
+            "and {} more targets behind features: the same command",
+            lines.len() - 4
+        ));
+    }
+    out
 }
 
 /// What `dla harness gen --entry` says about a target besides what every harness says.
@@ -592,6 +632,8 @@ pub fn describe(
                 sibling_of: siblings.get(&a.id).cloned(),
                 entry: None,
                 feature_gate: None,
+                feature_gaps: Vec::new(),
+                feature_command: String::new(),
             }
         })
         .collect()
@@ -754,6 +796,16 @@ fn site_list(label: &str, s: &(Vec<String>, usize)) -> String {
 }
 
 impl Target {
+    /// The gaps the block names on a line of their own: the features whose gated sites lie in
+    /// functions and on items, not the ones that gate the module (`feature_gate` says those).
+    pub fn gated_sites(&self) -> Vec<FeatureGap> {
+        self.feature_gaps
+            .iter()
+            .filter(|g| !g.by_module)
+            .cloned()
+            .collect()
+    }
+
     /// The lines that describe the target, in the block and the text output.
     pub fn lines(&self) -> Vec<String> {
         let mut out = vec![format!(
@@ -784,6 +836,13 @@ impl Target {
         }
         if let Some(g) = &self.feature_gate {
             out.push(format!("  {}", g.text()));
+        }
+        let sites = self.gated_sites();
+        if !sites.is_empty() {
+            out.push(format!(
+                "  {}",
+                dla_core::features::lead(&sites, &self.feature_command)
+            ));
         }
         if self.key_note.is_some() {
             // The explanation is printed once above the targets of the block.
@@ -819,6 +878,9 @@ impl Target {
             "sibling_of": self.sibling_of,
             "writer_functions": self.entry.as_ref().map(|e| &e.writer_functions),
             "feature_gate": self.feature_gate.as_ref().map(FeatureGate::text),
+            "feature_sites": (!self.gated_sites().is_empty()).then(|| {
+                dla_core::features::lead(&self.gated_sites(), &self.feature_command)
+            }),
         })
     }
 }
@@ -1025,6 +1087,8 @@ mod tests {
             sibling_of: None,
             entry: None,
             feature_gate: None,
+            feature_gaps: Vec::new(),
+            feature_command: String::new(),
             key_note: None,
         }
     }
@@ -1121,6 +1185,8 @@ mod tests {
             sibling_of: None,
             entry: None,
             feature_gate: None,
+            feature_gaps: Vec::new(),
+            feature_command: String::new(),
             key_note: None,
         }
     }
@@ -1327,6 +1393,79 @@ mod open;
         add_feature_gates(dir.path(), &mut list, &[]);
         assert!(list[0].feature_gate.is_none());
     }
+    #[test]
+    fn gated_sites_inside_functions_are_in_the_block_and_the_attention_until_the_feature_is_on() {
+        use super::super::feature_sites::add_feature_gaps;
+        let dir = crate_tree(&[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"t\"\n\n[features]\nenable = []\n",
+            ),
+            ("src/lib.rs", "mod span;\n"),
+            (
+                "src/span.rs",
+                "pub static A: u8 = 0;\npub fn f() {\n    #[cfg(feature = \"enable\")]\n    {}\n}\n",
+            ),
+        ]);
+        let mut t = target();
+        t.site = "src/span.rs:1".into();
+        let mut list = [t];
+        let rec = add_feature_gaps(dir.path(), &mut list, &[], false, false, None);
+        let b = block("H1", &list, Some("//"));
+        assert!(
+            b.contains("//   feature enable (1 gated site in src/span.rs, 1 in the crate) off by default and the harness is built without it, so the code behind it does not run in it: regenerate it with dla harness gen --lang rust --driver --features enable --probe F8"),
+            "{b}"
+        );
+        assert_eq!(rec.gaps["F8"].len(), 1);
+        let att = feature_attention(&list);
+        assert_eq!(att.len(), 1, "{att:?}");
+        assert!(
+            att[0].starts_with("F8 (src/span.rs:1): feature enable"),
+            "{att:?}"
+        );
+        assert!(list[0].json()["feature_sites"].as_str().is_some());
+        // The feature on: nothing is said, nothing recorded.
+        let rec = add_feature_gaps(
+            dir.path(),
+            &mut list,
+            &["enable".to_owned()],
+            false,
+            false,
+            None,
+        );
+        let b = block("H1", &list, Some("//"));
+        assert!(!b.contains("feature enable"), "{b}");
+        assert!(rec.gaps.is_empty());
+        assert!(feature_attention(&list).is_empty());
+        assert!(list[0].json()["feature_sites"].is_null());
+    }
+
+    #[test]
+    fn the_command_repeats_the_workload_the_no_default_flag_and_the_features_already_on() {
+        use super::super::feature_sites::add_feature_gaps;
+        let dir = crate_tree(&[
+            (
+                "m/Cargo.toml",
+                "[package]\nname = \"m\"\n\n[features]\nold = []\nenable = []\n",
+            ),
+            ("m/src/lib.rs", "#[cfg(feature = \"enable\")]\nfn a() {}\n"),
+        ]);
+        let mut t = target();
+        t.site = "m/src/lib.rs:1".into();
+        let mut list = [t];
+        let rec = add_feature_gaps(
+            dir.path(),
+            &mut list,
+            &["old".to_owned()],
+            true,
+            false,
+            Some("rust:test:m/Cargo.toml"),
+        );
+        let want = "dla harness gen --lang rust --driver --workload rust:test:m/Cargo.toml --no-default-features --features old,enable --probe F8";
+        assert_eq!(rec.command, want);
+        assert_eq!(list[0].feature_command, want);
+    }
+
     fn facts(
         param: bool,
         constant: bool,

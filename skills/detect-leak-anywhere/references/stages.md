@@ -400,6 +400,13 @@ under the run directory and need tier 1.
     program's interpreter has it, threads, tasks, ResourceWarning sites, and with `heap` the holder chains
     of the objects made at the lines that grew, read by `heap-graph`). `alloc` and `heap` slow the points
     that take them; a growing `py.blocks@` line is explained by `--capture alloc,heap` (one run, two summarize commands).
+    A holder of the project (a module global or a class attribute of a project source file that is not test code) that
+    keeps a growing line and that no finding has the owner of is the first thing to act on, before the next driver and
+    before any alloc-test: `dla summarize heap-graph` prints it first (`_attention`), the gate and `dla run status` list it before
+    everything else, and `dla harness gen --next` is refused with `measured-holder-first` until the `dla ledger add ... --owner
+    <owner> --site <line> --holder static/global --region heap` it prints is run. A holder of the tests (the driver, a file of test code, the test runner)
+    is no finding: the gate and `dla trend` say how many lines the test code holds. A line the unit does not execute proves
+    nothing (a branch it does not take allocates nothing): an alloc-test that says `inconclusive` because the line did not run is not evidence against the leak.
   - Rust and native, program started directly: `--tool valgrind` (memcheck XML plus the vgdb chain
     files) or `--tool heaptrack` (`heaptrack_print` report and a first-to-last diff) instead of a
     measured series. A wrapper (make, sh) gets no vgdb chain. A missing tool refuses with
@@ -430,6 +437,7 @@ For each passed column tied to a candidate `F3`:
 - `dla alloc-test H1 --finding F3` re-runs the harness with extra points and a purge and records a
   discriminator whose `favors` is `leak`, `non-leak` or `inconclusive`. The alloc-test runs on a harness that
   targets the finding, runs the project's own workload, or measured it (a column of its series tied to the finding, growth evidence the finding cites, or a capture summary that names it), never on another one: the other is refused with `harness-not-about` before it runs. After an alloc-test that favors leak on a driver made for the finding (a hook driver that targets it), run the commands of its `next` in order (the refute of each open non-leak sibling, then the confirm with the growth evidence); a finding with such an alloc-test is confirmed or refuted, never closed unresolved (`leak-favored`). An alloc-test of the project's whole workload or of a test loop that favors leak does not isolate the finding: its next step is a narrower driver, and closing it unresolved stays possible.
+- A series of another driver that never showed the growth is not evidence against it: when the deciding column of a finding is flat from its first measured point of the alloc-test's series, the result is `inconclusive` ("this series does not show the growth of F3 ... so the unit of H does not feed it") and `next` names the harness that measured the growth; run the alloc-test there. Only a column that grew in the main window and then stopped is a plateau (`N-WARM`). The harness the finding was raised on and an entry-path harness of the finding are the exceptions: a harness the finding cites evidence from (the `dla harness run` record of a harness that runs the project's own workload, a growth record of one of its series or a capture summary of it; the run record of a hand-written hook driver does not count) reads a flat series as before and says that no growth showed there, or that the growth did not come back there, because a leak grows with every unit; an entry-path harness asks whether a caller can feed the holder, so a flat reading there keeps its meaning. A harness that only declares the finding a target or has a probe for it, and that the finding cites nothing from, is another driver.
 - Refute the loser: `dla ledger refute F3.n1 --evidence E13` when it favors leak,
   `dla ledger refute F3 --evidence E13` when it favors non-leak.
 - `dla ledger annotate F3 --holder <holder>` when the finding has no holder (`--owner`, `--region`,

@@ -122,6 +122,10 @@ struct RootIn {
     function: String,
     #[serde(default)]
     at: String,
+    /// Whose the root is, as the agent says it (`project`, `tests`); absent in a file of an
+    /// older agent and for a root of a library.
+    #[serde(default)]
+    of: Option<String>,
 }
 
 #[derive(Deserialize, Default, Clone, Debug)]
@@ -188,6 +192,56 @@ struct HolderOut {
     paths: Vec<PathRow>,
     /// No Python container refers to the blocks or objects of this holder.
     unreferenced: bool,
+    /// Whose it is: the project's own, or test code's; `None` for a frame, a native holder, a
+    /// library's global and a holder an older agent did not classify.
+    of: Option<Of>,
+}
+
+/// Whose a holder is (see [`dla_core::measured_holders`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Of {
+    /// A module global or class attribute of a project source file that is not test code.
+    Project,
+    /// A root in test code or in a module of the test runner.
+    Tests,
+}
+
+impl Of {
+    fn as_str(self) -> &'static str {
+        match self {
+            Of::Project => "project",
+            Of::Tests => "tests",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Of> {
+        match s {
+            "project" => Some(Of::Project),
+            "tests" => Some(Of::Tests),
+            _ => None,
+        }
+    }
+}
+
+/// What a module name alone says about a root of a file an older agent wrote: the driver module
+/// and the modules of the test runner, and a module whose path has a `test` or `tests` part or
+/// whose last part is `test_*`, `*_test` or `conftest`, are the tests'. Nothing says that a module
+/// is the project's: that needs its file.
+fn of_by_module(module: &str) -> Option<Of> {
+    let parts: Vec<&str> = module.split('.').collect();
+    let (top, last) = (parts.first()?, parts.last()?);
+    let runner = [
+        "pytest", "_pytest", "unittest", "pluggy", "nose", "nose2", "doctest",
+    ];
+    (module == "__main__"
+        || runner.contains(top)
+        || parts[..parts.len() - 1]
+            .iter()
+            .any(|p| *p == "test" || *p == "tests")
+        || last.starts_with("test_")
+        || last.ends_with("_test")
+        || *last == "conftest")
+        .then_some(Of::Tests)
 }
 
 impl Held {
@@ -294,6 +348,7 @@ fn holders_of(f: &File, red: &super::redact::Redactor) -> (Vec<HolderOut>, u64) 
         kind: FindingHolder,
         owner: Option<String>,
         unreferenced: bool,
+        of: Option<Of>,
         count: u64,
         steps: Vec<StepIn>,
     }
@@ -316,6 +371,7 @@ fn holders_of(f: &File, red: &super::redact::Redactor) -> (Vec<HolderOut>, u64) 
             kind: FindingHolder::NativeHandleGlobalRef,
             owner: None,
             unreferenced: true,
+            of: None,
             count,
             steps,
         };
@@ -325,11 +381,13 @@ fn holders_of(f: &File, red: &super::redact::Redactor) -> (Vec<HolderOut>, u64) 
         }
         for c in &site.chains {
             let steps: Vec<StepIn> = c.steps.iter().map(step).collect();
-            let piece = |key: String, kind, owner: Option<String>| Piece {
+            let of = c.root.of.as_deref().and_then(Of::parse);
+            let piece = |key: String, kind, owner: Option<String>, of: Option<Of>| Piece {
                 key,
                 kind,
                 owner,
                 unreferenced: false,
+                of,
                 count: c.count,
                 steps: steps.clone(),
             };
@@ -340,6 +398,7 @@ fn holders_of(f: &File, red: &super::redact::Redactor) -> (Vec<HolderOut>, u64) 
                         format!("static:{owner}"),
                         FindingHolder::StaticGlobal,
                         Some(owner),
+                        of.or_else(|| of_by_module(&c.root.module)),
                     ));
                 }
                 "class-attribute" => {
@@ -348,11 +407,13 @@ fn holders_of(f: &File, red: &super::redact::Redactor) -> (Vec<HolderOut>, u64) 
                         format!("static:{owner}"),
                         FindingHolder::StaticGlobal,
                         Some(owner),
+                        of,
                     ));
                 }
                 "frame" => pieces.push(piece(
                     format!("stack:{}@{}", name(&c.root.function), name(&c.root.at)),
                     FindingHolder::BlockedStack,
+                    None,
                     None,
                 )),
                 "no-referrer" => pieces.push(native(c.count, steps.clone())),
@@ -383,6 +444,7 @@ fn holders_of(f: &File, red: &super::redact::Redactor) -> (Vec<HolderOut>, u64) 
                 kept: 0,
                 paths: Vec::new(),
                 unreferenced: p.unreferenced,
+                of: p.of,
             });
             h.kept += p.count;
             let list = if major { &mut h.sites } else { &mut h.minor };
@@ -481,12 +543,37 @@ fn short_steps(steps: &[StepIn], n: usize) -> Vec<StepIn> {
     v
 }
 
+/// `of` (whose the holder is) and, for a holder of the project that keeps lines, the line a
+/// finding added for it gets (`finding_site`) and how many lines it keeps (`lines`): what the gate
+/// reads to say that no finding covers it.
+fn insert_of(o: &mut Map<String, Value>, h: &HolderOut) {
+    let Some(of) = h.of else { return };
+    o.insert("of".into(), json!(of.as_str()));
+    if of == Of::Project && !h.sites.is_empty() {
+        o.insert("lines".into(), json!(h.sites.len()));
+        if let Some(site) = h.finding_site() {
+            o.insert("finding_site".into(), json!(site));
+        }
+    }
+}
+
+/// True for a holder of the project that keeps at least one major line and that no finding
+/// covers (no finding has its owner): the first thing to act on.
+fn needs_a_finding(h: &HolderOut, ledger: &Ledger) -> bool {
+    h.of == Some(Of::Project)
+        && !h.sites.is_empty()
+        && h.owner
+            .as_deref()
+            .is_some_and(|o| !dla_core::measured_holders::covered(ledger, o))
+}
+
 /// The holder as the evidence record shows it.
 fn record_entry(h: &HolderOut, sites: usize, steps: usize, types: usize) -> Value {
     let mut o = Map::new();
     o.insert("key".into(), json!(clip(&h.key, CLIP)));
     o.insert("holder_kind".into(), json!(h.kind));
     o.insert("kept".into(), json!(h.kept));
+    insert_of(&mut o, h);
     o.insert(
         "sites".into(),
         json!(
@@ -542,6 +629,7 @@ fn raw_entry(h: &HolderOut) -> Value {
         o.insert("owner".into(), json!(owner));
     }
     o.insert("kept".into(), json!(h.kept));
+    insert_of(&mut o, h);
     o.insert(
         "sites".into(),
         json!(
@@ -764,6 +852,7 @@ fn retain(ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
     let mut all_unrooted = 0u64;
     let mut unreferenced_sites = 0usize;
     let mut files: Vec<Value> = Vec::new();
+    let mut attention: Vec<String> = Vec::new();
     let mut no_chain_total = 0usize;
     let mut no_chain_reason: Option<String> = None;
     for (i, f) in inputs.iter().zip(&parsed) {
@@ -867,7 +956,16 @@ fn retain(ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
         cited.dedup();
         // Holders the findings name go first, then by kept objects.
         let mut order: Vec<usize> = (0..holders.len()).collect();
-        order.sort_by_key(|&k| (ties[k].tie.is_none(), std::cmp::Reverse(holders[k].kept)));
+        // The record is bounded and the gate reads it: a holder of the project that no finding
+        // covers stays in it ahead of the holders that say nothing it has to act on.
+        let wanted: Vec<bool> = holders.iter().map(|h| needs_a_finding(h, ledger)).collect();
+        order.sort_by_key(|&k| {
+            (
+                ties[k].tie.is_none(),
+                !wanted[k],
+                std::cmp::Reverse(holders[k].kept),
+            )
+        });
         let build =
             |n: usize, sites: usize, steps: usize, types: usize, with_ties: bool| -> Value {
                 let mut base = Map::new();
@@ -1002,6 +1100,20 @@ fn retain(ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
                 shown_holders.push(row);
             }
         }
+        for h in holders.iter().filter(|h| needs_a_finding(h, ledger)) {
+            if let Some(owner) = &h.owner {
+                attention.push(format!(
+                    "A HOLDER OF THE PROJECT HAS NO FINDING: {} keeps {} growing line(s) and no finding has the owner {owner}; act on it before anything else: {}",
+                    clip(&h.key, CLIP),
+                    h.sites.len(),
+                    dla_core::measured_holders::add_command(
+                        &evidence,
+                        owner,
+                        &h.finding_site().unwrap_or_default()
+                    )
+                ));
+            }
+        }
         files.push(
             json!({"file": clip(i.shown(), 80), "evidence": evidence, "holders": holders.len()}),
         );
@@ -1010,6 +1122,11 @@ fn retain(ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
         out.enumerated += f.sites.len() as u64;
     }
     let mut body = Map::new();
+    // The first key: the output bound never cuts it, and a reader that looks only at the finding it
+    // asked about still sees a holder that no finding covers.
+    if !attention.is_empty() {
+        body.insert("_attention".into(), json!(attention));
+    }
     body.insert("files".into(), json!(files));
     body.insert("holders".into(), json!(shown_holders));
     if unreferenced_sites > 0 {
@@ -1281,5 +1398,64 @@ mod tests {
             Some("H2")
         );
         assert_eq!(harness_of("in/py-1.retain.json"), None);
+    }
+    #[test]
+    fn a_holder_says_whose_it_is_from_the_agent_or_else_from_the_module_name() {
+        let f = file(
+            r#"{"dla_pyretain":1,"sites":[{"site":"a.py:3","blocks_first":0,"blocks_last":60,"found_tracked":50,"kept":50,"chains":[
+            {"count":20,"root":{"kind":"module-global","module":"pkg.api","key":"_providers","of":"project"},"steps":[{"type":"X","via":"[0]"}]},
+            {"count":10,"root":{"kind":"module-global","module":"__main__","key":"_seen","of":"tests"},"steps":[{"type":"X","via":"[0]"}]},
+            {"count":10,"root":{"kind":"module-global","module":"pkg.tests.test_api","key":"_old"},"steps":[{"type":"X","via":"[0]"}]},
+            {"count":5,"root":{"kind":"class-attribute","class":"pkg.api.K","attribute":"items","of":"project"},"steps":[{"type":"X","via":"[1]"}]},
+            {"count":5,"root":{"kind":"frame","function":"w","at":"a.py:9"},"steps":[{"type":"X"}]}]}]}"#,
+        );
+        let (h, _) = holders_of(&f, &red());
+        let of = |key: &str| h.iter().find(|x| x.key == key).unwrap().of;
+        assert_eq!(of("static:pkg.api._providers"), Some(Of::Project));
+        assert_eq!(of("static:__main__._seen"), Some(Of::Tests));
+        // An older file has no `of`: the module name says the tests' and never the project's.
+        assert_eq!(of("static:pkg.tests.test_api._old"), Some(Of::Tests));
+        assert_eq!(of("static:pkg.api.K.items"), Some(Of::Project));
+        assert_eq!(of("stack:w@a.py:9"), None);
+        for (m, want) in [
+            ("__main__", Some(Of::Tests)),
+            ("conftest", Some(Of::Tests)),
+            ("pkg.store_test", Some(Of::Tests)),
+            ("_pytest.runner", Some(Of::Tests)),
+            ("unittest.case", Some(Of::Tests)),
+            ("pkg.store", None),
+            ("pkg.contest", None),
+            ("testing", None),
+        ] {
+            assert_eq!(of_by_module(m), want, "{m}");
+        }
+    }
+
+    #[test]
+    fn a_holder_of_the_project_carries_its_line_count_and_the_site_a_finding_gets() {
+        let f = file(
+            r#"{"dla_pyretain":1,"sites":[
+            {"site":"a.py:3","blocks_first":0,"blocks_last":60,"found_tracked":50,"kept":50,"chains":[
+              {"count":50,"root":{"kind":"module-global","module":"pkg.api","key":"_providers","of":"project"},"steps":[{"type":"X","via":"[0]"}]}]},
+            {"site":"a.py:8","blocks_first":0,"blocks_last":30,"found_tracked":30,"kept":30,"chains":[
+              {"count":30,"root":{"kind":"module-global","module":"__main__","key":"_seen","of":"tests"},"steps":[{"type":"X","via":"[0]"}]}]}]}"#,
+        );
+        let (h, _) = holders_of(&f, &red());
+        let project = h.iter().find(|x| x.of == Some(Of::Project)).unwrap();
+        let entry = record_entry(project, 6, 8, 6);
+        assert_eq!(entry["of"], "project");
+        assert_eq!(entry["lines"], 1);
+        assert_eq!(entry["finding_site"], "a.py:3");
+        assert_eq!(raw_entry(project)["finding_site"], "a.py:3");
+        // The tests' holder says whose it is and nothing else.
+        let tests = h.iter().find(|x| x.of == Some(Of::Tests)).unwrap();
+        let entry = record_entry(tests, 6, 8, 6);
+        assert_eq!(entry["of"], "tests");
+        assert!(entry.get("finding_site").is_none() && entry.get("lines").is_none());
+        // The add command a holder of the project gets is the gate's literal one.
+        assert_eq!(
+            dla_core::measured_holders::add_command("E7", "pkg.api._providers", "a.py:3"),
+            "dla ledger add --origin growth-series --evidence E7 --owner pkg.api._providers --site a.py:3 --holder static/global --region heap"
+        );
     }
 }
