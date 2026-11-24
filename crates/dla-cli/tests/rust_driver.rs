@@ -609,3 +609,189 @@ fn two_findings_in_the_function_of_a_stack_are_both_named_and_no_single_command_
     assert!(next.contains(&a) && next.contains(&b), "{next}");
     assert!(!next.starts_with("dla ledger annotate"), "{next}");
 }
+
+/// A crate whose public `record` fills a static registry through a function that exists only under
+/// `#[cfg(feature = "enable")]`, called from a gated statement, the way a tracing library compiles to a no-op without its feature. No
+/// `mod` is gated and no feature is on by default.
+fn gated(dir: &Path) {
+    write(
+        dir,
+        "Cargo.toml",
+        "[package]\nname = \"spanner\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[features]\nenable = []\n",
+    );
+    write(
+        dir,
+        "src/lib.rs",
+        "use std::sync::Mutex;\n\nstatic REGISTRY: Mutex<Vec<String>> = Mutex::new(Vec::new());\n\n#[cfg(feature = \"enable\")]\nfn collect(key: &str) {\n    REGISTRY.lock().unwrap().push(key.to_owned());\n}\n\npub fn record(key: &str) {\n    #[cfg(feature = \"enable\")]\n    collect(key);\n    #[cfg(not(feature = \"enable\"))]\n    let _ = key;\n}\n",
+    );
+}
+
+const GATED_COMMAND: &str = "dla harness gen --lang rust --driver --features enable --probe";
+
+#[test]
+fn a_feature_gating_code_inside_functions_is_said_in_the_block_and_the_attention() {
+    if !have_cargo() {
+        return;
+    }
+    let r = Run::of(gated);
+    let target = r.id_at("src/lib.rs:3");
+    let out = r.ok(&["harness", "gen", "--lang", "rust", "--driver", "--next"]);
+    // The first key of the output, and whole: the output bound never cuts it.
+    let attention = out["_attention"].as_array().unwrap();
+    assert_eq!(attention.len(), 1, "{out}");
+    let line = attention[0].as_str().unwrap();
+    assert!(
+        line.contains(
+            "feature enable (3 gated sites in src/lib.rs, 3 in the crate) off by default"
+        ),
+        "{line}"
+    );
+    assert!(
+        line.ends_with(&format!("regenerate it with {GATED_COMMAND} {target}")),
+        "{line}"
+    );
+    assert!(
+        out.as_object().unwrap().keys().next().map(String::as_str) == Some("_attention"),
+        "{out}"
+    );
+    let block = fs::read_to_string(r.driver("H1")).unwrap();
+    assert!(
+        block.contains(&format!(
+            "//   feature enable (3 gated sites in src/lib.rs, 3 in the crate) off by default and the harness is built without it, so the code behind it does not run in it: regenerate it with {GATED_COMMAND} {target}"
+        )),
+        "{block}"
+    );
+    let features: Value = serde_json::from_str(
+        &fs::read_to_string(r.run_dir.join("harness/H1/features.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        features["gaps"][&target][0]["feature"], "enable",
+        "{features}"
+    );
+
+    // With the feature on, the output and the block say nothing about features and nothing is
+    // recorded; the build has the argument.
+    let r = Run::of(gated);
+    let out = r.ok(&[
+        "harness",
+        "gen",
+        "--lang",
+        "rust",
+        "--driver",
+        "--next",
+        "--features",
+        "enable",
+    ]);
+    assert!(out.get("_attention").is_none(), "{out}");
+    assert!(!out.to_string().contains("feature enable"), "{out}");
+    let block = fs::read_to_string(r.driver("H1")).unwrap();
+    assert!(!block.contains("feature enable"), "{block}");
+    assert!(!r.run_dir.join("harness/H1/features.json").exists());
+    let m: Value = serde_json::from_str(
+        &fs::read_to_string(r.run_dir.join("harness/H1/harness.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        m["build"]["argv"][2]
+            .as_str()
+            .unwrap()
+            .ends_with("--features enable")
+    );
+}
+
+#[test]
+fn a_target_that_did_not_run_without_its_feature_is_told_the_feature_first_and_stays_open() {
+    if !have_cargo() || !have_llvm_tools() {
+        return;
+    }
+    let r = Run::of(gated);
+    let target = r.id_at("src/lib.rs:3");
+    r.ok(&["harness", "gen", "--lang", "rust", "--driver", "--next"]);
+    r.fill("H1", "spanner::record(&key.to_string());");
+    r.ok(&["harness", "run", "H1", "--mode", "both"]);
+    // The call ran, the feature was off: the code behind it did not.
+    let trend = r.ok(&["trend", "S1"]);
+    let v = verdict(&trend, &target);
+    assert_eq!(v["verdict"], "not_executed", "{trend}");
+    let detail = v["detail"].as_str().unwrap();
+    assert!(
+        detail.starts_with(
+            "feature enable (3 gated sites in src/lib.rs, 3 in the crate) off by default"
+        ),
+        "{detail}"
+    );
+    assert!(
+        detail.contains(&format!("{GATED_COMMAND} {target}. Then: function ")),
+        "{detail}"
+    );
+
+    // A focus harness with another driver and still no feature: the queue does not settle it as
+    // not reached, and refuses to close it, with the feature first.
+    let out = r.ok(&["harness", "gen", "--lang", "rust", "--driver", "--next"]);
+    assert!(out["summary"]["focus"].is_string(), "{out}");
+    r.fill("H2", "spanner::record(&format!(\"k{key}\"));");
+    // A run in both modes writes two series: S3 and S4 are the ones of H2.
+    r.ok(&["harness", "run", "H2", "--mode", "both"]);
+    let trend = r.ok(&["trend", "S3"]);
+    assert_eq!(
+        verdict(&trend, &target)["verdict"],
+        "not_executed",
+        "{trend}"
+    );
+    let st = r.ok(&["run", "status"]);
+    assert_eq!(st["queue"]["rust"]["open"], true, "{st}");
+    assert_eq!(st["queue"]["rust"]["pending"], 1, "{st}");
+    let o = r.run(&[
+        "ledger",
+        "resolve",
+        &target,
+        "--as",
+        "suspected_static_only",
+        "--reason",
+        "not_exercised",
+        "--remedy",
+        "x",
+    ]);
+    assert_eq!(o.json["error"]["code"], "target-pending", "{}", o.text);
+    let msg = o.json["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("not_executed feature enable (3 gated sites"),
+        "{msg}"
+    );
+    // `close-rest` leaves it, with the same feature first.
+    let cr = r.run(&["ledger", "close-rest"]);
+    assert!(
+        cr.text.contains(
+            "pending in the rust queue: feature enable (3 gated sites in src/lib.rs, 3 in the crate) off by default"
+        ),
+        "{}",
+        cr.text
+    );
+
+    // With the feature on in a third harness: the target is reached, nothing is said about
+    // features, and the queue closes it.
+    let out = r.ok(&[
+        "harness",
+        "gen",
+        "--lang",
+        "rust",
+        "--driver",
+        "--probe",
+        &target,
+        "--features",
+        "enable",
+    ]);
+    assert!(out.get("_attention").is_none(), "{out}");
+    r.fill("H3", "spanner::record(&format!(\"j{key}\"));");
+    r.ok(&["harness", "run", "H3", "--mode", "both"]);
+    let trend = r.ok(&["trend", "S5"]);
+    let v = verdict(&trend, &target);
+    assert_eq!(v["verdict"], "executed", "{trend}");
+    assert!(
+        !v["detail"].as_str().unwrap().contains("feature"),
+        "{trend}"
+    );
+    let st = r.ok(&["run", "status"]);
+    assert_eq!(st["queue"]["rust"]["pending"], 0, "{st}");
+}

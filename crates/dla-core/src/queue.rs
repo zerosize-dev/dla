@@ -2282,6 +2282,99 @@ mod tests {
         assert_eq!(ix.not_reached_in(&FindingId::new(1)).as_deref(), Some("H2"));
     }
 
+    /// Writes the `features.json` of harness `h`: target F1 has a gap for each of `features`.
+    fn gaps(run: &Run, h: &str, features: &[&str]) {
+        let mut x = crate::features::HarnessFeatures {
+            command: format!(
+                "dla harness gen --lang rust --driver --features {} --probe F1",
+                features.join(",")
+            ),
+            ..Default::default()
+        };
+        x.gaps.insert(
+            "F1".into(),
+            features
+                .iter()
+                .map(|f| crate::features::FeatureGap {
+                    feature: (*f).to_owned(),
+                    file: "src/span.rs".into(),
+                    in_file: 25,
+                    in_crate: 43,
+                    in_entry: 0,
+                    by_module: false,
+                    default_on: false,
+                })
+                .collect(),
+        );
+        x.save(&run.dir.path().join("harness").join(h)).unwrap();
+    }
+
+    #[test]
+    fn a_target_stays_open_while_a_feature_with_gated_sites_was_on_in_no_harness() {
+        let (run, _) = Run::new(2);
+        ran(
+            &run,
+            "H1",
+            &[1, 2, 3, 4],
+            "a",
+            "S1",
+            &[(1, Verdict::NotExecuted), (2, Verdict::NotExecuted)],
+        );
+        gaps(&run, "H1", &["enable"]);
+        // A focused harness with another driver also reads not executed, still without the
+        // feature: the rule that settles it as not reached does not apply yet.
+        ran(&run, "H2", &[1], "c", "S2", &[(1, Verdict::NotExecuted)]);
+        gaps(&run, "H2", &["enable"]);
+        let view = run.reload();
+        assert_eq!(pending_of(&view), ["F1", "F2"]);
+        let ix = Index::of(&view);
+        assert_eq!(ix.standing(&FindingId::new(1)), Standing::Pending);
+        let (g, command) = ix.untried_features(&FindingId::new(1)).unwrap();
+        assert_eq!(crate::features::names(&g), ["enable"]);
+        assert!(
+            command.contains("--features enable --probe F1"),
+            "{command}"
+        );
+        // The queue line and the target's history say so, and lead with the feature.
+        let facts = ReportFacts::of(&view).unwrap();
+        assert!(
+            facts
+                .line()
+                .unwrap()
+                .contains("missed, a feature with gated sites not enabled 1"),
+            "{}",
+            facts.line().unwrap()
+        );
+        let t = facts.targeted(&FindingId::new(1)).unwrap();
+        assert!(t.contains("; missed, and not settled: feature enable (25 gated sites in src/span.rs, 43 in the crate)"), "{t}");
+        // A third harness that enabled the feature (no gap) and missed too: settled.
+        ran(&run, "H3", &[1], "d", "S3", &[(1, Verdict::NotExecuted)]);
+        let view = run.reload();
+        let ix = Index::of(&view);
+        assert!(ix.untried_features(&FindingId::new(1)).is_none());
+        assert_eq!(
+            ix.standing(&FindingId::new(1)),
+            Standing::Settled(Why::NotReached)
+        );
+        assert_eq!(pending_of(&view), ["F2"]);
+    }
+
+    #[test]
+    fn a_feature_that_an_earlier_harness_had_on_does_not_keep_the_target_open() {
+        let (run, _) = Run::new(1);
+        // H1 was built with the feature (no gap recorded) and missed; H2, a focused harness
+        // with another driver, was built without it and missed too: the feature was tried.
+        ran(&run, "H1", &[1], "a", "S1", &[(1, Verdict::NotExecuted)]);
+        ran(&run, "H2", &[1], "c", "S2", &[(1, Verdict::NotExecuted)]);
+        gaps(&run, "H2", &["enable"]);
+        let ix = Index::of(&run.reload());
+        assert!(ix.untried_features(&FindingId::new(1)).is_none());
+        assert_eq!(
+            ix.standing(&FindingId::new(1)),
+            Standing::Settled(Why::NotReached)
+        );
+    }
+
     #[test]
     fn an_entry_path_miss_is_not_a_miss_of_the_queue_and_a_reached_target_is_never_missed() {
         let (run, _) = Run::new(2);

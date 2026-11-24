@@ -1393,6 +1393,46 @@ mod open;
         add_feature_gates(dir.path(), &mut list, &[]);
         assert!(list[0].feature_gate.is_none());
     }
+    #[test]
+    fn gated_sites_inside_functions_are_in_the_block_and_the_attention_until_the_feature_is_on() {
+        use super::super::feature_sites::add_feature_gaps;
+        let dir = crate_tree(&[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"t\"\n\n[features]\nenable = []\n",
+            ),
+            ("src/lib.rs", "mod span;\n"),
+            (
+                "src/span.rs",
+                "pub static A: u8 = 0;\npub fn f() {\n    #[cfg(feature = \"enable\")]\n    {}\n}\n",
+            ),
+        ]);
+        let mut t = target();
+        t.site = "src/span.rs:1".into();
+        let mut list = [t];
+        let rec = add_feature_gaps(dir.path(), &mut list, &[], false, false);
+        let b = block("H1", &list, Some("//"));
+        assert!(
+            b.contains("//   feature enable (1 gated site in src/span.rs, 1 in the crate) off by default and the harness is built without it, so the code behind it does not run in it: regenerate it with dla harness gen --lang rust --driver --features enable --probe F8"),
+            "{b}"
+        );
+        assert_eq!(rec.gaps["F8"].len(), 1);
+        let att = feature_attention(&list);
+        assert_eq!(att.len(), 1, "{att:?}");
+        assert!(
+            att[0].starts_with("F8 (src/span.rs:1): feature enable"),
+            "{att:?}"
+        );
+        assert!(list[0].json()["feature_sites"].as_str().is_some());
+        // The feature on: nothing is said, nothing recorded.
+        let rec = add_feature_gaps(dir.path(), &mut list, &["enable".to_owned()], false, false);
+        let b = block("H1", &list, Some("//"));
+        assert!(!b.contains("feature enable"), "{b}");
+        assert!(rec.gaps.is_empty());
+        assert!(feature_attention(&list).is_empty());
+        assert!(list[0].json()["feature_sites"].is_null());
+    }
+
     fn facts(
         param: bool,
         constant: bool,

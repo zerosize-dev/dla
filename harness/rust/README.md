@@ -91,6 +91,10 @@ is unverified.
 The stubs call `todo!` until replaced. The template contains `unsafe` (the allocator impl and
 `malloc_trim`) and is generated into the scratch copy only, never into the dla workspace.
 
+## Features that gate code inside functions
+
+A library can compile to a no-op unless a cargo feature is on, with `#[cfg(feature = "x")]` inside its functions and on its items and no gated `mod`. `dla harness gen` counts those sites per feature that the `default` list of `Cargo.toml` does not turn on (directly or through another feature), per file of the crate, and writes into the target block and the `_attention` of its output the features that the driver build leaves off, with the counts and the exact regenerate command. `harness/H<n>/features.json` keeps the same for `dla trend`, the queue and `dla ledger close-rest`: a target that was not executed gets the command first, and the queue does not settle it as not reached while a feature with gated sites was on in none of the harnesses that ran for it.
+
 ## Tool captures
 
 Command mode (the crate's binary started directly) also takes `dla harness run <H> --tool valgrind|heaptrack`;

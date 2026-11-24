@@ -1037,3 +1037,31 @@ fn the_texts_say_older_harness_copies_are_thinned_and_come_back_on_use() {
         "VERIFY.md has no row for the thinned harness copies"
     );
 }
+
+#[test]
+fn the_rust_texts_say_a_feature_gating_code_inside_functions_needs_to_be_on() {
+    let rust =
+        fs::read_to_string(root().join("skills/detect-leak-anywhere/references/rust.md")).unwrap();
+    for want in [
+        "a crate whose type is a no-op unless its feature is on gates no `mod`, so a driver built without the feature never runs the code of the target.",
+        "A target that reads not executed leads with that command, and the queue keeps it open, whatever the number of drivers that missed it, until a harness that targeted it was built with the feature.",
+    ] {
+        assert!(rust.contains(want), "rust.md lacks: {want}");
+    }
+    let readme = fs::read_to_string(root().join("harness/rust/README.md")).unwrap();
+    for want in [
+        "## Features that gate code inside functions",
+        "`harness/H<n>/features.json` keeps the same for `dla trend`, the queue and `dla ledger close-rest`",
+    ] {
+        assert!(readme.contains(want), "README.md lacks: {want}");
+    }
+    assert!(
+        !skill().contains("features.json"),
+        "SKILL.md stays as it is: the Rust reference carries the rule"
+    );
+    let verify = fs::read_to_string(root().join("docs/VERIFY.md")).unwrap();
+    assert!(
+        verify.contains("| Code behind a feature the build left off was read as code that did not run | corrected |"),
+        "VERIFY.md has no row for the feature-gated code"
+    );
+}

@@ -2552,3 +2552,20 @@ flat test-loop readings get only 9 second looks.
   then the whole set on CI. Logs: u115/ci-snap-23/.
 - Plan: wait for H5 and builder R, then verify the combined tree once (build, freeze, the two
   Node fixtures, replays, Pillow walk, fastrace check, suite, static), snapshot with CI, commit.
+
+## 16:05 UTC 2026-11-24 (approx.): H5 built; the two Node fixtures pass; full dynamic run started
+
+- H5 built: produced_by() takes the manifest; a Workload record counts only when
+  manifest.is_test_loop() or (mode == Command and workload.is_some()). Test renamed
+  `a_hook_driver_the_finding_cites_only_a_run_record_of_is_still_another_driver`; new test
+  `a_script_workload_harness_the_finding_cites_the_run_of_is_its_own_and_reads_a_flat_series_as_before`
+  (Python script workload, no JVM). alloc_test_jvm three more runs ok. Texts and VERIFY row say
+  that the run record of a hand-written hook driver does not count.
+- Binary of the tree at 16:00 (H5 complete, builder R's edits in progress but compiling):
+  u112/dla-H5try, u112/dla-bench-H5try (u112/dla-H3 deleted).
+- `dla-bench dynamic --only <one name>` (the option takes one name, once): node-report-heap
+  pass, node-template-cache pass (rule-out back).
+- Full dynamic run on all 64 fixtures with those binaries started, --parallel 2: task
+  bd9vj6wjf, json u115/dyn-all.json, logs u115/dyn-logs. Baseline: 63 pass + 1 xfail.
+- Waiting for builder R. Then: build, freeze final binaries, replays, Pillow walk, fastrace
+  check, suite, static, snapshot with CI, commit message (add the Rust part), main.

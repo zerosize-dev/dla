@@ -18,6 +18,7 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   --features x" in its block (and `gen` prints it as `feature_note`). That reader is a line scan of the `mod`
   declarations up to `lib.rs`: it does not see `#[path]`, a module declared in another macro or inline, a gate on the item
   itself, `cfg_attr`, or a feature another feature turns on.
+- Code behind a feature inside functions: a crate whose type is a no-op unless its feature is on gates no `mod`, so a driver built without the feature never runs the code of the target. The block of the driver and the `_attention` of `dla harness gen` name each feature that the `default` list does not turn on, with its gated sites in the target's file and in the crate (`cfg(feature)`, `not(feature)`, `cfg_attr` and `cfg!`; `test` conditions are skipped) and the exact `dla harness gen --lang rust --driver --features <list> --probe <F>` command. A target that reads not executed leads with that command, and the queue keeps it open, whatever the number of drivers that missed it, until a harness that targeted it was built with the feature.
 - Coverage: after the measured process `dla harness run` builds the driver again with
   `-C instrument-coverage` into `harness/H<n>/cov-build/`, runs one round (no warm-up, no captures) and reads
   the functions that ran with the `llvm-profdata` and `llvm-cov` of the toolchain that builds it

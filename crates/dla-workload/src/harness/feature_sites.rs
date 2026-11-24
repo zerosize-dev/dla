@@ -68,7 +68,10 @@ fn closure<'a>(
     start: impl Iterator<Item = &'a str>,
 ) -> BTreeSet<String> {
     let mut seen: BTreeSet<String> = BTreeSet::new();
-    let mut stack: Vec<String> = start.filter(|s| local_entry(s)).map(str::to_owned).collect();
+    let mut stack: Vec<String> = start
+        .filter(|s| local_entry(s))
+        .map(str::to_owned)
+        .collect();
     while let Some(f) = stack.pop() {
         if !seen.insert(f.clone()) {
             continue;
@@ -140,7 +143,13 @@ pub fn count_sites(text: &str) -> BTreeMap<String, usize> {
     // Whole-line comments (also doc comments and their examples) are not code.
     let code: String = text
         .lines()
-        .map(|l| if l.trim_start().starts_with("//") { "" } else { l })
+        .map(|l| {
+            if l.trim_start().starts_with("//") {
+                ""
+            } else {
+                l
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n");
     for m in open.captures_iter(&code) {
@@ -447,7 +456,10 @@ mod tests {
         assert_eq!(off, ["extra"]);
         // `--no-default-features` turns the defaults off for the build, not for the rule.
         let g = cf.gaps("src/lib.rs", &cf.enabled(&[], true), &[]);
-        let names: Vec<(&str, bool)> = g.iter().map(|g| (g.feature.as_str(), g.default_on)).collect();
+        let names: Vec<(&str, bool)> = g
+            .iter()
+            .map(|g| (g.feature.as_str(), g.default_on))
+            .collect();
         assert_eq!(names, [("alloc", true), ("extra", false), ("std", true)]);
         // A feature asked for turns on what it names.
         let g = cf.gaps("src/lib.rs", &cf.enabled(&["std".to_owned()], true), &[]);
@@ -498,7 +510,11 @@ mod tests {
         assert_eq!(g.len(), 1);
         // The declaration is a gated site of the crate, in its entry file.
         assert!(g[0].by_module);
-        assert_eq!((g[0].in_file, g[0].in_crate, g[0].in_entry), (0, 1, 1), "{g:?}");
+        assert_eq!(
+            (g[0].in_file, g[0].in_crate, g[0].in_entry),
+            (0, 1, 1),
+            "{g:?}"
+        );
     }
 
     #[test]
