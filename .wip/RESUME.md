@@ -2265,3 +2265,37 @@ flat test-loop readings get only 9 second looks.
     and its summary before a residual can be left.
 - Jetty: Maven build to fill a home started 12:02 (task bepsru3j5, 45 min limit, log
   u107/jetty-try/build.log). If it works: run Jetty alone with --warm-m2 u107/jetty-try/m2.
+
+## 12:40 UTC 2026-11-24 (approx.): cause of the lost Python leak found in the tool; builder H started
+
+- Jetty: the build `mvn -B -q -fae -DskipTests install` PASSED in 5 minutes on JDK 21 (2573 jars,
+  Maven home u107/jetty-try/m2 1.3 GB, built copy u107/jetty-try/project 1.5 GB). The Jetty RUN
+  is deferred to the second blind round (task 106): it would block all building for 3.5 h and
+  its leak class is no census candidate today. Told the owner.
+- otel-python, the exact chain (kept transcript, ledger, retain/R1.json):
+  1. 09:36 (11 min in): driver H3 for another finding (F229) run with --capture alloc,heap;
+     `summarize heap-graph ... --finding F229 | head -c 1800`. The stored record R1 has the
+     holder `static:opentelemetry.metrics._internal._PROXY_METER_PROVIDER` with sites
+     api/metrics/_internal/__init__.py:173, 212, 510, 540, 555 = THE DOCUMENTED LEAK'S HOLDER.
+     No finding at it; nothing ever mentioned it again. (The holder chains built from the
+     Pillow runs DID name the right holder on an unseen project; the workflow dropped it.)
+  2. 10:00: "The queue is empty", then the classify gate listed 48 untied growing lines of the
+     pytest loop; the model added 48 findings in a shell loop with holder container-field
+     (F259 at :173 among them).
+  3. 11:38: one big driver H20 with a real meter provider installed, so get_meter returns early
+     and line 173 never runs; `dla alloc-test H20 --finding F259` wrote E246 favors non-leak:
+     "the function of the line ... ran in this series and none of its blocks stayed"
+     (alloc_cmd.rs near 1183: growth column absent + FUNCTION coverage says executed). Refute
+     accepted. An unsound rule that came in with the Pillow fixes.
+- Builder H (Sonnet, background) started on the clean tree b896d8c: brief
+  wip-notes/holder-first-brief.md, scratch u108. Scope: per-line execution count in the Python
+  agent and inconclusive instead of non-leak when the line did not run; holder `of: project` /
+  `of: tests`; uncovered project holder = first gate item with the literal add command,
+  `_attention` in summarize, lead of run status, refusal `measured-holder-first` on
+  `harness gen --next`; one capture item per series instead of N per-line adds; texts.
+- My verification plan for H: read the diff; suite; my own mutations; Pillow walk
+  (u101/walk.py) must still pass; a new walk on /root/dla-real/src/otel-python that replays the
+  three steps above with the new binary (holder item appears after the H3-like capture; the
+  early-return driver gives inconclusive; refute refused; finding at the holder confirmed);
+  static and dynamic bench; CI on a snapshot; then main.
+- While H builds: do not edit the tree. Next brief to write: family B, the Go test loop.
