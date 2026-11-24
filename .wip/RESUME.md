@@ -3055,3 +3055,25 @@ unattended run at a time and no builder beside it.
   dla-cli or run heavy jobs until it reports.
 - Lesson for briefs: a new gate rule must be checked by the whole dynamic run before it goes
   to CI; N's brief asked only for some test files.
+
+## 21:20 UTC 2026-11-24 (clock checked 21:12): JVM blind run reread; brief J written; lock-fix commit prepared
+
+- Model of this session changed by the owner to claude-opus-5-5 (/model) at about 21:03.
+- JVM blind run (blind-logstash-2-keep) reread: the run ended COMPLETE after 21 min of 3 h.
+  At minute 4, after the first series, the model ran `dla ledger close-rest --remedy "..."`:
+  58 candidates closed unresolved/inconclusive, 28 static-only, 19 left pending. The documented
+  list (F81, container-field, writer at the thread-local initializer, 2 removers) was among the
+  58: the test loop had run its initializer once per test thread, flat, `executed`, settled,
+  and close-rest closed it before any second look. Heap residual S1 426 KB per iteration was
+  resolved unresolved by the model.
+- So the JVM miss has two general causes: (1) close-rest before the second look (brief X part
+  4, written earlier from the Rust case); (2) the second look does not vary threads. Brief J
+  (wip-notes/thread-kind-brief.md): thread-keyed targets (holder thread-local, or owner class
+  holds a thread-local, or a writer in a thread-local initializer, or a thread key), a driver
+  block that names the thread forms per runtime, a `threads` slot in the second-look skeleton,
+  and no settling of a thread-keyed target on a one-thread first pass.
+- Builder order now: (N2 finishing) -> T -> X -> G2 -> J. Each checked by a replay on its real
+  project before any unattended run.
+- Lock-fix commit prepared on main's version of scratch.rs (u127/scratch-lock.rs, only the three
+  hunks of the lock fix; rustfmt clean). To commit with commit-message-27.txt when CI on
+  987170a has finished (a push to main cancels the run in progress).

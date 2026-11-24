@@ -1080,6 +1080,8 @@ fn the_node_texts_say_how_a_built_typescript_library_is_run_and_measured() {
         "are at the original position, `src/a/b.ts:139` instead of `lib/node/chunk-AB12.js:1076`",
         "the record keeps the built position in `built_sites`",
         "`dla ledger resolve <O> --as unresolved` is refused (`capture-not-summarized`)",
+        "summary computed from capture files of that harness exists",
+        "under 64 KiB asks for no capture",
     ] {
         assert!(node.contains(want), "node.md lacks: {want}");
     }
