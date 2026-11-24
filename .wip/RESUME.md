@@ -2401,3 +2401,37 @@ flat test-loop readings get only 9 second looks.
 - After H2: build, freeze, both replays again, Pillow walk again, whole suite, own mutations,
   static + dynamic acceptance (the flat-column rule can change fixture outcomes), VERIFY rows
   for G, commit messages, snapshot with CI, main.
+
+## 13:35 UTC 2026-11-24 (approx.): Pillow walk passes on dla-H1; the Node cause found (TypeScript)
+
+- Pillow walk (u101/walk.py) with u112/dla-H1: as before. F1 (holder PIL.ImageCms._imagingcms)
+  and F2 (native entry at ImageFont.py:580) confirmed without a second capture, own excerpts per
+  bundle, final gate asks for no finding and has no measured_holder item.
+- NODE (blind interceptors run), from the kept transcript and a replay in u113/interceptors
+  (script u113/walk_node.py <dla> <plugin root> <run dir>, binary u112/dla-H1):
+  1. In the blind run the model captured once on the first, generic harness and ran
+     `summarize type-histogram-diff` and `alloc-stack-diff` by hand with 2 of the 4 files (gate
+     fail: captures < 3); it never ran the `summarize heap-graph` command the capture prints.
+     No capture on the later mock-answer drivers. The residual open items were closed as
+     unresolved with the remedy "capture alloc profile then summarize".
+  2. The harness work copy takes only git files (scratch.rs copy_project_for -> git_files), so
+     the git-ignored build output `lib/` and `node_modules/` are missing: a driver cannot
+     `projectRequire('lib/...')`. The blind run's model worked around it in every driver
+     (fs.cpSync of lib into ROOT, absolute require of node_modules). Same failure in my replay
+     until I copied lib and linked node_modules by hand.
+  3. With that done and a unit that sends one mocked request (ClientRequestInterceptor applied,
+     respondWith(new Response('ok')), http.get with agent:false): trend passes
+     node.listeners@lib/node/chunk-VYO5XDY2.js:1076 (+4 per iteration), :54 (+2), :688 (+2),
+     :394, :565, :583, chunk-7Q53NNPV.js:113, and node.heap_total +29 KB per iteration; the
+     printed heap-graph summary passes two growing closure holders in the built chunk. So the
+     tool measures this leak at once. But every site is a line of the BUILT bundle while the
+     candidates are TypeScript lines (and census even lists `.d.ts` declarations under lib/), so
+     nothing ties: "not reached 124 of 172".
+- NEXT BRIEF (N, Node and TypeScript; not written yet): (a) the work copy includes the build
+  output that package.json points at (main, module, exports, files, bin) even when git-ignored,
+  and node_modules resolves from the work copy; (b) a site in a built file that has a source
+  map is reported at the original source position when that source is a project file (keep the
+  built position too); (c) the census does not list declaration files and prefers sources over
+  their build output; (d) a residual above threshold cannot be left unresolved while the
+  harness that shows it has no summarized capture (the summarize commands the capture prints).
+  The dev project for Node so far was plain JavaScript, which hid all of this.

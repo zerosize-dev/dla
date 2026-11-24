@@ -49,6 +49,9 @@ pub enum PlateauVerdict {
     Inconclusive,
     /// The extra window is too short.
     NotRun,
+    /// The column did not grow in the main window of this series (see [`grew`]): the series
+    /// does not reproduce the growth, so its extra window says nothing about it.
+    NeverGrew,
 }
 
 impl PlateauVerdict {
@@ -59,8 +62,33 @@ impl PlateauVerdict {
             Self::Plateau => "plateau",
             Self::Inconclusive => "inconclusive",
             Self::NotRun => "not-run",
+            Self::NeverGrew => "never-grew",
         }
     }
+}
+
+/// True when the column GREW in the main window of the series: a counter's net rise over the
+/// main window is above zero (a counter has no noise to tell a rise from, and its every step is
+/// a whole block or entry); a gauge's Theil-Sen interval over the main window is above zero and
+/// its fitted rise is above `min_rise` (the same smallest rise the plateau test takes as growth)
+/// and above [`MATERIAL`] of its level (`reference` for a process column). A main window of fewer
+/// than two points did not show a rise. Whether the extra window then went flat is the plateau
+/// test's question; a column that never grew did not stop growing.
+pub fn grew(main: &[Point], counter: bool, reference: f64, min_rise: f64) -> bool {
+    let (Some(first), Some(last)) = (main.first(), main.last()) else {
+        return false;
+    };
+    if main.len() < 2 {
+        return false;
+    }
+    if counter {
+        return last.1 > first.1;
+    }
+    let Some(sen) = theil_sen(main, 0.05) else {
+        return false;
+    };
+    let rise = sen.slope * (last.0 - first.0);
+    sen.lo > 0.0 && rise > min_rise && rise > MATERIAL * mean_abs(main).max(reference)
 }
 
 /// The plateau test of one column.
@@ -454,6 +482,11 @@ pub fn combine(
     gc: Option<Gc>,
     expected_rises: Option<f64>,
 ) -> (Favors, Vec<String>) {
+    // A column that never grew in this series has nothing to release and nothing that stopped:
+    // no purge, twin or plateau turns it into a non-leak.
+    if plateau == PlateauVerdict::NeverGrew {
+        return (Favors::Inconclusive, Vec::new());
+    }
     let released = purge.filter(|p| p.verdict == PurgeVerdict::Released);
     let headroom = gc.is_some_and(|g| g.headroom);
     if released.is_some() || headroom {
@@ -490,6 +523,7 @@ pub fn combine(
             vec!["N-WARM".to_owned(), "N-HWM".to_owned()],
         ),
         PlateauVerdict::Continues => (Favors::Leak, vec!["leak".to_owned()]),
+        PlateauVerdict::NeverGrew => (Favors::Inconclusive, Vec::new()),
         PlateauVerdict::Inconclusive | PlateauVerdict::NotRun => {
             if purge.is_some_and(|p| p.verdict == PurgeVerdict::Retained) {
                 (Favors::Leak, vec!["leak".to_owned()])

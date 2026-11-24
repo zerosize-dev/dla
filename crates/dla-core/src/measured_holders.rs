@@ -43,6 +43,8 @@ pub const HOLDER_KIND: &str = "static/global";
 pub struct ProjectHolder {
     /// The retention record it was read from (the latest that names it).
     pub evidence: String,
+    /// The harness whose capture that record was read from, when its path says.
+    pub harness: Option<String>,
     /// `static:<module>.<name>`.
     pub key: String,
     /// `<module>.<name>`, the owner a finding at it has.
@@ -132,10 +134,12 @@ pub fn scan_in(ledger: &Ledger, run_dir: Option<&Path>) -> Scan {
         {
             continue;
         }
+        let mut harness: Option<String> = None;
         if let Source::Artifact { path, .. } = &rec.source
             && let Some(h) = harness_of_path(path)
         {
             out.harnesses.insert(h.to_owned());
+            harness = Some(h.to_owned());
         }
         let entries = holders_of(run_dir, rec);
         let mut tests: BTreeSet<String> = BTreeSet::new();
@@ -167,6 +171,7 @@ pub fn scan_in(ledger: &Ledger, run_dir: Option<&Path>) -> Scan {
                         .unwrap_or_else(|| lines[0].clone());
                     let holder = ProjectHolder {
                         evidence: rec.evidence_id.to_string(),
+                        harness: harness.clone(),
                         key: key.to_owned(),
                         owner,
                         lines,
