@@ -203,7 +203,7 @@ fn the_rust_driver_is_fitted_inside_its_first_round() {
     }
     let dir = tempfile::tempdir().unwrap();
     let t = fs::read_to_string(repo().join("harness/rust/dla_harness.rs")).unwrap();
-    let t = fill(&t, &[("DLA_CRATE", "demo")])
+    let t = fill(&t, &[("DLA_CRATE", "demo"), ("DLA_UNSAFE_EXTERN", "")])
         .replace(
             "todo!(\"DLA-HOOK setup has not been filled in\")",
             "State::default()",

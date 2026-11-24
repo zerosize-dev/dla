@@ -640,15 +640,14 @@ fn a_feature_gating_code_inside_functions_is_said_in_the_block_and_the_attention
     let attention = out["_attention"].as_array().unwrap();
     assert_eq!(attention.len(), 1, "{out}");
     let line = attention[0].as_str().unwrap();
-    assert!(
-        line.contains(
-            "feature enable (3 gated sites in src/lib.rs, 3 in the crate) off by default"
-        ),
-        "{line}"
+    assert_eq!(
+        line,
+        "feature enable is off by default: 1 target has code behind it (gated sites in the crate: 3); run the command under regenerate"
     );
-    assert!(
-        line.ends_with(&format!("regenerate it with {GATED_COMMAND} {target}")),
-        "{line}"
+    assert_eq!(
+        out["regenerate"],
+        format!("{GATED_COMMAND} {target}"),
+        "{out}"
     );
     assert!(
         out.as_object().unwrap().keys().next().map(String::as_str) == Some("_attention"),
@@ -861,14 +860,13 @@ fn the_command_a_workspace_target_prints_runs_as_printed_and_reaches_the_target(
         "--workload",
         "rust:test:libm/Cargo.toml",
     ]);
-    let line = out["_attention"][0].as_str().unwrap();
-    let printed = line.rsplit_once("regenerate it with ").unwrap().1;
+    let printed = out["regenerate"].as_str().unwrap();
     assert_eq!(
         printed,
         format!(
             "dla harness gen --lang rust --driver --workload rust:test:libm/Cargo.toml --features enable --probe {target}"
         ),
-        "{line}"
+        "{out}"
     );
     // The same command from the file, for the queue and the trend.
     let features: Value = serde_json::from_str(
@@ -884,4 +882,130 @@ fn the_command_a_workspace_target_prints_runs_as_printed_and_reaches_the_target(
     r.ok(&["harness", "run", "H2", "--mode", "both"]);
     let trend = r.ok(&["trend", "S1"]);
     assert_eq!(verdict(&trend, &target)["verdict"], "executed", "{trend}");
+}
+
+/// As `workspace`, with eight registries each filled through its own gated function: eight
+/// targets in one gated file, enough for the output of `harness gen` to pass its bound.
+fn workspace_many(dir: &Path) {
+    workspace(dir);
+    let mut src = String::from("use std::sync::Mutex;\n\n");
+    for i in 0..8 {
+        src.push_str(&format!(
+            "static REG{i}: Mutex<Vec<String>> = Mutex::new(Vec::new());\n"
+        ));
+    }
+    src.push('\n');
+    for i in 0..8 {
+        src.push_str(&format!(
+            "#[cfg(feature = \"enable\")]\nfn collect{i}(key: &str) {{\n    REG{i}.lock().unwrap().push(key.to_owned());\n}}\n\n"
+        ));
+    }
+    src.push_str("pub fn record(key: &str) {\n");
+    for i in 0..8 {
+        src.push_str(&format!(
+            "    #[cfg(feature = \"enable\")]\n    collect{i}(key);\n"
+        ));
+    }
+    src.push_str("    let _ = key;\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn records() {\n        super::record(\"a\");\n    }\n}\n");
+    write(dir, "libm/src/lib.rs", &src);
+}
+
+#[test]
+fn the_attention_of_many_targets_is_one_short_line_and_the_command_is_never_cut() {
+    if !have_cargo() {
+        return;
+    }
+    let r = Run::of(workspace_many);
+    let out = r.ok(&[
+        "harness",
+        "gen",
+        "--lang",
+        "rust",
+        "--driver",
+        "--next",
+        "8",
+        "--workload",
+        "rust:test:libm/Cargo.toml",
+    ]);
+    assert_eq!(
+        out["truncated"], true,
+        "the output must be over its bound: {out}"
+    );
+    let attention = out["_attention"].as_array().unwrap();
+    assert_eq!(attention.len(), 1, "{out}");
+    let line = attention[0].as_str().unwrap();
+    assert!(!line.ends_with("..."), "{line}");
+    assert_eq!(
+        line,
+        "feature enable is off by default: 8 targets have code behind it (gated sites in the crate: 16); run the command under regenerate"
+    );
+    assert!(line.len() < 150, "{}", line.len());
+    // The command is whole, names every target, and runs as printed.
+    let printed = out["regenerate"].as_str().unwrap();
+    assert!(!printed.ends_with("..."), "{printed}");
+    assert!(printed.len() > 160, "{}", printed.len());
+    assert_eq!(printed.matches("--probe").count(), 8, "{printed}");
+    let args: Vec<&str> = printed.split_whitespace().skip(1).collect();
+    let again = r.ok(&args);
+    assert!(again.get("_attention").is_none(), "{again}");
+    assert!(again.get("regenerate").is_none(), "{again}");
+}
+
+fn have_toolchain(channel: &str) -> bool {
+    let ok = Proc::new("cargo")
+        .arg(format!("+{channel}"))
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !ok {
+        eprintln!("skipping: toolchain {channel} is not installed");
+    }
+    ok
+}
+
+/// A crate of edition 2021 that pins an old toolchain, which rejects `unsafe extern` blocks.
+fn pinned(dir: &Path) {
+    write(
+        dir,
+        "Cargo.toml",
+        "[package]\nname = \"old\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    write(
+        dir,
+        "rust-toolchain.toml",
+        "[toolchain]\nchannel = \"1.80.0\"\n",
+    );
+    write(
+        dir,
+        "src/lib.rs",
+        "use std::sync::Mutex;\n\nstatic KEPT: Mutex<Vec<String>> = Mutex::new(Vec::new());\n\npub fn keep(key: &str) {\n    KEPT.lock().unwrap().push(key.to_owned());\n}\n",
+    );
+}
+
+#[test]
+fn a_crate_that_pins_an_old_toolchain_gets_a_driver_that_builds_and_a_failure_names_the_channel() {
+    if !have_cargo() || !have_toolchain("1.80.0") {
+        return;
+    }
+    let r = Run::of(pinned);
+    r.ok(&["harness", "gen", "--lang", "rust", "--driver", "--next"]);
+    let text = fs::read_to_string(r.driver("H1")).unwrap();
+    assert!(text.contains("    extern \"C\" {"), "plain extern for 2021");
+    assert!(!text.contains("unsafe extern"));
+    r.fill("H1", "old::keep(&key.to_string());");
+    let out = r.ok(&["harness", "run", "H1", "--mode", "fresh"]);
+    assert!(out["summary"]["series"][0].is_string(), "{out}");
+
+    // A hook that does not compile: the refusal says which compiler spoke.
+    let r = Run::of(pinned);
+    r.ok(&["harness", "gen", "--lang", "rust", "--driver", "--next"]);
+    r.fill("H1", "old::keep(&key.to_string()) +;");
+    let o = r.run(&["harness", "run", "H1", "--mode", "fresh"]);
+    assert_ne!(o.code, 0, "{}", o.text);
+    assert_eq!(o.json["error"]["code"], "harness-failed", "{}", o.text);
+    let msg = o.json["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("did not build with the pinned toolchain 1.80.0 (rust-toolchain.toml)"),
+        "{msg}"
+    );
 }

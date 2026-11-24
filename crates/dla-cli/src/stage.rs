@@ -35,6 +35,11 @@ pub fn finish(
         .summary
         .as_object_mut()
         .and_then(|m| m.remove("_attention"));
+    // The command a feature-gated Rust harness is generated again with: a top-level key.
+    let regenerate = out
+        .summary
+        .as_object_mut()
+        .and_then(|m| m.remove("regenerate"));
     let mut v = json!({
         "ok": true,
         "command": command,
@@ -49,6 +54,9 @@ pub fn finish(
     }
     if let (Value::Object(m), Some(a)) = (&mut v, attention) {
         m.insert("_attention".into(), a);
+    }
+    if let (Value::Object(m), Some(r)) = (&mut v, regenerate) {
+        m.insert("regenerate".into(), r);
     }
     Ok(v)
 }

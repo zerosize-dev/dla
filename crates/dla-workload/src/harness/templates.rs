@@ -135,6 +135,7 @@ mod tests {
             ("ROUNDS", "8"),
             ("REPEAT", "64"),
             ("CRATE", "demo"),
+            ("UNSAFE_EXTERN", ""),
             ("SELECT", "\"shop.CartTest\""),
             ("TESTS", "[\"tests/test_a.py\"]"),
         ];
@@ -298,6 +299,11 @@ mod tests {
             !RUST_DRIVER.contains("&& let "),
             "let chain in the Rust driver"
         );
+        // Nothing newer than the minimum Rust version of the driver (1.70): no inline const
+        // (1.79), no `is_none_or` (1.82), no `LazyLock` (1.80), no `unsafe extern` literal (1.82).
+        for newer in ["[const {", "is_none_or", "LazyLock", "unsafe extern"] {
+            assert!(!RUST_DRIVER.contains(newer), "{newer} in the Rust driver");
+        }
     }
 
     #[test]
