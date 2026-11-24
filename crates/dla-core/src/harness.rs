@@ -1447,6 +1447,9 @@ impl LineRuns {
     /// Writes the file atomically.
     pub fn save(&self, run_dir: &Path, harness: &str) -> Result<(), Error> {
         let path = line_runs_path(run_dir, harness, &self.series);
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir).map_err(|e| Error::io(dir, e))?;
+        }
         write_atomic(&path, to_pretty_json(self).as_bytes())
     }
 

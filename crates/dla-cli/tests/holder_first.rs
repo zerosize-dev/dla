@@ -339,6 +339,36 @@ fn a_unit_that_runs_the_line_and_releases_the_object_is_non_leak_with_the_count(
 }
 
 #[test]
+fn an_alloc_test_counts_the_line_of_a_finding_on_a_harness_that_does_not_target_it() {
+    if !have_python() {
+        return;
+    }
+    // H1 targets the table (F1) only; it measured the line of F2 (its column is tied to F2). Its
+    // unit is then changed to take the early-return branch, and the alloc-test on H1 is about F2:
+    // the harness's manifest names no line of F2, so the alloc-test itself asks for its count.
+    let r = prepared(KEEPS);
+    let f = finding_at_the_line(&r);
+    let driver = r.run_dir.join("harness/H1/driver/dla_harness.py");
+    let text = fs::read_to_string(&driver).unwrap();
+    let old = "_state[\"providers\"].make(i)";
+    assert_eq!(text.matches(old).count(), 1);
+    fs::write(
+        &driver,
+        text.replace(old, "_state[\"providers\"].make(i, True)"),
+    )
+    .unwrap();
+    let a = r.ok(&["alloc-test", "H1", "--finding", &f]);
+    assert_eq!(a["favors"], "inconclusive", "{a}");
+    assert_eq!(
+        a["basis"],
+        format!(
+            "the function of {SITE} ran but the line itself did not (a branch the unit does not take)"
+        ),
+        "{a}"
+    );
+}
+
+#[test]
 fn a_series_with_no_count_of_the_line_is_inconclusive_never_non_leak() {
     if !have_python() {
         return;

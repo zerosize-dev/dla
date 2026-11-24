@@ -646,6 +646,63 @@ fn the_references_teach_the_stack_capture_after_an_alloc_test_at_a_growing_line(
 }
 
 #[test]
+fn the_references_teach_a_measured_holder_first_and_that_a_line_the_unit_does_not_execute_proves_nothing()
+ {
+    // Line breaks do not matter: every text is read with its whitespace collapsed.
+    let read = |p: &str| {
+        fs::read_to_string(root().join(p))
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let python = read("skills/detect-leak-anywhere/references/python.md");
+    let stages = read("skills/detect-leak-anywhere/references/stages.md");
+    let report = read("skills/detect-leak-anywhere/references/evidence-and-report.md");
+    let verifier = read("agents/verifier.md");
+    let verify = read("docs/VERIFY.md");
+    for want in [
+        "A holder \"of the project\" has a module global or a class attribute of a project source file that is not test code as its root",
+        "a holder \"of the tests\" is rooted in test code (the driver module `__main__` or the generated harness module, a file under a directory named `test` or `tests`, `test_*.py`, `*_test.py`, `conftest.py`) or in a module of the test runner",
+        "A holder of the project that keeps a growing line and that no finding has the owner of is the first thing to act on",
+        "`dla harness gen --next` is refused with `measured-holder-first`",
+        "A growing line that only a holder of the tests keeps is no finding of the project",
+        "A line the unit does not execute proves nothing.",
+        "a line on a branch the unit does not take allocates nothing, so nothing stays, and that is no evidence against a leak at the line",
+        "When the function ran and the line did not, or the series has no count of the line, it says `inconclusive`",
+        "Never refute a leak with such a result.",
+    ] {
+        assert!(python.contains(want), "python.md lacks: {want}");
+    }
+    for want in [
+        "A holder of the project (a module global or a class attribute of a project source file that is not test code) that keeps a growing line and that no finding has the owner of is the first thing to act on, before the next driver and before any alloc-test",
+        "`dla harness gen --next` is refused with `measured-holder-first`",
+        "A holder of the tests (the driver, a file of test code, the test runner) is no finding",
+        "A line the unit does not execute proves nothing (a branch it does not take allocates nothing): an alloc-test that says `inconclusive` because the line did not run is not evidence against the leak.",
+    ] {
+        assert!(stages.contains(want), "stages.md lacks: {want}");
+    }
+    assert!(
+        report.contains("| `measured-holder-first` |"),
+        "evidence-and-report.md does not list the measured-holder-first refusal"
+    );
+    assert!(
+        verifier.contains(
+            "A `favors: inconclusive` alloc-test whose text says the line did not run (\"the function of ... ran but the line itself did not\", or that the series has no count of the line) is not evidence against the leak: the unit never executed the line."
+        ),
+        "verifier.md lacks the sentence on an alloc-test that says the line did not run"
+    );
+    for want in [
+        "| A holder of the project that a capture named had no consequence | corrected |",
+        "| A line the unit did not execute was read as a line that ran and kept nothing | corrected |",
+    ] {
+        assert!(verify.contains(want), "VERIFY.md lacks the row: {want}");
+    }
+    // The skill itself is not touched by these rules: it stays short.
+    assert!(!skill().contains("measured-holder-first"));
+}
+
+#[test]
 fn the_references_teach_the_pytest_loop_as_the_first_pass_of_a_python_queue() {
     // Line breaks do not matter: every text is read with its whitespace collapsed.
     let read = |p: &str| {

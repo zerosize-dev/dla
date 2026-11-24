@@ -1418,6 +1418,7 @@ mod tests {
         assert_eq!(of("static:pkg.api.K.items"), Some(Of::Project));
         assert_eq!(of("stack:w@a.py:9"), None);
         for (m, want) in [
+            ("__main__", Some(Of::Tests)),
             ("conftest", Some(Of::Tests)),
             ("pkg.store_test", Some(Of::Tests)),
             ("_pytest.runner", Some(Of::Tests)),

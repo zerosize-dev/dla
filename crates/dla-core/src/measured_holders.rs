@@ -95,7 +95,7 @@ pub fn add_command(evidence: &str, owner: &str, site: &str) -> String {
 
 /// The `holders` of a retention record: the raw file's when it can be read, else the bounded
 /// entries of the result.
-fn holders_of<'a>(run_dir: Option<&Path>, rec: &'a EvidenceRecord) -> Vec<Value> {
+fn holders_of(run_dir: Option<&Path>, rec: &EvidenceRecord) -> Vec<Value> {
     let from_raw = run_dir
         .zip(rec.raw.as_deref())
         .and_then(|(dir, raw)| fs::read_to_string(dir.join(raw)).ok())
