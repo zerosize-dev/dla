@@ -2831,3 +2831,57 @@ flat test-loop readings get only 9 second looks.
 - ORDER DECIDED for round 2: set A reruns FIRST (development set: do the fixes hold unattended?),
   set B only when set A mostly passes (set B is informative once), Jetty last. Machine has 4
   cores: two runs at a time at most, no builder with cargo tests beside them.
+
+## 19:12 UTC 2026-11-24 (clock checked): reruns of set A started on the tree in CI; first result; builder W started
+
+(The two headings above, "18:55" and "19:10", were about 10 minutes ahead of the clock.)
+
+- FROZEN BUILD FOR THE RERUNS: tree of snapshot 86810ca (main 546b74c + R3 + R4 + N + the
+  Windows lint line). Binary /root/dla-real/bin/dla (sha256 b464ca5169e0, built 19:03; copy
+  u119/dla-R2a), plugin copy from `git archive 86810ca`. CI on 86810ca: waiter b6s7ds0ky, logs
+  u115/ci-snap-27.
+- Launcher: wip-notes/start-run.sh <project key> <run name> (all options of every run).
+- r2-otel-python: started 19:04 (waiter bvuiwtfex).
+- r2-fastrace: started 19:04, ENDED 19:06 after 93 s: COMPLETE, 1 harness run, nothing
+  confirmed. Records in /root/dla-real/r2-fastrace-keep (redacted transcript, H2 driver and
+  targets); run directory deleted. What happened:
+  - The feature fix WORKED: harness gen warned, the model ran the command under `regenerate`
+    with `--features enable`; the driver built on the pinned 1.80.0 after two compile fixes of
+    its own hooks.
+  - The driver's set-up called the library's reporter set-up and flushed each unit. The
+    documented leak exists only when NO reporter is set (the ring buffer then fills and the
+    sender's `pending_messages` grows). The three writer lines (spsc.rs:38, :49, :55) sit under
+    `if let Err(PushError::Full(..))` and never ran; trend said `executed` for the target
+    (function-level), all columns flat, queue "executed 7, missed once 1", close-rest closed 43,
+    final gate passed after 1 minute of 167.
+  - GENERAL CAUSE (family C, "untriggered candidates"): the verdict `executed` is per function;
+    a flat series says nothing about a holder whose adding lines did not run. The same shape in
+    the Go library (append after an early return while a delegate is set) and, in a weaker form
+    (writer ran once per thread), in the JVM library.
+  - Second general point: a run may end COMPLETE after one harness and 1% of the budget when
+    every ranked target was `executed` once. The second-look rule did not hold it (to check
+    after W: why; the queue said executed 7 of 8).
+- BUILDER W started 19:10 (Sonnet, agent ac590ddf86cbc1da2): wip-notes/writer-lines-brief.md.
+  Counts per writer line from llvm-cov regions (Rust), cover blocks (Go), V8 ranges (Node);
+  verdict `writer_not_executed`; the queue treats it as missed; the next driver block shows the
+  writer line and the lines above that guard it (indentation rule, any language). JVM has no
+  line data: a stated limit. Tasks 111 (W) and 112 (Go order and modules).
+- First Go blind run, reread (blind-otel-go-keep transcript): the model stopped after 7 min
+  with 171 of 180 budget minutes left and said why: one hand-written driver per batch of 3,
+  nested Go modules do not build in the generated harness (it wrote GOWORK files in $TMPDIR),
+  coverage collection failed in a cross-module package, and its first confirmed "leaks" were
+  test helpers (tracetest SpanRecorder). The Stop hook pushed it three times; it refused the
+  fourth.
+- Go order with the changed build (u112/otel-go, list in u119/otel-go-list.jsonl, 149 ranked):
+  rank 1 F231 internal/global (closure, tier 4, score 133) so the FIRST batch is the package
+  of the documented holder: F231, F217..F223 (setDelegate registration rows, 0 writers). The
+  documented holder F234 (meter.go:95, 14 writers, 1 remover) is rank 118: tier 4 (a census
+  container with any remover is tier 4, without is tier 2), score 61. 12 of the first 40 ranks
+  are test-support packages (`tracetest`, `otest`, `otlptracetest`, `internaltest`): the word
+  rule in rank.rs does not split `tracetest`. u112/otel-go/.dla to delete (done below).
+- micrometer warm-up ended: all-modules compile exit 1 (some modules fail; not looked at), the
+  two harness class-path tasks of micrometer-core work online and OFFLINE with the proxy closed
+  (76 and 138 entries); Gradle home 527 MB at u119/micrometer-try/gradle.
+- Order of next steps: wait for r2-otel-python; when CI on 86810ca is green: commits 2 and 3
+  (messages 24, 25) and preview.8; then interceptors and otel-go reruns (otel-go is expected to
+  miss until task 112); builder W result -> verify -> next frozen build -> fastrace again.
