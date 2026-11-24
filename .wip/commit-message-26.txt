@@ -1,0 +1,101 @@
+Built Node libraries are run and measured at their sources; the Rust driver builds on a pinned toolchain
+
+Two changes from the unattended test on projects the tool had never seen:
+the cause of its fourth miss, and two defects that the hand check of the
+last change left open.
+
+A NODE LIBRARY WRITTEN IN TYPESCRIPT
+
+Its `package.json` points at a bundled build output
+that git ignores, and each bundle has a source map. The run confirmed
+nothing. Read from its kept records and reproduced by hand:
+
+- `dla harness gen` copies the project from the git file list, so the
+  build output and `node_modules` were missing from the harness copy and a
+  driver could not load the package. The model worked around it in each of
+  86 drivers.
+- Every site the agent reported and every coverage answer was a position
+  in the bundle, while the candidates are lines of the `.ts` sources: 124
+  of 172 targets read "not reached", and listener counts that grew with
+  every request were tied to nothing.
+- The census listed declaration files and bundles as holders: 251
+  candidates, most of them not source.
+- The heap residual was above its threshold on 178 of 370 rows and was
+  left as unresolved with the remedy "capture, then summarize"; no capture
+  of a harness that showed the growth had been summarized.
+
+The change:
+
+- A Node harness copy also takes the git-ignored directories that the
+  package's manifest names (`main`, `module`, `bin`, the strings of
+  `exports`, the directories of `files`), and gets a link to the project's
+  `node_modules` beside each manifest it holds. The output of `harness gen`
+  says how many files and links that was. Thinning leaves the link alone.
+- The census skips declaration files and any script whose source map
+  names a file of the project: the sources are read instead.
+- A site in a script that has a source map is reported at the original
+  position when that source is a file of the project; the built position
+  is kept beside it. The agent maps listeners, timers, resources and
+  detector sites; coverage is mapped where `dla trend` reads it, so a
+  target at a `.ts` line is "executed" when its function ran in the
+  bundle; allocation-profile frames find their map through the script's
+  own comment. A project of plain JavaScript gives the records it gave
+  before.
+- A heap residual above its threshold is a gate item with the capture
+  command, and resolving its open item as unresolved is refused, until a
+  capture of the harness that shows it has been summarized. This holds for
+  the runtimes that have a capture.
+
+On the library, with a unit that sends one mocked request and no manual
+step: the census lists 87 candidates, all in the sources; the driver loads
+the built package; seven listener columns grow at lines of the TypeScript
+sources, two of them at lines of census candidates, and the heap by about
+28 KB per unit.
+
+Not covered. The holders of a heap snapshot summary carry a script name
+and no position, so they still name the bundle. A bundle whose map is
+inlined is still read by the census. The link to `node_modules` on Windows
+was compiled and not run. The mapping of allocation-profile frames through
+the script's comment was tested on a parser, not on a real capture.
+
+THE RUST DRIVER
+
+Two defects left open by the last change, both seen when the changed tool
+was run by hand on the Rust library of the unattended test.
+
+The library pins its toolchain to 1.80.0 in `rust-toolchain.toml`. The
+generated driver did not compile there: its own code had an
+`unsafe extern "C"` block, which exists from Rust 1.82, and an inline
+`const` in an array, which exists from 1.79. In the unattended run the
+model lost time on this and changed the toolchain by hand.
+
+- The driver now holds to Rust 1.70, and its header and the Rust notes say
+  so. An `extern` block is written `unsafe extern` only when the crate's
+  edition is 2024 or later; the edition is read from the crate's manifest,
+  or from the workspace root when the crate inherits it. A template test
+  keeps the newer forms out.
+- When a harness does not build and the project pins a toolchain, the
+  refusal names the pinned channel, so the reader knows which compiler
+  spoke.
+
+`dla harness gen` warned about a feature that is off by default with one
+`_attention` entry per target, each ending in the command that turns the
+feature on. When the output is over its bound a protected string is cut at
+160 characters, so with seven targets every entry lost its command.
+
+- `_attention` now has one short entry per feature: that it is off, how
+  many targets of the harness have code behind it, the count of gated sites
+  in the crate, and where the command is. The command is in a new top-level
+  key, `regenerate`, that the output bound never cuts.
+
+On the library, with its own toolchain and no override: the warning is one
+line, the command under `regenerate` runs as printed, the driver builds,
+the code of the documented holder runs and live memory grows by 236 bytes
+per unit.
+
+Not covered. Rust 1.70 itself is not installed here: the claim rests on
+the versions in which the forms the driver uses became stable, and the
+driver was built with 1.80.0 and with the current stable. The coverage
+build of a harness is a separate build and its failure does not name the
+pinned channel. A workspace whose root pins the channel while a member
+sets its own edition was not tried.

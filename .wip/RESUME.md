@@ -2770,3 +2770,29 @@ flat test-loop readings get only 9 second looks.
   the same commit is green on the dev branch and its tree was green as snapshot f0a84e5. Failed
   job re-run queued (waiter logs u115/ci-main-24-rerun). Task 110 collects the four flaky tests
   of today.
+
+## 18:55 UTC 2026-11-24: local suite on the N tree: one failure, the JVM flake; N tree pushed for CI
+
+- Local suite (u115/suite.sh) on main + R3 + R4 + N: fmt, clippy, schema clean; 3518 passed,
+  1 failed, 5 ignored; Python files: only the two known gc.freeze failures; static 64 pass.
+- The failure: alloc_test_jvm.rs:289 `an_unbound_alloc_test_of_a_command_that_runs_the_projects_
+  workload_can_refute_a_finding`, `favors` inconclusive. Reruns of the file: fail, ok, ok; the
+  one test alone under 8 busy loops: ok three times. Its answer when it failed (suite.log):
+  basis "every column that passed the gate in the latest trend of the harness, and os.rss";
+  columns os.rss, os.rss_anon, os.vm_data, os.vm_hwm all `plateau` with purge `retained`
+  (trim-native-heap). So: under load (11 JVM tests at once) the JVM's resident memory rises in
+  a few rare steps, the trend passes the os.* columns, the extension shows a plateau, the purge
+  keeps the growth, and `combine()` (judge.rs:515) answers inconclusive because the plateau
+  window is too short to have shown another rise (`expected_rises` < MIN_EXPECTED_RISES = 3).
+  SAME MECHANISM as the CI flake jvm-pool-warmup ("unbound alloc-test inconclusive, growth in
+  os.rss left unresolved"): tasks 99 and 110. The answer is honest for the data; the fix belongs
+  in how long the extension runs when only the window length holds the verdict back (the tool
+  already computes the points that would reach 3 expected rises: judge.rs:247, alloc_cmd.rs:322)
+  or in the fixture's unit count. Not touched by N, R3, R4.
+- VERIFY row of the census part echoed the evidence project's directory name in a holder
+  example (from my own brief): replaced by `lib.node.parts.X...` (one string, VERIFY.md only).
+- Decision: push the N tree (main + R3 + R4 + N) for CI now. This cancels the re-run of the
+  dynamic job on bb8fd30 (same branch). When the N tree is green: commit 2 = tree of bb8fd30
+  with message 24 (its own CI: 14 jobs green, the dynamic job failed only in the JVM flake; its
+  superset tree fully green), commit 3 = N tree with message 25. commit-message-26.txt is a
+  combined message, kept as a fallback only.
