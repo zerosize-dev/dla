@@ -2711,3 +2711,11 @@ flat test-loop readings get only 9 second looks.
 - Snapshot of this tree pushed WITHOUT [skip ci] (see the next line of the log); when green:
   `bash wip-notes/commit-snapshot-tree.sh <sha> wip-notes/commit-message-24.txt`, push main and
   dev, then the version commit 0.9.0-preview.8 and the release.
+- 17:35 UTC: snapshot bb8fd30 (main + R3 + R4) pushed WITHOUT [skip ci]; CI waiter bohvq6bo1
+  (logs u115/ci-snap-25). CI on main 546b74c: waiter bikgtj12t (logs u115/ci-main-24).
+- `cargo clean -p dla-cli` again (2.5 GB freed; 5.2 GB free).
+- Builder N (Sonnet, background) STARTED on the Node/TypeScript brief
+  (wip-notes/node-ts-brief.md, first paragraph updated; scratch u114). From now on the working
+  tree holds R3 + R4 (in snapshot bb8fd30) PLUS N's edits in progress: the second commit is made
+  from the tree of bb8fd30 with commit-snapshot-tree.sh, never from the working tree. Snapshots
+  while N works carry [skip ci].

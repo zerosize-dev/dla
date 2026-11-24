@@ -1,9 +1,11 @@
 # Brief N: a Node project that is built before it runs (TypeScript)
 
-Repository: /home/user/dla (Rust workspace, branch `main`). The working tree holds uncommitted
-changes of two other builders (Go census; Python holders, alloc-test rules, gate). Leave what
-you do not need alone; where you must edit a file they changed (`crates/dla-core/src/gate.rs`),
-edit only your own lines.
+Repository: /home/user/dla (Rust workspace, branch `main`). The working tree holds a small
+uncommitted change to the Rust driver (13 files: `harness/rust/`, `crates/dla-workload/src/harness/
+{gen,run,targets,templates}.rs`, `crates/dla-cli/src/{out,stage}.rs`, tests, texts). Leave it as
+it is; where you must edit one of those files, add your own lines only. You are the only
+builder in the tree. Disk space is short (about 5 GB free): do not build more test binaries
+than the checks below need, and delete nothing but your own scratch files.
 Scratch directory: /tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/u114
 (create it; write nothing else outside the repository).
 
