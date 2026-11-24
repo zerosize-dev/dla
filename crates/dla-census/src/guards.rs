@@ -275,6 +275,17 @@ mod tests {
     }
 
     #[test]
+    fn a_block_that_is_not_a_condition_and_a_closed_loop_beside_the_line_are_not_guards() {
+        // `with` encloses the line but decides nothing.
+        let py = "def put(self, v):\n    with self.lock:\n        self.items.append(v)\n";
+        assert!(guard_lines(py, 3, Some(1)).is_empty());
+        // The loop above is closed before the `if` that encloses the line.
+        let rs = "fn f() {\n    for x in y {\n        g(x);\n    }\n    if a {\n        w.push(1);\n    }\n}\n";
+        let g = guard_lines(rs, 6, Some(1));
+        assert_eq!(g, [(5, "if a {".to_owned())], "{g:?}");
+    }
+
+    #[test]
     fn at_most_six_lines_and_each_is_cut() {
         let mut s = String::from("fn f() {\n");
         for d in 0..8 {

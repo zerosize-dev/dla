@@ -225,7 +225,7 @@ fn go_line(blocks: &[GoBlock], file: &str, line: u32) -> Option<u64> {
     blocks
         .iter()
         .filter(|b| same_file(&b.path, file) && b.start.0 <= line && line <= b.end.0)
-        .min_by_key(|b| b.start)
+        .max_by_key(|b| b.start)
         .map(|b| b.count)
 }
 
@@ -666,5 +666,33 @@ mod/p/n.go:3.1,4.2 1 1\n";
         );
         assert_eq!(count_of(&got, 0), Some(0), "{got:?}");
         assert_eq!(count_of(&got, 1), Some(5), "{got:?}");
+    }
+    #[test]
+    fn a_node_range_that_starts_and_ends_in_two_sources_counts_for_neither() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().canonicalize().unwrap();
+        let cov = work.join("cov");
+        fs::create_dir_all(&cov).unwrap();
+        fs::write(work.join("a.ts"), "one\ntwo\n").unwrap();
+        fs::write(work.join("b.ts"), "one\ntwo\n").unwrap();
+        // Generated line 0 comes from a.ts and line 1 from b.ts (a bundle of two modules).
+        let js = "function f() {\nreturn 1; }\n//# sourceMappingURL=lib.js.map\n";
+        fs::write(work.join("lib.js"), js).unwrap();
+        fs::write(
+            work.join("lib.js.map"),
+            r#"{"version":3,"sources":["a.ts","b.ts"],"mappings":"AAAA;ACAA"}"#,
+        )
+        .unwrap();
+        let doc = json!({"result": [{"url": url_of(&work, "lib.js"), "functions": [
+            {"functionName": "f", "isBlockCoverage": true, "ranges": [
+                {"startOffset": 0, "endOffset": js.find("; }").unwrap() + 3, "count": 9}]}]}]});
+        fs::write(cov.join("coverage-1.json"), doc.to_string()).unwrap();
+        let got = node_line_counts(
+            &cov,
+            &work,
+            &[("a.ts".to_owned(), 1), ("b.ts".to_owned(), 1)],
+        );
+        assert_eq!(got[0]["count"], Value::Null, "{got:?}");
+        assert_eq!(got[1]["count"], Value::Null, "{got:?}");
     }
 }

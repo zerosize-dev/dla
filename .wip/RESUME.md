@@ -2954,3 +2954,31 @@ unattended run at a time and no builder beside it.
   inside the foreground limit, a clean-up that does not abort the run, the retention walk), X
   (growth first: task 113), G2 (Go order and modules: task 112). No more unattended runs until
   W is verified; then one run at a time.
+
+## 20:25 UTC 2026-11-24 (clock 20:06): Node capture replayed by hand; briefs T and X written
+
+- Replay on the Node library (u122/proj, run 20261124-195747-5c30, frozen binary u119/dla-R2a,
+  unit = 1 or 2 mocked http.get requests): trend passes node.listeners@handleRequest.ts:103
+  (F85), MockHttpSocket.ts:353, :389 (F30), :659 and 11 more. NOTE: F85's listener column grows
+  with plain http.get and no shared signal, so the model's hand control in the rerun (fetch
+  with one shared AbortController) tested something its driver did not do.
+- `dla gap S1 --residual`: heap 42,320 bytes per unit unattributed, threshold 10,580, open item
+  O1; THEN the gate's first item is `residual_capture` (N's part 4 works). The row is the
+  missing link: only `dla gap --residual` writes it.
+- Capture run: 44 s, 4 heap snapshots (593 MB), summaries pass: type-histogram-diff 43 s,
+  heap-graph 63 s. heap-graph creates F88, F89 (closures of the request handler), says
+  "needed: a refuted non-leak sibling and a holder, then dla ledger confirm F88".
+- DEFECT FOUND: all six growing holders (5,940 instances each: MockHttpSocket.<symbol
+  dla.listeners>, two closure variables of the request handler, runtime stream objects) have the
+  path (GC roots) -> (Strong root list) -> .weak_refs_keep_during_job -> object. That root is
+  V8's keep-alive for objects a WeakRef was read from in the current job; our preload reads its
+  WeakRefs in countListeners just before the snapshot. 45 of 200 holders. The real retainer is
+  hidden and the top holder is the agent's own record. Results kept in u122/keep.
+- Briefs ready (wip-notes/): time-limit-brief.md (T: `dla run stop`, leftover clean-up, a
+  test-loop command that ends by itself within DLA_COMMAND_SECS = 420 s capture included,
+  retention walk that names something on a large heap) and growth-first-brief.md (X: trend
+  writes the residual rows, `capture-first` refusal of `harness gen --next`, Node heap summary
+  skips the keep-alive root and the agent's own statics and symbol fields, per-site count
+  column text).
+- Still to write: G2 (Go order and nested modules), close-rest versus second look, a recorded
+  control series (design open).
