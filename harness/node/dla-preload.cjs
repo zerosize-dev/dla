@@ -70,6 +70,119 @@ const FILE_PREFIX = ROOT === null ? null : 'file://' + ROOT + '/';
 // call-site attribution
 // --------------------------------------------------------------------------------------------
 
+// Source maps. A built file that ends with a `sourceMappingURL` comment whose map lists a source
+// that is a file of the project is reported at the original position (`src/a/b.ts:139`), read with
+// node's own `module.SourceMap` (the maps are not enabled for the process, so stack traces of the
+// target stay as they are). Without a map, an entry or a project source, the built position is
+// kept. `builtSites` remembers, for every mapped site, the built position it came from; it is
+// written as `built_sites` in the records, and only when something was mapped.
+const MAP_BYTES_CAP = 32 << 20;
+const MAP_TAIL = 1024;
+const BUILT_SITES_CAP = 2000;
+const SourceMapClass = typeof Module.SourceMap === 'function' ? Module.SourceMap : null;
+const mapsByFile = new Map(); // absolute built file -> {map, dir, root} | null
+const mappedAt = new Map(); // "file:line:col" -> mapped site | null
+const sourceFiles = new Map(); // absolute path -> is a regular file
+const builtSites = new Map(); // mapped site -> built site
+
+function readMapText(file) {
+  let fd = null;
+  try {
+    fd = fs.openSync(file, 'r');
+    const size = fs.fstatSync(fd).size;
+    const n = Math.min(size, MAP_TAIL);
+    const buf = Buffer.alloc(n);
+    fs.readSync(fd, buf, 0, n, size - n);
+    const lines = buf.toString('utf8').split('\n');
+    let url = null;
+    for (let i = lines.length - 1; i >= 0 && url === null; i -= 1) {
+      const m = /^\s*\/\/[#@] sourceMappingURL=(\S+)\s*$/.exec(lines[i]);
+      if (m) url = m[1];
+    }
+    if (url === null) return null;
+    if (url.startsWith('data:')) {
+      const comma = url.indexOf(',');
+      if (comma < 0) return null;
+      const body = url.slice(comma + 1);
+      const text = /;base64$/.test(url.slice(0, comma)) ? Buffer.from(body, 'base64').toString('utf8') : decodeURIComponent(body);
+      return { text, dir: path.dirname(file) };
+    }
+    if (url.includes('://')) return null;
+    const mapFile = path.resolve(path.dirname(file), decodeURIComponent(url));
+    if (fs.statSync(mapFile).size > MAP_BYTES_CAP) return null;
+    return { text: fs.readFileSync(mapFile, 'utf8'), dir: path.dirname(mapFile) };
+  } catch (_) {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch (_) {
+        // nothing to do
+      }
+    }
+  }
+}
+
+function loadMap(file) {
+  if (SourceMapClass === null) return null;
+  const found = readMapText(file);
+  if (found === null) return null;
+  try {
+    const payload = JSON.parse(found.text);
+    return { map: new SourceMapClass(payload), dir: found.dir, root: typeof payload.sourceRoot === 'string' ? payload.sourceRoot : '' };
+  } catch (_) {
+    return null;
+  }
+}
+
+function isProjectFile(abs) {
+  let known = sourceFiles.get(abs);
+  if (known === undefined) {
+    try {
+      known = fs.statSync(abs).isFile();
+    } catch (_) {
+      known = false;
+    }
+    sourceFiles.set(abs, known);
+  }
+  return known;
+}
+
+/** The original "relative/source.ts:line" of a 1-based built position, or null. */
+function mappedSite(rel, line, column) {
+  const key = `${rel}:${line}:${column}`;
+  if (mappedAt.has(key)) return mappedAt.get(key);
+  let site = null;
+  try {
+    const abs = path.join(ROOT, rel);
+    let loaded = mapsByFile.get(abs);
+    if (loaded === undefined) {
+      loaded = loadMap(abs);
+      mapsByFile.set(abs, loaded);
+    }
+    if (loaded !== null) {
+      const entry = loaded.map.findEntry(line - 1, column - 1);
+      if (entry && typeof entry.originalSource === 'string' && entry.generatedLine === line - 1) {
+        let src = entry.originalSource;
+        if (src.startsWith('file://')) src = require('url').fileURLToPath(src);
+        else src = path.resolve(loaded.dir, loaded.root, src);
+        if (src.startsWith(ROOT_PREFIX)) {
+          const inner = src.slice(ROOT_PREFIX.length).split(path.sep).join('/');
+          if (!inner.startsWith('node_modules/') && !inner.includes('/node_modules/') && isProjectFile(src)) {
+            site = `${inner}:${entry.originalLine + 1}`;
+            if (builtSites.size < BUILT_SITES_CAP && !builtSites.has(site)) builtSites.set(site, `${rel.split(path.sep).join('/')}:${line}`);
+          }
+        }
+      }
+    }
+  } catch (_) {
+    site = null;
+  }
+  if (mappedAt.size < 100000) mappedAt.set(key, site);
+  return site;
+}
+
 /** Return "relative/file.js:line" of the first stack frame inside the project, or null. */
 function projectSite() {
   if (ROOT === null) return null;
@@ -99,8 +212,11 @@ function projectSite() {
     const rest = line.slice(at + skip);
     if (rest.startsWith('node_modules/') || rest.includes('/node_modules/')) continue;
     if (line.includes(SELF)) continue;
-    const m = /^(.*?):(\d+):\d+\)?\s*$/.exec(rest);
-    if (m) return `${m[1].split(path.sep).join('/')}:${m[2]}`;
+    const m = /^(.*?):(\d+):(\d+)\)?\s*$/.exec(rest);
+    if (m) {
+      const original = mappedSite(m[1], Number(m[2]), Number(m[3]));
+      return original !== null ? original : `${m[1].split(path.sep).join('/')}:${m[2]}`;
+    }
   }
   return null;
 }
@@ -1582,6 +1698,7 @@ function build(phase, x, last) {
     if (captures.length > 0) rec.captures = captures;
   }
   limitations.push('timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted');
+  if (builtSites.size > 0) rec.built_sites = Object.fromEntries(builtSites);
   rec.limitations = limitations;
   return rec;
 }

@@ -131,6 +131,9 @@ pub enum Verdict {
     Executed,
     /// No probe: none of those functions ran.
     NotExecuted,
+    /// No probe: the function ran, and the lines that add to the holder did not (each has a
+    /// known count of 0 in the coverage run, or the units barely reach them).
+    WriterNotExecuted,
     /// Nothing can tell.
     Unknown,
 }
@@ -145,6 +148,7 @@ impl Verdict {
             Self::NotLoaded => "not_loaded",
             Self::Executed => "executed",
             Self::NotExecuted => "not_executed",
+            Self::WriterNotExecuted => "writer_not_executed",
             Self::Unknown => "unknown",
         }
     }
@@ -166,6 +170,22 @@ pub struct TargetVerdict {
     /// automatic probe stands for).
     #[serde(default)]
     pub declared: bool,
+    /// The lines that add to the holder and how often each ran in the run's coverage, for a
+    /// verdict `writer_not_executed` (empty for any other).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub writers: Vec<WriterCount>,
+}
+
+/// How often one writer line ran in a coverage run.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Eq)]
+pub struct WriterCount {
+    /// Project-relative file.
+    pub file: String,
+    /// 1-based line.
+    pub line: u32,
+    /// Executions in the coverage run; `None` when the line could not be counted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<u64>,
 }
 
 impl TrendReport {
@@ -423,7 +443,7 @@ pub struct GrowthTarget {
 
 impl GrowthTarget {
     /// True for a verdict that measured the finding's own code or holder: `constant`,
-    /// `changed` or `executed`. `not_executed`, `not_loaded` and `unknown` measured nothing
+    /// `changed` or `executed`. `not_executed`, `writer_not_executed`, `not_loaded` and `unknown` measured nothing
     /// of it, and `grew` is a growth column the ledger reads as such.
     pub fn is_measurement(&self) -> bool {
         self.declared

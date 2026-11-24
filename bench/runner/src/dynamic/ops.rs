@@ -28,7 +28,7 @@ use super::{Fx, Out, View, strings};
 pub(super) const LIMIT: usize = 2048;
 
 /// Most summarize commands run per fixture.
-const MAX_COMMANDS: usize = 24;
+pub(super) const MAX_COMMANDS: usize = 24;
 
 /// A leak confirmation held back until the summarize steps ran.
 #[derive(Debug, Clone)]
@@ -142,7 +142,7 @@ pub(super) fn split_command(line: &str) -> Vec<String> {
 
 /// The summarize commands a `harness run` printed: the list in its summary, or the full list
 /// of the capture manifest when the summary says more exist.
-fn printed_commands(fx: &Fx, run: &Out) -> Vec<String> {
+pub(super) fn printed_commands(fx: &Fx, run: &Out) -> Vec<String> {
     let summary = &run.json["summary"];
     let mut cmds = strings(&summary["summarize"]);
     if let Some(more) = summary["more_commands"].as_str()
@@ -723,6 +723,12 @@ fn source_regexes(v: &toml::Value, out: &mut Vec<String>) {
         toml::Value::Array(a) => a.iter().for_each(|x| source_regexes(x, out)),
         _ => {}
     }
+}
+
+/// Runs one printed summarize command and checks it, for the policy's captures taken at the
+/// final gate (nothing is tied or confirmed from them).
+pub(super) fn run_summarize(fx: &mut Fx, cmd: &str) {
+    summarize(fx, cmd);
 }
 
 /// Runs one printed command and checks it; returns what it tied.

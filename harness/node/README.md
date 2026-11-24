@@ -105,6 +105,10 @@ missing. Without any `gc` the dump says so in `limitations` and `gc_forced` is f
 The agent's own bookkeeping is small but not zero: a hidden property per timer handle and per
 emitter, one weak reference per emitter, and one record entry per live listener.
 
+## A project that is built before it runs
+
+When a `package.json` of the copy names an entry point (`main`, `module`, `bin`, a string in `exports`, a directory of `files`) in a directory that git ignores, the work copy takes that directory too (`build_output_kept` in the `harness gen` output and a line in the manifest), and a `node_modules` beside it is a symbolic link to the project's own, not a copy. The agent reports a site in a file that ends with a `sourceMappingURL` comment at the original position when the map's source is a file of the project (`src/a/b.ts:139`): it reads the map with node's own `module.SourceMap`, does not enable source maps for the process (stack traces of the target stay as they are), and falls back to the built position without a map or an entry. Each record then carries `built_sites`, source site to built site (`{"src/a/b.ts:139": "lib/node/chunk-AB12.js:1076"}`); it is absent when nothing was mapped, so the records of a plain JavaScript project are the same as before. `dla trend` reads the coverage of the targets through the same mapping (`NODE_V8_COVERAGE` functions of a bundle are reported at the line of their source).
+
 ## Raw captures (`DLA_CAPTURE`)
 
 `dla harness run H<n> --capture heap,alloc,nonheap` sets `DLA_CAPTURE`, `DLA_CAPTURE_DIR` and

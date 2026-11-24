@@ -406,6 +406,13 @@
         "verdict": {
           "description": "The verdict.",
           "$ref": "#/$defs/Verdict"
+        },
+        "writers": {
+          "description": "The lines that add to the holder and how often each ran in the run's coverage, for a\nverdict `writer_not_executed` (empty for any other).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WriterCount"
+          }
         }
       },
       "required": [
@@ -546,10 +553,44 @@
           "const": "not_executed"
         },
         {
+          "description": "No probe: the function ran, and the lines that add to the holder did not (each has a\nknown count of 0 in the coverage run, or the units barely reach them).",
+          "type": "string",
+          "const": "writer_not_executed"
+        },
+        {
           "description": "Nothing can tell.",
           "type": "string",
           "const": "unknown"
         }
+      ]
+    },
+    "WriterCount": {
+      "description": "How often one writer line ran in a coverage run.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "description": "Executions in the coverage run; `None` when the line could not be counted.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "file": {
+          "description": "Project-relative file.",
+          "type": "string"
+        },
+        "line": {
+          "description": "1-based line.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "file",
+        "line"
       ]
     }
   }

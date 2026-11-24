@@ -390,12 +390,17 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
                         .iter()
                         .take(8)
                         .map(|v| {
-                            json!({
+                            let mut e = json!({
                                 "finding": v.finding,
                                 "verdict": v.verdict.as_str(),
                                 "column": v.column,
                                 "detail": v.detail,
-                            })
+                            });
+                            // The lines that add to the holder did not run: what to change.
+                            if let Some(r) = verdicts::writer_remedy(project, v) {
+                                e["remedy"] = json!(r);
+                            }
+                            e
                         })
                         .collect(),
                 ),

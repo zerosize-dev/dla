@@ -44,6 +44,11 @@ pub struct CopyReport {
     /// Python harness: built extension modules (untracked `*.so`, `*.pyd`, `*.dylib` next to
     /// Python sources) that were kept.
     pub extensions_kept: usize,
+    /// Node harness: files of build-output directories that git ignores and that a
+    /// `package.json` names as entry points (`main`, `module`, `bin`, `exports`, `files`).
+    pub build_output_kept: usize,
+    /// Node harness: `node_modules` directories linked (not copied) into the copy.
+    pub node_modules_linked: usize,
 }
 
 /// Directories skipped wherever they are: they never hold project sources.
@@ -290,6 +295,209 @@ fn ignored_python_extensions(
     out
 }
 
+/// The string values of a `package.json` value, depth first.
+fn json_strings(v: &serde_json::Value, out: &mut Vec<String>) {
+    match v {
+        serde_json::Value::String(s) => out.push(s.clone()),
+        serde_json::Value::Array(a) => a.iter().for_each(|x| json_strings(x, out)),
+        serde_json::Value::Object(o) => o.values().for_each(|x| json_strings(x, out)),
+        _ => {}
+    }
+}
+
+/// The paths (relative to the package directory, no glob part, no `./`) that a `package.json`
+/// names as entry points: `main`, `module`, `bin`, every string in `exports`, and the
+/// entries of `files`. Negations, absolute paths and paths that leave the package are left out.
+fn package_entry_paths(text: &str) -> Vec<PathBuf> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
+        return Vec::new();
+    };
+    let mut raw = Vec::new();
+    for key in ["main", "module", "bin", "exports", "files"] {
+        if let Some(x) = v.get(key) {
+            json_strings(x, &mut raw);
+        }
+    }
+    let mut out: Vec<PathBuf> = Vec::new();
+    for r in raw {
+        if r.starts_with('!') {
+            continue;
+        }
+        let mut path = PathBuf::new();
+        for c in r.split('/') {
+            if c.contains(['*', '?', '[', '{']) {
+                break;
+            }
+            match c {
+                "" | "." => {}
+                ".." => {
+                    path = PathBuf::new();
+                    break;
+                }
+                c => path.push(c),
+            }
+        }
+        if !path.as_os_str().is_empty() && !path.is_absolute() && !out.contains(&path) {
+            out.push(path);
+        }
+    }
+    out
+}
+
+/// The files of the directories (or the single files) that the `package.json` of each of
+/// `package_dirs` names as entry points and that git ignores, in the project, relative, sorted.
+/// The unit is the topmost ignored directory on the way to an entry point (`lib` for
+/// `lib/node/index.js`), so the whole build output comes along; an entry point that is the
+/// only ignored thing on its way is taken alone. Files `listed` by git are not repeated.
+fn ignored_entry_files(
+    project: &Path,
+    package_dirs: &[PathBuf],
+    listed: &HashSet<PathBuf>,
+) -> Vec<PathBuf> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    // Every prefix of every entry point, below the package directory.
+    let mut prefixes: Vec<PathBuf> = Vec::new();
+    let mut entries: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for dir in package_dirs {
+        let Ok(text) = fs::read_to_string(project.join(dir).join("package.json")) else {
+            continue;
+        };
+        for e in package_entry_paths(&text) {
+            let full = dir.join(&e);
+            if full
+                .components()
+                .any(|c| SKIP_ANYWHERE.iter().any(|s| c.as_os_str() == *s))
+                || !project.join(&full).exists()
+            {
+                continue;
+            }
+            let mut acc = dir.clone();
+            for c in e.components() {
+                acc.push(c);
+                if !prefixes.contains(&acc) {
+                    prefixes.push(acc.clone());
+                }
+            }
+            entries.push((dir.clone(), full));
+        }
+    }
+    if prefixes.is_empty() {
+        return Vec::new();
+    }
+    let Ok(mut child) = Command::new("git")
+        .arg("-C")
+        .arg(project)
+        .args(["check-ignore", "-z", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return Vec::new();
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let mut input = Vec::new();
+        for p in &prefixes {
+            input.extend_from_slice(dla_core::paths::to_slash(p).as_bytes());
+            input.push(0);
+        }
+        let _ = stdin.write_all(&input);
+    }
+    let Ok(out) = child.wait_with_output() else {
+        return Vec::new();
+    };
+    let ignored: HashSet<PathBuf> = out
+        .stdout
+        .split(|b| *b == 0)
+        .filter_map(|s| std::str::from_utf8(s).ok())
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for (dir, full) in entries {
+        let mut acc = dir.clone();
+        let rel_to_dir = full.strip_prefix(&dir).unwrap_or(&full).to_path_buf();
+        for c in rel_to_dir.components() {
+            acc.push(c);
+            if ignored.contains(&acc) {
+                if !roots.iter().any(|r| acc.starts_with(r)) {
+                    roots.retain(|r| !r.starts_with(&acc));
+                    roots.push(acc.clone());
+                }
+                break;
+            }
+        }
+    }
+    let mut files = Vec::new();
+    for root in roots {
+        let abs = project.join(&root);
+        if abs.is_file() {
+            files.push(root);
+            continue;
+        }
+        let mut stack = vec![PathBuf::new()];
+        while let Some(rel) = stack.pop() {
+            let Ok(rd) = fs::read_dir(abs.join(&rel)) else {
+                continue;
+            };
+            for e in rd.flatten() {
+                let Ok(ft) = e.file_type() else { continue };
+                let child = rel.join(e.file_name());
+                if ft.is_dir() {
+                    if !SKIP_ANYWHERE.iter().any(|s| e.file_name() == *s) {
+                        stack.push(child);
+                    }
+                } else if ft.is_file() {
+                    files.push(root.join(child));
+                }
+            }
+        }
+    }
+    files.retain(|f| !listed.contains(f) && !is_dla_path(f));
+    files.sort();
+    files.dedup();
+    files
+}
+
+/// Links `<dest>/<dir>/node_modules` to the project's `<dir>/node_modules` when the project has
+/// one. True when a link was made; false when there is nothing to link or the copy already holds
+/// the path; the reason as an error when the platform or the file system refuses. The link is
+/// a symbolic link (a directory junction is not made), so on Windows it needs the privilege
+/// to create symbolic links; without it the reason is reported and nothing else changes.
+fn link_node_modules(project: &Path, dest: &Path, dir: &Path) -> Result<bool, String> {
+    let from = project.join(dir).join("node_modules");
+    if !from.is_dir() {
+        return Ok(false);
+    }
+    let to = dest.join(dir).join("node_modules");
+    if fs::symlink_metadata(&to).is_ok() {
+        return Ok(false);
+    }
+    let target = from
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve it: {e}"))?;
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&target, &to)
+            .map(|()| true)
+            .map_err(|e| format!("cannot create symlink: {e}"))
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_dir(&target, &to)
+            .map(|()| true)
+            .map_err(|e| {
+                format!("cannot create symlink (needs the privilege to create symbolic links): {e}")
+            })
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (target, to);
+        Err("symlinks are not available on this platform".to_owned())
+    }
+}
+
 /// Like [`copy_project_scoped`], for a harness of `runtime`. A Python harness has no build step,
 /// so the built extension modules of the project (untracked `*.so`, `*.pyd` or `*.dylib` files
 /// that lie in a directory holding Python sources) are kept: left out, a package whose
@@ -302,6 +510,8 @@ pub fn copy_project_for(
     runtime: Option<Runtime>,
 ) -> std::io::Result<CopyReport> {
     let python = runtime == Some(Runtime::Python);
+    let node = runtime == Some(Runtime::Node);
+    let mut package_dirs: Vec<PathBuf> = Vec::new();
     let mut py_dirs: HashMap<PathBuf, bool> = HashMap::new();
     fs::create_dir_all(dest)?;
     let (files, from_git, left_out) = match git_files(project) {
@@ -389,6 +599,43 @@ pub fn copy_project_for(
             continue;
         }
         report.files += 1;
+        if node && rel.file_name().is_some_and(|n| n == "package.json") {
+            package_dirs.push(rel.parent().map(Path::to_path_buf).unwrap_or_default());
+        }
+    }
+    let mut node_gaps: Vec<String> = Vec::new();
+    if node && !package_dirs.is_empty() {
+        if from_git {
+            let listed: HashSet<PathBuf> =
+                git_files(project).unwrap_or_default().into_iter().collect();
+            for rel in ignored_entry_files(project, &package_dirs, &listed) {
+                if report.files >= MAX_FILES {
+                    break;
+                }
+                let (src, to) = (project.join(&rel), dest.join(&rel));
+                if let Some(parent) = to.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                if copy_file(&src, &to).is_ok() {
+                    report.build_output_kept += 1;
+                    report.files += 1;
+                }
+            }
+        }
+        for dir in &package_dirs {
+            match link_node_modules(project, dest, dir) {
+                Ok(true) => report.node_modules_linked += 1,
+                Ok(false) => {}
+                Err(why) => node_gaps.push(format!(
+                    "scratch copy: node_modules of {} not linked ({why}); a driver must reach the dependencies another way",
+                    if dir.as_os_str().is_empty() {
+                        ".".to_owned()
+                    } else {
+                        dla_core::paths::to_slash(dir)
+                    }
+                )),
+            }
+        }
     }
     if python && from_git {
         let listed: HashSet<PathBuf> = git_files(project).unwrap_or_default().into_iter().collect();
@@ -423,6 +670,20 @@ pub fn copy_project_for(
             report.extensions_kept
         ));
     }
+    if report.build_output_kept > 0 {
+        report.gaps.push(format!(
+            "scratch copy: {} file(s) of build output that git ignores kept (a package.json names them as entry points: main, module, bin, exports or files; a Node harness has no build step)",
+            report.build_output_kept
+        ));
+    }
+    if report.node_modules_linked > 0 {
+        report.gaps.push(format!(
+            "scratch copy: {} node_modules director{} linked to the project's own, not copied (a symbolic link at the same relative path)",
+            report.node_modules_linked,
+            if report.node_modules_linked == 1 { "y" } else { "ies" }
+        ));
+    }
+    report.gaps.extend(node_gaps);
     if objects > 0 {
         report.gaps.push(format!(
             "scratch copy: {objects} object file(s) and untracked librar{} not copied (they are rebuilt in the copy)",
@@ -1735,5 +1996,110 @@ mod tests {
         let again = thin_run(&run, &project, 0, Some("H7"));
         assert_eq!(again.thinned, ["H3", "H5", "H6"]);
         assert!(run.join("harness/H7").join(WORK).join("f").is_file());
+    }
+    /// A TypeScript-shaped Node project: sources tracked, `lib` and `node_modules` ignored.
+    #[cfg(unix)]
+    fn node_project(d: &Path, main: &str) -> Option<PathBuf> {
+        let p = d.join("p");
+        for (f, text) in [
+            (".gitignore", "lib\nnode_modules\n"),
+            (
+                "package.json",
+                &format!("{{\"name\":\"x\",\"main\":\"{main}\"}}"),
+            ),
+            ("src/a.ts", "export const a = 1;\n"),
+            ("lib/index.js", "exports.a = 1;\n"),
+            ("lib/deep/chunk.js", "x\n"),
+            ("lib/build/inner.js", "y\n"),
+            ("node_modules/dep/index.js", "d\n"),
+        ] {
+            fs::create_dir_all(p.join(f).parent().unwrap()).unwrap();
+            fs::write(p.join(f), text).unwrap();
+        }
+        (git(&p, &["init", "-q"]) && git(&p, &["add", "."])).then_some(p)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_node_copy_takes_the_ignored_entry_point_directory_and_links_node_modules() {
+        let d = tempfile::tempdir().unwrap();
+        let Some(p) = node_project(d.path(), "./lib/index.js") else {
+            return;
+        };
+        let dest = d.path().join("w");
+        let r = copy_project_for(&p, &dest, None, Some(Runtime::Node)).unwrap();
+        for f in [
+            "lib/index.js",
+            "lib/deep/chunk.js",
+            "lib/build/inner.js",
+            "src/a.ts",
+        ] {
+            assert!(dest.join(f).is_file(), "{f}");
+        }
+        assert_eq!(r.build_output_kept, 3);
+        assert_eq!(r.node_modules_linked, 1);
+        let link = dest.join("node_modules");
+        assert!(fs::symlink_metadata(&link).unwrap().is_symlink());
+        assert_eq!(
+            fs::read_link(&link).unwrap(),
+            p.join("node_modules").canonicalize().unwrap()
+        );
+        assert!(link.join("dep/index.js").is_file());
+        assert!(
+            r.gaps
+                .iter()
+                .any(|g| g.contains("3 file(s) of build output"))
+        );
+        assert!(r.gaps.iter().any(|g| g.contains("node_modules director")));
+        // Another runtime's copy is unchanged.
+        let other = d.path().join("o");
+        let r = copy_project_for(&p, &other, None, Some(Runtime::Go)).unwrap();
+        assert!(!other.join("lib").exists() && !other.join("node_modules").exists());
+        assert_eq!((r.build_output_kept, r.node_modules_linked), (0, 0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_node_copy_without_ignored_entry_points_is_unchanged() {
+        let d = tempfile::tempdir().unwrap();
+        let Some(p) = node_project(d.path(), "./src/a.ts") else {
+            return;
+        };
+        let dest = d.path().join("w");
+        let r = copy_project_for(&p, &dest, None, Some(Runtime::Node)).unwrap();
+        assert_eq!(r.build_output_kept, 0);
+        assert!(!dest.join("lib").exists());
+        assert!(!r.gaps.iter().any(|g| g.contains("build output")));
+        // No package.json at all: nothing is linked either.
+        let q = d.path().join("q");
+        fs::create_dir_all(q.join("node_modules")).unwrap();
+        fs::write(q.join("a.js"), "1").unwrap();
+        let dest = d.path().join("w2");
+        let r = copy_project_for(&q, &dest, None, Some(Runtime::Node)).unwrap();
+        assert_eq!((r.build_output_kept, r.node_modules_linked), (0, 0));
+        assert!(!dest.join("node_modules").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn thinning_keeps_the_node_modules_link_and_thins_the_copied_build_output() {
+        let d = tempfile::tempdir().unwrap();
+        let Some(p) = node_project(d.path(), "./lib/index.js") else {
+            return;
+        };
+        let (work, list) = (d.path().join("work"), d.path().join("work-thinned.json"));
+        copy_project_for(&p, &work, None, Some(Runtime::Node)).unwrap();
+        let t = thin_files(&work, &list, &p).unwrap();
+        assert!(t.files >= 4, "{t:?}");
+        assert!(!work.join("lib/index.js").exists());
+        assert!(
+            fs::symlink_metadata(work.join("node_modules"))
+                .unwrap()
+                .is_symlink()
+        );
+        assert!(work.join("node_modules/dep/index.js").is_file());
+        fill_files(&work, &list, &p).unwrap();
+        assert!(work.join("lib/index.js").is_file());
+        assert!(work.join("node_modules/dep/index.js").is_file());
     }
 }

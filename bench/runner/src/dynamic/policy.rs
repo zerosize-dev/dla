@@ -994,7 +994,59 @@ fn run_dla_line(fx: &mut Fx, line: &str) -> Out {
 /// `inconclusive` is tried first and the ledger decides: it refuses it with
 /// `measurement-required` when no measurement is tied to the item, and the close is then
 /// repeated as `not_exercised`.
-fn resolve_unresolved(fx: &mut Fx, target: &str, hint: Option<&str>) -> Out {
+fn resolve_unresolved(
+    fx: &mut Fx,
+    target: &str,
+    hint: Option<&str>,
+    tried: &mut BTreeSet<String>,
+) -> Out {
+    let o = resolve_unresolved_once(fx, target, hint);
+    // A heap residual above its threshold is not left unresolved before its harness has a
+    // summarized capture: take the capture the refusal prints, then close the item again.
+    if o.code() == "capture-not-summarized" {
+        let fix = o.json["error"]["fix"].as_str().unwrap_or("").to_owned();
+        if let Some(said) = take_capture(fx, &fix, tried) {
+            fx.step(format!("final gate: {said}"));
+            return resolve_unresolved_once(fx, target, hint);
+        }
+    }
+    o
+}
+
+/// The harness a capture fix (`dla harness run H --mode M --capture alloc,heap, then ...`) is
+/// for, and the capture command itself (the text before the `, then` that names the summaries).
+fn capture_fix(fix: &str) -> Option<(String, String)> {
+    let cmd = fix.split(", then").next().unwrap_or(fix).trim();
+    let rest = cmd.strip_prefix("dla harness run ")?;
+    let harness = rest.split_whitespace().next()?;
+    Some((harness.to_owned(), cmd.to_owned()))
+}
+
+/// Takes the capture a `residual_capture` item (or a `capture-not-summarized` refusal) asks
+/// for, as a model is told to: runs the capture command of the fix and then every `dla
+/// summarize` command that run printed. Once per harness. Returns what was done.
+fn take_capture(fx: &mut Fx, fix: &str, tried: &mut BTreeSet<String>) -> Option<String> {
+    let (harness, cmd) = capture_fix(fix)?;
+    if !tried.insert(format!("capture {harness}")) {
+        return None;
+    }
+    let out = run_dla_line(fx, &cmd);
+    fx.row.captures.push(format!("{harness}:residual-capture"));
+    if !out.ok {
+        let msg = format!("{cmd}: {}", refusal(&out));
+        fx.row.errors.push(format!("residual capture: {msg}"));
+        return Some(msg);
+    }
+    let cmds = ops::printed_commands(fx, &out);
+    let mut ran = 0;
+    for c in cmds.iter().take(ops::MAX_COMMANDS) {
+        ops::run_summarize(fx, c);
+        ran += 1;
+    }
+    Some(format!("{cmd}: ok, {ran} summarize command(s) run"))
+}
+
+fn resolve_unresolved_once(fx: &mut Fx, target: &str, hint: Option<&str>) -> Out {
     let close = |fx: &mut Fx, reason: &str| {
         fx.call_quiet(&[
             "ledger",
@@ -1012,7 +1064,7 @@ fn resolve_unresolved(fx: &mut Fx, target: &str, hint: Option<&str>) -> Out {
         return close(fx, "not_exercised");
     }
     let o = close(fx, "inconclusive");
-    if o.ok {
+    if o.ok || o.code() == "capture-not-summarized" {
         return o;
     }
     close(fx, "not_exercised")
@@ -1125,7 +1177,7 @@ fn fix_item(fx: &mut Fx, item: &Item, tried: &mut BTreeSet<String>) -> Option<St
                     REMEDY,
                 ])
             } else {
-                resolve_unresolved(fx, &item.id, Some(&item.fix))
+                resolve_unresolved(fx, &item.id, Some(&item.fix), tried)
             };
             let mut said = format!(
                 "resolve {} {}: {}",
@@ -1154,6 +1206,7 @@ fn fix_item(fx: &mut Fx, item: &Item, tried: &mut BTreeSet<String>) -> Option<St
                 follow_growth_route(fx, &item.fix)
             ))
         }
+        "residual_capture" => take_capture(fx, &item.fix, tried),
         "label" => {
             // A finding that came after the label step: no archetype is picked for it.
             if !tried.insert(format!("label {}", item.id)) {
@@ -1209,7 +1262,7 @@ fn fix_item(fx: &mut Fx, item: &Item, tried: &mut BTreeSet<String>) -> Option<St
             if o.ok
                 && let Some(new) = o.json["id"].as_str()
             {
-                let r = resolve_unresolved(fx, new, None);
+                let r = resolve_unresolved(fx, new, None, tried);
                 said.push_str(&format!(
                     "; resolve {new} unresolved: {}",
                     if r.ok { "ok".to_owned() } else { refusal(&r) }
@@ -1393,7 +1446,13 @@ case "$1 $2" in
 "ledger duplicate") echo '{"ok":true}';;
 "alloc-test H1")
   echo '{"ok":true,"next":["dla ledger confirm F12 --evidence E30","dla ledger refute <F>"]}';;
+"harness run")
+  touch captured
+  echo '{"ok":true,"summary":{"summarize":["dla summarize alloc-stack-diff a b","dla summarize non-heap c"]}}';;
 "ledger resolve")
+  if [ -n "$FAKE_CAPTURE_REFUSE" ] && [ "$3" = O1 ] && [ ! -f captured ]; then
+    echo '{"ok":false,"error":{"code":"capture-not-summarized","message":"m","fix":"dla harness run H1 --mode fresh --capture alloc,heap, then the `dla summarize` commands it prints"}}'; exit 2
+  fi
   if [ "$FAKE_GROWTH" = dup ] && [ "$3" = F12 ]; then
     echo '{"ok":false,"error":{"code":"growth-not-measured","message":"m","fix":"dla ledger duplicate F12 --of F1   (same site: the same leak as F1, whose alloc-test on H1 favored leak; if it is a leak of its own: dla alloc-test H1 --finding F12)"}}'; exit 2
   fi
@@ -2069,6 +2128,61 @@ cause = "{cause}"
             c("ledger resolve O6 --as unresolved --reason inconclusive"),
             "{calls}"
         );
+    }
+
+    #[cfg(unix)]
+    const GATE_RESIDUAL: &str = r#"{"missing":[
+      {"kind":"residual_capture","id":"H1:residual-capture","description":"1 heap residual row of S1 over the threshold","fix":"dla harness run H1 --mode fresh --capture alloc,heap, then the `dla summarize` commands it prints"}]}"#;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_residual_capture_item_is_followed_by_the_capture_and_its_summaries_once() {
+        let (_row, calls) = drive_fake_with(
+            &expected("L-COLLECT", "container-field"),
+            false,
+            &[("FAKE_GAPS", "1")],
+            GATE_RESIDUAL,
+        );
+        let lines: Vec<&str> = calls.lines().collect();
+        let at = |s: &str| lines.iter().position(|l| l.starts_with(s));
+        let run = at("harness run H1 --mode fresh --capture alloc,heap").expect(&calls);
+        let first = at("summarize alloc-stack-diff a b").expect(&calls);
+        let second = at("summarize non-heap c").expect(&calls);
+        assert!(run < first && first < second, "{calls}");
+        assert!(
+            lines[second..].iter().any(|l| l.starts_with("gate check")),
+            "the gate is asked again: {calls}"
+        );
+        // The gate names the item in every round; the capture is taken once per harness.
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|l| l.starts_with("harness run"))
+                .count(),
+            1,
+            "{calls}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_resolve_refused_for_a_missing_capture_takes_the_capture_and_is_repeated() {
+        let (_row, calls) = drive_fake(
+            &expected("L-COLLECT", "container-field"),
+            false,
+            &[("FAKE_CAPTURE_REFUSE", "1")],
+        );
+        let lines: Vec<&str> = calls.lines().collect();
+        let resolves: Vec<usize> = (0..lines.len())
+            .filter(|&i| lines[i].starts_with("ledger resolve O1 --as unresolved"))
+            .collect();
+        let run = lines
+            .iter()
+            .position(|l| l.starts_with("harness run H1 --mode fresh --capture alloc,heap"))
+            .expect(&calls);
+        assert_eq!(resolves.len(), 2, "{calls}");
+        assert!(resolves[0] < run && run < resolves[1], "{calls}");
+        assert!(calls.contains("summarize non-heap c"), "{calls}");
     }
 
     #[cfg(unix)]

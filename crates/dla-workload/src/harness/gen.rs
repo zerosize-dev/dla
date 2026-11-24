@@ -2885,6 +2885,17 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
                 .map_err(|e| io_refusal(&hdir.join(dla_core::features::FILE), e))?;
         }
     }
+    // A target an earlier harness read `writer_not_executed` is told which lines did not run.
+    if !described.is_empty()
+        && let Ok(view) = dla_core::RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())
+    {
+        let ix = dla_core::queue::Index::of(&view);
+        let misses: std::collections::BTreeMap<FindingId, dla_core::queue::Miss> = described
+            .iter()
+            .filter_map(|t| ix.writer_miss(&t.id).map(|m| (t.id.clone(), m)))
+            .collect();
+        targets::add_writer_gaps(&ctx.project, &mut described, &misses);
+    }
     if manifest.is_entry_path() {
         targets::add_entry_facts(&ctx.project, rt, &mut described);
         write(
@@ -2968,6 +2979,15 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         if skipped_sources > 0 {
             m.insert("out_of_scope".into(), json!(skipped_sources));
         }
+        if copied.build_output_kept > 0 {
+            m.insert("build_output_kept".into(), json!(copied.build_output_kept));
+        }
+        if copied.node_modules_linked > 0 {
+            m.insert(
+                "node_modules_linked".into(),
+                json!(copied.node_modules_linked),
+            );
+        }
         m.retain(|_, v| !v.is_null());
     }
     let mut ledger = ctx.ledger()?;
@@ -3040,7 +3060,8 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
                     .collect();
                 m.insert("feature_note".into(), json!(notes.join("; ")));
             }
-            let attention = targets::feature_attention(&described);
+            let mut attention = targets::writer_attention(&described);
+            attention.extend(targets::feature_attention(&described));
             if !attention.is_empty() {
                 // `dla` prints it as the first key of the output, and the output bound keeps it.
                 m.insert("_attention".into(), json!(attention));

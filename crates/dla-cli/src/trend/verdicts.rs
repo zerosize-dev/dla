@@ -191,6 +191,7 @@ fn one(inp: &Inputs<'_>, m: &HarnessManifest, f: &FindingId) -> TargetVerdict {
         column: column.map(str::to_owned),
         detail,
         declared: false,
+        writers: Vec::new(),
     };
     // grew: a column tied to the finding passed the gate.
     if let Some(c) = inp
@@ -251,6 +252,18 @@ fn one(inp: &Inputs<'_>, m: &HarnessManifest, f: &FindingId) -> TargetVerdict {
                 );
             }
             stayed.get_or_insert((c.name.clone(), lo, v.len()));
+        }
+        // A holder that stayed flat says nothing when the lines that add to it never ran in the
+        // run: the coverage of the run is asked, and its answer replaces the flat reading.
+        if let Some((name, _, n)) = &stayed {
+            let by_lines = coverage_verdict(inp, f);
+            if by_lines.verdict == Verdict::WriterNotExecuted {
+                return TargetVerdict {
+                    column: Some(name.clone()),
+                    detail: format!("{}; {name} stayed flat over {n} points", by_lines.detail),
+                    ..by_lines
+                };
+            }
         }
         return match stayed {
             Some((name, value, n)) => make(
@@ -454,6 +467,7 @@ fn unknown(f: &FindingId, why: &str) -> TargetVerdict {
         column: None,
         detail: why.to_owned(),
         declared: false,
+        writers: Vec::new(),
     }
 }
 
@@ -542,13 +556,16 @@ fn coverage_verdict(inp: &Inputs<'_>, f: &FindingId) -> TargetVerdict {
         .and_then(|s| s.rsplit_once(':'))
         .map_or(first_func.lo.to_string(), |(_, l)| l.to_owned());
     if let Some((file, func)) = checked.iter().find(|(file, func)| ran(file, func)) {
-        return TargetVerdict {
+        let ran_text = format!("function {} at {file}:{}", func.name, func.lo);
+        let executed = TargetVerdict {
             finding: f.clone(),
             verdict: Verdict::Executed,
             column: None,
-            detail: format!("function {} at {file}:{} was executed", func.name, func.lo),
+            detail: format!("{ran_text} was executed"),
             declared: false,
+            writers: Vec::new(),
         };
+        return writer_lines_verdict(inp, f, &doc, &ran_text, file, executed);
     }
     let more = if checked.len() > 1 {
         format!(" (and {} writer function(s))", checked.len() - 1)
@@ -564,7 +581,174 @@ fn coverage_verdict(inp: &Inputs<'_>, f: &FindingId) -> TargetVerdict {
             first_func.name
         ),
         declared: false,
+        writers: Vec::new(),
     }
+}
+
+/// What the lines that add to the holder say about a function that ran. `executed` is the verdict
+/// when they say nothing; `ran_text` names the function that ran.
+///
+/// The writer lines are the adding sites of the finding's annotation. The coverage record of a
+/// runtime that counts lines (`lines`: Rust, Go, Node) has a count or `null` for each:
+///
+/// * every writer line has a known count of 0: `writer_not_executed`;
+/// * a count above 0 on one of them: the verdict stays `executed`;
+/// * the counts of a fresh-key coverage run (Rust) all known and every one under a tenth of the
+///   units of that run: `writer_not_executed`, the units do not feed the holder;
+/// * a count unknown and none above 0: `executed`, and the detail says why they were not counted.
+///
+/// A record with no `lines` (older, or of a runtime that does not count) changes nothing.
+fn writer_lines_verdict(
+    inp: &Inputs<'_>,
+    f: &FindingId,
+    doc: &Value,
+    ran_text: &str,
+    ran_file: &str,
+    executed: TargetVerdict,
+) -> TargetVerdict {
+    let Some(counted) = doc.get("lines").and_then(Value::as_array) else {
+        return executed;
+    };
+    let wanted = inp
+        .ledger
+        .annotation(f)
+        .map(|a| a.adding_writer_lines())
+        .unwrap_or_default();
+    if wanted.is_empty() {
+        return executed;
+    }
+    struct One {
+        file: String,
+        line: u32,
+        count: Option<u64>,
+        fresh: Option<u64>,
+        why: String,
+    }
+    let ones: Vec<One> = wanted
+        .into_iter()
+        .map(|(file, line)| {
+            let hit = counted.iter().find(|e| {
+                e.get("file").and_then(Value::as_str) == Some(file.as_str())
+                    && e.get("line").and_then(Value::as_u64) == Some(u64::from(line))
+            });
+            let count = hit.and_then(|e| e.get("count")).and_then(Value::as_u64);
+            let why = match hit {
+                None => "the coverage record did not ask about the line".to_owned(),
+                Some(e) => e
+                    .get("why")
+                    .and_then(Value::as_str)
+                    .unwrap_or("the line was not counted")
+                    .to_owned(),
+            };
+            One {
+                fresh: hit.and_then(|e| e.get("fresh")).and_then(Value::as_u64),
+                file,
+                line,
+                count,
+                why,
+            }
+        })
+        .collect();
+    let counts = |list: &[(&One, String)]| {
+        list.iter()
+            .map(|(o, c)| {
+                if o.file == ran_file {
+                    format!(":{} {c}", o.line)
+                } else {
+                    format!("{}:{} {c}", o.file, o.line)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let writers_of = |show: &dyn Fn(&One) -> Option<u64>| -> Vec<dla_core::trend::WriterCount> {
+        ones.iter()
+            .map(|o| dla_core::trend::WriterCount {
+                file: o.file.clone(),
+                line: o.line,
+                count: show(o),
+            })
+            .collect()
+    };
+    if ones.iter().any(|o| o.count.is_some_and(|c| c > 0)) {
+        // One of them ran: a flat series says something about the holder.
+        if let Some(fresh_units) = doc
+            .get("fresh_units")
+            .and_then(Value::as_u64)
+            .filter(|n| *n > 0)
+            && ones.iter().all(|o| o.fresh.is_some())
+            && ones
+                .iter()
+                .all(|o| o.fresh.is_some_and(|k| k.saturating_mul(10) < fresh_units))
+        {
+            let shown: Vec<(&One, String)> = ones
+                .iter()
+                .map(|o| (o, o.fresh.unwrap_or(0).to_string()))
+                .collect();
+            let most = ones.iter().filter_map(|o| o.fresh).max().unwrap_or(0);
+            return TargetVerdict {
+                verdict: Verdict::WriterNotExecuted,
+                detail: format!(
+                    "{ran_text} ran; the lines that add to the holder ran {most} times in {fresh_units} units ({}): the units do not feed the holder",
+                    counts(&shown)
+                ),
+                writers: writers_of(&|o| o.fresh),
+                ..executed
+            };
+        }
+        return executed;
+    }
+    if ones.iter().all(|o| o.count == Some(0)) {
+        let shown: Vec<(&One, String)> = ones.iter().map(|o| (o, "0".to_owned())).collect();
+        return TargetVerdict {
+            verdict: Verdict::WriterNotExecuted,
+            detail: format!(
+                "{ran_text} ran; the lines that add to the holder did not: {}",
+                counts(&shown)
+            ),
+            writers: writers_of(&|o| o.count),
+            ..executed
+        };
+    }
+    // Some count is unknown and none is above 0: nothing is said about the holder's writers.
+    let why: Vec<String> = {
+        let mut w: Vec<String> = ones
+            .iter()
+            .filter(|o| o.count.is_none())
+            .map(|o| o.why.clone())
+            .collect();
+        w.sort();
+        w.dedup();
+        w
+    };
+    TargetVerdict {
+        detail: format!(
+            "{}; the lines that add to the holder could not be counted: {}",
+            executed.detail,
+            why.join("; ")
+        ),
+        ..executed
+    }
+}
+
+/// The remedy `dla trend` prints for a target read `writer_not_executed`: one sentence on what
+/// the unit must do, then per writer line that did not run (three at most) the line with its
+/// source text and count and the lines above it that decide whether it runs. `None` for any
+/// other verdict.
+pub fn writer_remedy(project: &Path, v: &TargetVerdict) -> Option<Vec<String>> {
+    if v.verdict != Verdict::WriterNotExecuted {
+        return None;
+    }
+    let mut out = vec![format!(
+        "the function ran and the lines that add to the holder did not: {}",
+        dla_census::guards::INTRO
+    )];
+    for w in v.writers.iter().take(3) {
+        out.extend(dla_census::guards::writer_lines(
+            project, &w.file, w.line, w.count,
+        ));
+    }
+    Some(out)
 }
 
 /// JVM: the class of the site or of a writer is among the loaded classes.
@@ -619,6 +803,7 @@ fn class_verdict(inp: &Inputs<'_>, f: &FindingId, doc: &Value, sites: &[String])
                 column: None,
                 detail: format!("class {fqcn} was loaded"),
                 declared: false,
+                writers: Vec::new(),
             };
         }
         if !names.contains(&fqcn) {
@@ -634,6 +819,7 @@ fn class_verdict(inp: &Inputs<'_>, f: &FindingId, doc: &Value, sites: &[String])
         column: None,
         detail: format!("class {} was not loaded", names.join(", ")),
         declared: false,
+        writers: Vec::new(),
     }
 }
 
@@ -964,6 +1150,226 @@ mod tests {
         let v = verdicts(&s, &m, vec![Col::gauge("os.rss", &[5.0; 9])], |_| {});
         assert_eq!(v[0].verdict, Verdict::Executed, "{v:?}");
         assert!(v[0].detail.contains("Cart.add"), "{}", v[0].detail);
+    }
+
+    /// The record of a run that counted the writer line `a.py:6`, with `extra` merged in.
+    fn counted(entry: serde_json::Value, extra: serde_json::Value) -> serde_json::Value {
+        let mut doc = json!({
+            "kind": "functions",
+            "functions": [{"file": "a.py", "name": "Cart.add", "line": 5}],
+            "lines": [entry],
+        });
+        for (k, v) in extra.as_object().into_iter().flatten() {
+            doc[k] = v.clone();
+        }
+        doc
+    }
+
+    fn one_verdict(s: &Scene) -> TargetVerdict {
+        let m = manifest(json!([]), &["F1"]);
+        verdicts(s, &m, vec![Col::gauge("os.rss", &[5.0; 9])], |_| {}).remove(0)
+    }
+
+    #[test]
+    fn a_function_that_ran_with_every_writer_line_at_zero_is_writer_not_executed() {
+        let s = scene();
+        write_run(
+            &s,
+            counted(json!({"file": "a.py", "line": 6, "count": 0}), json!({})),
+        );
+        let v = one_verdict(&s);
+        assert_eq!(v.verdict, Verdict::WriterNotExecuted, "{v:?}");
+        assert_eq!(
+            v.detail,
+            "function Cart.add at a.py:5 ran; the lines that add to the holder did not: :6 0"
+        );
+        assert_eq!(
+            v.writers,
+            [dla_core::trend::WriterCount {
+                file: "a.py".into(),
+                line: 6,
+                count: Some(0)
+            }]
+        );
+    }
+
+    #[test]
+    fn a_writer_line_that_ran_keeps_executed() {
+        let s = scene();
+        write_run(
+            &s,
+            counted(json!({"file": "a.py", "line": 6, "count": 3}), json!({})),
+        );
+        let v = one_verdict(&s);
+        assert_eq!(v.verdict, Verdict::Executed, "{v:?}");
+        assert_eq!(v.detail, "function Cart.add at a.py:5 was executed");
+        assert!(v.writers.is_empty());
+    }
+
+    #[test]
+    fn a_writer_line_that_could_not_be_counted_keeps_executed_and_says_why() {
+        let s = scene();
+        write_run(
+            &s,
+            counted(
+                json!({"file": "a.py", "line": 6, "count": null, "why": "no code region of the coverage export covers the line"}),
+                json!({}),
+            ),
+        );
+        let v = one_verdict(&s);
+        assert_eq!(v.verdict, Verdict::Executed, "{v:?}");
+        assert!(
+            v.detail.contains("could not be counted: no code region"),
+            "{}",
+            v.detail
+        );
+        // A line the record did not ask about is the same.
+        write_run(
+            &s,
+            counted(json!({"file": "a.py", "line": 99, "count": 0}), json!({})),
+        );
+        let v = one_verdict(&s);
+        assert_eq!(v.verdict, Verdict::Executed, "{v:?}");
+        assert!(
+            v.detail.contains("did not ask about the line"),
+            "{}",
+            v.detail
+        );
+    }
+
+    #[test]
+    fn a_site_that_resets_or_reassigns_is_not_a_writer_line_to_count() {
+        use dla_core::census::{HolderFacts, SiteFact, SiteKind};
+        let mut s = scene();
+        let fact = |kind| SiteFact {
+            site: "a.py:6".into(),
+            kind,
+            depth: 0,
+            function: Some("add".into()),
+            init: false,
+            startup: false,
+            startup_via: Vec::new(),
+            param: false,
+            constant: false,
+            exported: true,
+        };
+        write_run(
+            &s,
+            counted(json!({"file": "a.py", "line": 6, "count": 0}), json!({})),
+        );
+        for (kind, want) in [
+            (SiteKind::Reset, Verdict::Executed),
+            (SiteKind::Reassign, Verdict::Executed),
+            (SiteKind::Insert, Verdict::WriterNotExecuted),
+        ] {
+            s.ledger
+                .annotate_record(dla_core::FindingAnnotation {
+                    writers: vec!["a.py:6".into()],
+                    facts: HolderFacts {
+                        writer_sites: vec![fact(kind)],
+                        ..HolderFacts::default()
+                    },
+                    ..dla_core::FindingAnnotation::new(FindingId::new(1))
+                })
+                .unwrap();
+            // Each round adds a fact of its kind to the ones before it: a reset and a reassign
+            // are not counted, and the insert that follows them is.
+            let v = one_verdict(&s);
+            assert_eq!(v.verdict, want, "{kind:?}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn in_fresh_key_mode_a_writer_line_under_a_tenth_of_the_units_is_writer_not_executed() {
+        let s = scene();
+        let rec = |count, fresh, units| {
+            counted(
+                json!({"file": "a.py", "line": 6, "count": count, "fresh": fresh}),
+                json!({"fresh_units": units}),
+            )
+        };
+        write_run(&s, rec(3, 3, 100));
+        let v = one_verdict(&s);
+        assert_eq!(v.verdict, Verdict::WriterNotExecuted, "{v:?}");
+        assert!(
+            v.detail.contains("ran 3 times in 100 units")
+                && v.detail.contains("the units do not feed the holder"),
+            "{}",
+            v.detail
+        );
+        // One in ten is enough; so is a run with no fresh units recorded.
+        write_run(&s, rec(10, 10, 100));
+        assert_eq!(one_verdict(&s).verdict, Verdict::Executed);
+        write_run(
+            &s,
+            counted(json!({"file": "a.py", "line": 6, "count": 3}), json!({})),
+        );
+        assert_eq!(one_verdict(&s).verdict, Verdict::Executed);
+    }
+
+    #[test]
+    fn a_flat_probe_column_whose_writer_lines_never_ran_is_writer_not_executed() {
+        let s = scene();
+        write_run(
+            &s,
+            counted(json!({"file": "a.py", "line": 6, "count": 0}), json!({})),
+        );
+        let m = manifest(json!([py_probe("P1", "F1", "CACHE")]), &["F1"]);
+        let flat = [1.0; 9];
+        let v = verdicts(&s, &m, vec![Col::gauge("probe:a.CACHE", &flat)], |c| {
+            tie(c, 1)
+        });
+        assert_eq!(v[0].verdict, Verdict::WriterNotExecuted, "{v:?}");
+        assert_eq!(v[0].column.as_deref(), Some("probe:a.CACHE"));
+        assert!(
+            v[0].detail.contains("stayed flat over 8 points"),
+            "{}",
+            v[0].detail
+        );
+        // With a count above 0 the flat reading stands.
+        write_run(
+            &s,
+            counted(json!({"file": "a.py", "line": 6, "count": 2}), json!({})),
+        );
+        let v = verdicts(&s, &m, vec![Col::gauge("probe:a.CACHE", &flat)], |c| {
+            tie(c, 1)
+        });
+        assert_eq!(v[0].verdict, Verdict::Constant, "{v:?}");
+    }
+
+    #[test]
+    fn the_remedy_names_the_lines_that_decide_whether_the_writer_runs() {
+        let s = scene();
+        fs::write(
+            s.dir.path().join("a.py"),
+            "CACHE = {}\n\n\nclass Cart:\n    def add(self, k):\n        if self.frozen:\n            return\n        CACHE[k] = 1\n",
+        )
+        .unwrap();
+        let v = TargetVerdict {
+            finding: FindingId::new(1),
+            verdict: Verdict::WriterNotExecuted,
+            column: None,
+            detail: String::new(),
+            declared: true,
+            writers: vec![dla_core::trend::WriterCount {
+                file: "a.py".into(),
+                line: 8,
+                count: Some(0),
+            }],
+        };
+        let r = writer_remedy(s.dir.path(), &v).unwrap();
+        assert!(
+            r[0].contains("the unit must put the object in the state"),
+            "{r:?}"
+        );
+        assert_eq!(r[1], "a.py:8 ran 0 times in the last run: CACHE[k] = 1");
+        assert_eq!(r[2], "  above it, line 6: if self.frozen:");
+        // Any other verdict has no remedy.
+        let other = TargetVerdict {
+            verdict: Verdict::Executed,
+            ..v
+        };
+        assert!(writer_remedy(s.dir.path(), &other).is_none());
     }
 
     #[test]

@@ -759,3 +759,48 @@ fn annotation_lines_replay_and_graders_can_skip_them() {
     );
     assert_eq!(replay_err(&bad).refusal.code, codes::UNKNOWN_FINDING);
 }
+
+#[test]
+fn only_the_writer_sites_that_add_are_the_writer_lines_to_count() {
+    use dla_core::census::{HolderFacts, SiteFact, SiteKind};
+    let mut l = ledger();
+    add_f1(&mut l);
+    let fact = |site: &str, kind| SiteFact {
+        site: site.into(),
+        kind,
+        depth: 0,
+        function: None,
+        init: false,
+        startup: false,
+        startup_via: Vec::new(),
+        param: false,
+        constant: false,
+        exported: false,
+    };
+    l.annotate_record(dla_core::FindingAnnotation {
+        writers: vec![
+            "src/a.rs:10".into(),
+            "./src\\b.rs:20".into(),
+            "src/a.rs:30".into(),
+            "src/a.rs:40".into(),
+            "src/a.rs:10".into(),
+        ],
+        facts: HolderFacts {
+            writer_sites: vec![
+                fact("src/a.rs:10", SiteKind::Insert),
+                fact("src/a.rs:30", SiteKind::Reset),
+                fact("src/a.rs:40", SiteKind::Reassign),
+            ],
+            ..HolderFacts::default()
+        },
+        ..dla_core::FindingAnnotation::new(fid(1))
+    })
+    .unwrap();
+    let a = l.annotation(&fid(1)).unwrap();
+    // A reset and a reassignment are not counted; a site with no census fact is a writer as
+    // recorded; paths are project-relative with `/`, and a repeat is dropped.
+    assert_eq!(
+        a.adding_writer_lines(),
+        [("src/a.rs".to_owned(), 10), ("src/b.rs".to_owned(), 20)]
+    );
+}

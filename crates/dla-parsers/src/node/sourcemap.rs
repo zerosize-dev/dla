@@ -4,6 +4,11 @@
 //! The decoded size is capped, and every delta is checked, so a hostile map cannot
 //! exhaust memory or overflow.
 
+use std::{
+    fs,
+    path::{Component, Path, PathBuf},
+};
+
 use serde_json::Value;
 
 use super::NodeError;
@@ -229,9 +234,136 @@ impl SourceMap {
     }
 }
 
+/// Largest source map file read by [`ScriptMaps`].
+const MAP_BYTES: u64 = 32 << 20;
+/// Most segments of a source map decoded by [`ScriptMaps`].
+const MAP_SEGMENTS: usize = 2_000_000;
+
+/// Removes `.` and `..` components of a path without touching the disk.
+pub fn normalize_path(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            Component::CurDir => {}
+            c => out.push(c.as_os_str()),
+        }
+    }
+    out
+}
+
+/// The file a script's source map is read from: the one its last `sourceMappingURL` comment
+/// names (relative to the script), else `<script>.map`. `None` when the comment names an inline
+/// (`data:`) or remote map, or no such file exists.
+pub fn map_path_of(script: &Path) -> Option<PathBuf> {
+    use std::io::{Read, Seek, SeekFrom};
+    let dir = script.parent().unwrap_or(Path::new(""));
+    let mut named: Option<PathBuf> = None;
+    if let Ok(mut f) = fs::File::open(script)
+        && let Ok(len) = f.metadata().map(|m| m.len())
+    {
+        let tail = len.min(1024);
+        let mut buf = vec![0u8; tail as usize];
+        if f.seek(SeekFrom::Start(len - tail)).is_ok() && f.read_exact(&mut buf).is_ok() {
+            let text = String::from_utf8_lossy(&buf);
+            let url = text.lines().rev().find_map(|l| {
+                let l = l.trim();
+                l.strip_prefix("//# sourceMappingURL=")
+                    .or_else(|| l.strip_prefix("//@ sourceMappingURL="))
+                    .map(str::trim)
+            });
+            match url {
+                Some(u) if u.starts_with("data:") || u.contains("://") => return None,
+                Some(u) if !u.is_empty() => named = Some(normalize_path(&dir.join(u))),
+                _ => {}
+            }
+        }
+    }
+    let plain = PathBuf::from(format!("{}.map", script.display()));
+    named
+        .filter(|p| p.is_file())
+        .or_else(|| plain.is_file().then_some(plain))
+}
+
+/// Source maps of scripts, each read once.
+#[derive(Default)]
+pub struct ScriptMaps {
+    by_script: std::collections::HashMap<PathBuf, Option<(SourceMap, PathBuf)>>,
+}
+
+impl ScriptMaps {
+    /// The original position of a zero-based generated position in `script`: the source file as
+    /// a normalized path (absolute when `script` is, the `sources` entry resolved against the
+    /// script's directory) and its zero-based line. `None` when the script has no map or the
+    /// map has no entry there.
+    pub fn lookup(&mut self, script: &Path, line: u32, column: u32) -> Option<(PathBuf, u32)> {
+        let map = self
+            .by_script
+            .entry(script.to_path_buf())
+            .or_insert_with(|| {
+                let p = map_path_of(script)?;
+                let meta = fs::metadata(&p).ok()?;
+                if meta.len() > MAP_BYTES {
+                    return None;
+                }
+                let map = SourceMap::parse(&fs::read_to_string(&p).ok()?, MAP_SEGMENTS).ok()?;
+                Some((map, p.parent().unwrap_or(Path::new("")).to_path_buf()))
+            })
+            .as_ref()?;
+        let (map, dir) = (&map.0, &map.1);
+        let o = map.lookup(line, column)?;
+        let source = super::url_to_path(o.source);
+        let file = if Path::new(&source).is_absolute() {
+            PathBuf::from(source)
+        } else {
+            normalize_path(&dir.join(source))
+        };
+        Some((file, o.line))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paths_are_normalized_without_the_disk() {
+        assert_eq!(
+            normalize_path(Path::new("/work/out/../src/a.ts")),
+            PathBuf::from("/work/src/a.ts")
+        );
+        assert_eq!(normalize_path(Path::new("./x/./y")), PathBuf::from("x/y"));
+        assert_eq!(normalize_path(Path::new("../a")), PathBuf::from("../a"));
+    }
+
+    #[test]
+    fn a_script_finds_its_map_by_comment_or_by_name_and_resolves_sources() {
+        let d = tempfile::tempdir().unwrap();
+        let (lib, src) = (d.path().join("lib"), d.path().join("src"));
+        fs::create_dir_all(lib.join("maps")).unwrap();
+        fs::create_dir_all(&src).unwrap();
+        let map = r#"{"version":3,"sources":["../../src/a.ts"],"mappings":"AAAA,uBACe"}"#;
+        fs::write(lib.join("maps/x.map"), map).unwrap();
+        fs::write(lib.join("x.js"), "f();\n//# sourceMappingURL=maps/x.map\n").unwrap();
+        fs::write(lib.join("y.js"), "g();\n").unwrap();
+        fs::write(lib.join("y.js.map"), map.replace("../../src", "../src")).unwrap();
+        fs::write(
+            lib.join("z.js"),
+            "h();\n//# sourceMappingURL=data:application/json;base64,e30=\n",
+        )
+        .unwrap();
+        let mut maps = ScriptMaps::default();
+        let (f, l) = maps.lookup(&lib.join("x.js"), 0, 25).unwrap();
+        assert_eq!((f, l), (src.join("a.ts"), 1));
+        let (f, _) = maps.lookup(&lib.join("y.js"), 0, 30).unwrap();
+        assert_eq!(f, src.join("a.ts"));
+        assert!(maps.lookup(&lib.join("z.js"), 0, 0).is_none());
+        assert!(maps.lookup(&lib.join("none.js"), 0, 0).is_none());
+    }
 
     #[test]
     fn vlq_numbers_decode_with_signs_and_continuations() {

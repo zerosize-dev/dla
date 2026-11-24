@@ -1226,6 +1226,11 @@ fn resolve_open_item(ctx: &Ctx, ledger: &mut Ledger, id: OpenItemId, a: ResolveA
             false,
         )?;
     }
+    if let Resolution::Unresolved { reason, .. } = &resolution
+        && *reason != UnresolvedReason::TimeBudget
+    {
+        refuse_uncaptured_residual(ctx, &id)?;
+    }
     let line = ledger.resolve_open_item(&id, resolution)?;
     Ok(json!({
         "ok": true,
@@ -1233,6 +1238,32 @@ fn resolve_open_item(ctx: &Ctx, ledger: &mut Ledger, id: OpenItemId, a: ResolveA
         "seq": line.seq,
         "record": pointer(ctx, line.seq),
     }))
+}
+
+/// Refuses to leave the open item of a heap residual above its threshold unresolved while the
+/// harness of its series has no summarized capture and its runtime takes `--capture`: the
+/// capture and its `dla summarize` commands say who keeps the growth. An aborted run is not held
+/// to it, and `time_budget` keeps its own rule.
+fn refuse_uncaptured_residual(ctx: &Ctx, id: &OpenItemId) -> Res<()> {
+    let view = RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())?;
+    if view.state.status == dla_core::state::RunStatus::Aborted {
+        return Ok(());
+    }
+    let Some(u) = gate::uncaptured_residual_of(&view, &id.to_string()) else {
+        return Ok(());
+    };
+    Err(Failure::refuse(
+        core_codes::CAPTURE_NOT_SUMMARIZED,
+        format!(
+            "{id} cannot be left unresolved: it is a heap residual above its threshold and harness {} has no summarized capture (no retention or allocation-stack summary computed from capture files under harness/{}/)",
+            u.harness, u.harness
+        ),
+        format!(
+            "a capture of {} and its summaries (who keeps the growth), then the item resolved by what they show",
+            u.harness
+        ),
+        u.fix(),
+    ))
 }
 
 fn resolve_checklist(ctx: &Ctx, ledger: &mut Ledger, item: String, a: ResolveArgs) -> Res<Value> {

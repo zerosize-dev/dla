@@ -249,6 +249,12 @@ impl Held {
     fn growth(&self) -> u64 {
         self.last.saturating_sub(self.first.unwrap_or(0))
     }
+
+    /// True when the counts show growth: a first count is known and the last is above it. A file
+    /// of one dump point computed no growth, so none of its sites grew.
+    fn grew(&self) -> bool {
+        self.first.is_some_and(|first| self.last > first)
+    }
 }
 
 impl HolderOut {
@@ -557,11 +563,12 @@ fn insert_of(o: &mut Map<String, Value>, h: &HolderOut) {
     }
 }
 
-/// True for a holder of the project that keeps at least one major line and that no finding
-/// covers (no finding has its owner): the first thing to act on.
+/// True for a holder of the project that keeps at least one major line that grew and that no
+/// finding covers (no finding has its owner): the first thing to act on. The same rule as the
+/// gate's (`dla_core::measured_holders`).
 fn needs_a_finding(h: &HolderOut, ledger: &Ledger) -> bool {
     h.of == Some(Of::Project)
-        && !h.sites.is_empty()
+        && h.sites.iter().any(Held::grew)
         && h.owner
             .as_deref()
             .is_some_and(|o| !dla_core::measured_holders::covered(ledger, o))
@@ -1105,7 +1112,7 @@ fn retain(ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
                 attention.push(format!(
                     "A HOLDER OF THE PROJECT HAS NO FINDING: {} keeps {} growing line(s) and no finding has the owner {owner}; act on it before anything else: {}",
                     clip(&h.key, CLIP),
-                    h.sites.len(),
+                    h.sites.iter().filter(|s| s.grew()).count(),
                     dla_core::measured_holders::add_command(
                         &evidence,
                         owner,

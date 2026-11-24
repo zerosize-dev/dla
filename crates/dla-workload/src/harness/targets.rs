@@ -87,6 +87,12 @@ pub struct Target {
     pub feature_gaps: Vec<FeatureGap>,
     /// Rust: the command that generates the harness again with those features on.
     pub feature_command: String,
+    /// The lines of the block for the writer lines that did not run in an earlier harness, set by
+    /// [`add_writer_gaps`]: what the unit must do, then per line its text, its count and the
+    /// lines above it that decide whether it runs. Empty for a target none was missed for.
+    pub writer_gap: Vec<String>,
+    /// The harness whose run read the target `writer_not_executed` (empty when none did).
+    pub writer_gap_in: String,
 }
 
 /// The crate features a Rust site lies behind, and whether the driver build enables them.
@@ -638,7 +644,55 @@ pub fn describe(
                 feature_gate: None,
                 feature_gaps: Vec::new(),
                 feature_command: String::new(),
+                writer_gap: Vec::new(),
+                writer_gap_in: String::new(),
             }
+        })
+        .collect()
+}
+
+/// Adds, for each target that an earlier harness read `writer_not_executed` (its function ran
+/// and the lines that add to its holder did not), the lines of the block that say which lines
+/// did not run, how often they ran, and what above them decides whether they run. `misses` are
+/// those earlier reads by finding.
+pub fn add_writer_gaps(
+    project: &Path,
+    targets: &mut [Target],
+    misses: &std::collections::BTreeMap<FindingId, dla_core::queue::Miss>,
+) {
+    for t in targets {
+        let Some(m) = misses
+            .get(&t.id)
+            .filter(|m| m.verdict == dla_core::trend::Verdict::WriterNotExecuted)
+        else {
+            continue;
+        };
+        t.writer_gap_in = m.harness.clone();
+        let mut lines = vec![format!(
+            "the function ran in {} and the lines that add to the holder did not: {}",
+            m.harness,
+            dla_census::guards::INTRO
+        )];
+        for w in &m.writers {
+            lines.extend(dla_census::guards::writer_lines(
+                project, &w.file, w.line, w.count,
+            ));
+        }
+        t.writer_gap = lines;
+    }
+}
+
+/// One short `_attention` entry per target that an earlier harness read `writer_not_executed`:
+/// the output bound cuts an entry at 160 characters, so the lines themselves are in the block.
+pub fn writer_attention(targets: &[Target]) -> Vec<String> {
+    targets
+        .iter()
+        .filter(|t| !t.writer_gap.is_empty())
+        .map(|t| {
+            format!(
+                "{} read writer_not_executed in {}: its writer lines never ran; the driver block lists them with the lines that decide",
+                t.id, t.writer_gap_in
+            )
         })
         .collect()
 }
@@ -835,6 +889,13 @@ impl Target {
         }
         out.push(format!("  {}", site_list("writers", &self.writers)));
         out.push(format!("  {}", site_list("removers", &self.removers)));
+        for (i, l) in self.writer_gap.iter().enumerate() {
+            out.push(if i == 0 {
+                format!("  {l}")
+            } else {
+                format!("    {l}")
+            });
+        }
         if let Some(e) = &self.entry {
             out.extend(e.lines.iter().cloned());
         }
@@ -881,6 +942,7 @@ impl Target {
             "instruction": self.instruction,
             "sibling_of": self.sibling_of,
             "writer_functions": self.entry.as_ref().map(|e| &e.writer_functions),
+            "writer_gap": (!self.writer_gap.is_empty()).then_some(&self.writer_gap),
             "feature_gate": self.feature_gate.as_ref().map(FeatureGate::text),
             "feature_sites": (!self.gated_sites().is_empty()).then(|| {
                 dla_core::features::lead(&self.gated_sites(), &self.feature_command)
@@ -929,6 +991,12 @@ pub fn focus_notes(
                 m.verdict.as_str().replace('_', " "),
                 m.detail
             ));
+            if m.verdict == dla_core::trend::Verdict::WriterNotExecuted {
+                out.push(format!(
+                    "  {}: the function ran there, so reaching it is not enough: the lines that add to the holder must run (they are listed under the target below)",
+                    a.id
+                ));
+            }
         }
     }
     out
@@ -1093,6 +1161,8 @@ mod tests {
             feature_gate: None,
             feature_gaps: Vec::new(),
             feature_command: String::new(),
+            writer_gap: Vec::new(),
+            writer_gap_in: String::new(),
             key_note: None,
         }
     }
@@ -1191,6 +1261,8 @@ mod tests {
             feature_gate: None,
             feature_gaps: Vec::new(),
             feature_command: String::new(),
+            writer_gap: Vec::new(),
+            writer_gap_in: String::new(),
             key_note: None,
         }
     }

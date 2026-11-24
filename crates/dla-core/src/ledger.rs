@@ -247,6 +247,48 @@ pub struct Annotation {
     pub facts: crate::census::HolderFacts,
 }
 
+impl Annotation {
+    /// The writer sites that add to the holder: a site the census read as a reset, a
+    /// reassignment or a delete is left out; a site with no census fact (a hand-written
+    /// annotation, a Rust or C holder) is a writer as recorded.
+    pub fn adding_writers(&self) -> Vec<String> {
+        self.writers
+            .iter()
+            .filter(|w| {
+                let facts: Vec<_> = self
+                    .facts
+                    .writer_sites
+                    .iter()
+                    .filter(|s| s.site.trim() == w.trim())
+                    .collect();
+                facts.is_empty() || facts.iter().any(|s| s.kind.adds())
+            })
+            .cloned()
+            .collect()
+    }
+}
+
+/// A site `file:line` as a project-relative file with `/` separators and a 1-based line.
+pub fn site_parts(site: &str) -> Option<(String, u32)> {
+    let (file, line) = site.trim().rsplit_once(':')?;
+    let line: u32 = line.trim().parse().ok().filter(|l| *l > 0)?;
+    let file = file.replace('\\', "/");
+    Some((file.trim_start_matches("./").to_owned(), line))
+}
+
+impl Annotation {
+    /// [`Self::adding_writers`] as (file, line) pairs, in the order recorded, without a repeat.
+    pub fn adding_writer_lines(&self) -> Vec<(String, u32)> {
+        let mut out: Vec<(String, u32)> = Vec::new();
+        for p in self.adding_writers().iter().filter_map(|w| site_parts(w)) {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+        out
+    }
+}
+
 /// Prints the fields every ledger of an older version has; the census facts only when there
 /// are some, so that an annotation made before they existed prints as it always did.
 impl std::fmt::Debug for Annotation {

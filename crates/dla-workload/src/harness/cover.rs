@@ -28,6 +28,8 @@ use dla_core::{
 };
 use serde_json::Value;
 
+use super::lines;
+
 /// What a run exercised.
 #[derive(Debug, Clone, Default)]
 pub struct Exercised {
@@ -51,7 +53,7 @@ fn qualified(id: &str) -> Option<&str> {
 }
 
 /// Project-relative form of `path` (absolute inside `work`, or already relative).
-fn relative_to(work: &Path, path: &str) -> Option<String> {
+pub(super) fn relative_to(work: &Path, path: &str) -> Option<String> {
     let p = Path::new(path);
     if !p.is_absolute() {
         return Some(path.trim_start_matches("./").replace('\\', "/"));
@@ -83,7 +85,7 @@ fn comparable(path: &str) -> String {
 
 /// The local path of a `file://` URL as V8 writes it: percent-decoded, and on Windows
 /// without the slash before the drive letter (`file:///C:/a` is `C:/a`).
-fn file_url_path(url: &str) -> Option<String> {
+pub(super) fn file_url_path(url: &str) -> Option<String> {
     let rest = url.strip_prefix("file://")?;
     let bytes = rest.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -392,9 +394,31 @@ fn node_functions(cov_dir: &Path, work: &Path) -> BTreeSet<(String, String)> {
         .collect()
 }
 
+/// The file of the work copy (`/`-separated, relative) and the 1-based line that the zero-based
+/// generated position of the script `rel` maps to, when the script has a source map whose source
+/// is a file of the work copy outside `node_modules`.
+pub(super) fn original_in_work(
+    maps: &mut dla_parsers::node::sourcemap::ScriptMaps,
+    work: &Path,
+    rel: &str,
+    line: u32,
+    col: u32,
+) -> Option<(String, u32)> {
+    let (file, l) = maps.lookup(&work.join(rel), line, col)?;
+    let source = relative_to(work, file.to_str()?)?;
+    if source.starts_with("node_modules/")
+        || source.contains("/node_modules/")
+        || !work.join(&source).is_file()
+    {
+        return None;
+    }
+    Some((source, l + 1))
+}
+
 /// [`node_functions`] with the 1-based line each function starts at.
 fn node_function_lines(cov_dir: &Path, work: &Path) -> BTreeSet<(String, String, u32)> {
     let mut out = BTreeSet::new();
+    let mut maps = dla_parsers::node::sourcemap::ScriptMaps::default();
     let Ok(rd) = fs::read_dir(cov_dir) else {
         return out;
     };
@@ -428,6 +452,8 @@ fn node_function_lines(cov_dir: &Path, work: &Path) -> BTreeSet<(String, String,
                 continue;
             }
             let source = fs::read_to_string(work.join(&rel)).unwrap_or_default();
+            // A script with a source map reports its functions at the original position when
+            // the map's source is a file of the project.
             for f in script
                 .get("functions")
                 .and_then(Value::as_array)
@@ -450,12 +476,21 @@ fn node_function_lines(cov_dir: &Path, work: &Path) -> BTreeSet<(String, String,
                         .and_then(|r| r.get("startOffset"))
                         .and_then(Value::as_u64)
                         .unwrap_or(0) as usize;
-                    let line = source.chars().take(offset).filter(|c| *c == '\n').count() + 1;
-                    out.insert((
-                        rel.clone(),
-                        name.to_owned(),
-                        u32::try_from(line).unwrap_or(u32::MAX),
-                    ));
+                    let before: String = source.chars().take(offset).collect();
+                    let line = before.matches('\n').count() + 1;
+                    let line = u32::try_from(line).unwrap_or(u32::MAX);
+                    let col = before.rsplit('\n').next().map_or(0, |l| l.chars().count());
+                    if let Some((file, l)) = original_in_work(
+                        &mut maps,
+                        work,
+                        &rel,
+                        line - 1,
+                        u32::try_from(col).unwrap_or(u32::MAX),
+                    ) {
+                        out.insert((file, name.to_owned(), l));
+                        continue;
+                    }
+                    out.insert((rel.clone(), name.to_owned(), line));
                 }
             }
         }
@@ -767,7 +802,25 @@ pub fn executed_record(
     cov_dir: &Path,
     work: &Path,
 ) -> Value {
+    executed_record_with(runtime, dump_cov, hdir, cov_dir, work, &[])
+}
+
+/// [`executed_record`] with the lines `writers` asks about (the writer lines of the harness's
+/// targets, project-relative file and 1-based line): a record of a runtime that counts lines
+/// (Node, Go, Rust) gets `lines`, `[{file, line, count, why}]` with `count` null where the line
+/// could not be counted, and for Rust `fresh_units` and a `fresh` count per line, the units and
+/// the executions of the coverage runs made with fresh keys.
+pub fn executed_record_with(
+    runtime: Runtime,
+    dump_cov: &[DumpCoverage],
+    hdir: &Path,
+    cov_dir: &Path,
+    work: &Path,
+    writers: &[lines::Wanted],
+) -> Value {
     const CAP: usize = 40_000;
+    let mut counted: Option<Vec<Value>> = None;
+    let mut fresh_units: Option<u64> = None;
     let work = work.canonicalize().unwrap_or_else(|_| work.to_path_buf());
     let mut functions: Vec<Value> = Vec::new();
     let mut classes: Vec<String> = Vec::new();
@@ -814,6 +867,9 @@ pub fn executed_record(
             for (file, name, line) in fns {
                 functions.push(serde_json::json!({"file": file, "name": name, "line": line}));
             }
+            if !writers.is_empty() {
+                counted = Some(lines::node_line_counts(cov_dir, &work, writers));
+            }
         }
         Runtime::Go => {
             let (fns, notes) = go_function_lines(cov_dir, &work);
@@ -827,6 +883,9 @@ pub fn executed_record(
             }
             for (file, name, line) in fns {
                 functions.push(serde_json::json!({"file": file, "name": name, "line": line}));
+            }
+            if !writers.is_empty() {
+                counted = Some(lines::go_line_counts(cov_dir, writers));
             }
         }
         Runtime::Jvm => {
@@ -857,6 +916,11 @@ pub fn executed_record(
             for (file, name, line) in fns {
                 functions.push(serde_json::json!({"file": file, "name": name, "line": line}));
             }
+            if !writers.is_empty() {
+                let (list, units) = rust_counted_lines(cov_dir, writers);
+                counted = Some(list);
+                fresh_units = units;
+            }
         }
         Runtime::Native => {
             note = "the allocator shim sees allocations, not calls".into();
@@ -865,10 +929,88 @@ pub fn executed_record(
     functions.truncate(CAP);
     classes.truncate(CAP);
     sources.truncate(CAP);
-    serde_json::json!({
+    let mut record = serde_json::json!({
         "runtime": runtime.as_str(), "kind": kind, "functions": functions,
         "classes": classes, "sources": sources, "note": note,
-    })
+    });
+    // Only a record that lists functions can say what a line of one of them did.
+    if kind == "functions"
+        && let Some(list) = counted
+    {
+        record["lines"] = Value::Array(list);
+        if let Some(n) = fresh_units {
+            record["fresh_units"] = Value::from(n);
+        }
+    }
+    record
+}
+
+/// The counted writer lines of the Rust coverage points of `cov_dir`: per wanted line the sum of
+/// the counts the points wrote (`count`, null when no point counted it) and of the points made
+/// with fresh keys (`fresh`), and the units of those points. A point of an older version has no
+/// `lines`: every wanted line is then unknown, with that reason.
+fn rust_counted_lines(cov_dir: &Path, wanted: &[lines::Wanted]) -> (Vec<Value>, Option<u64>) {
+    let wanted = lines::dedupe(wanted);
+    let mut all: Vec<Option<u64>> = vec![None; wanted.len()];
+    let mut fresh: Vec<Option<u64>> = vec![None; wanted.len()];
+    let mut units: Option<u64> = None;
+    let mut why = "no Rust coverage point counted the line (the coverage run did not write counts)";
+    let Ok(rd) = fs::read_dir(cov_dir) else {
+        return (Vec::new(), None);
+    };
+    let mut files: Vec<PathBuf> = rd
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(RUST_COVER_SUFFIX))
+        })
+        .collect();
+    files.sort();
+    for p in files {
+        let Some(doc) = fs::read_to_string(&p)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        else {
+            continue;
+        };
+        let Some(list) = doc.get("lines").and_then(Value::as_array) else {
+            continue;
+        };
+        why = "no code region of the coverage export covers the line";
+        let is_fresh = doc.get("mode").and_then(Value::as_str) == Some("fresh");
+        if is_fresh && let Some(n) = doc.get("units").and_then(Value::as_u64) {
+            units = Some(units.unwrap_or(0) + n);
+        }
+        for (i, (file, line)) in wanted.iter().enumerate() {
+            let hit = list.iter().find(|e| {
+                e.get("file").and_then(Value::as_str) == Some(file.as_str())
+                    && e.get("line").and_then(Value::as_u64) == Some(u64::from(*line))
+            });
+            if let Some(n) = hit.and_then(|e| e.get("count")).and_then(Value::as_u64) {
+                all[i] = Some(all[i].unwrap_or(0) + n);
+                if is_fresh {
+                    fresh[i] = Some(fresh[i].unwrap_or(0) + n);
+                }
+            }
+        }
+    }
+    let list = wanted
+        .iter()
+        .enumerate()
+        .map(|(i, (file, line))| match all[i] {
+            Some(n) => {
+                let mut e = serde_json::json!({"file": file, "line": line, "count": n});
+                if let Some(f) = fresh[i] {
+                    e["fresh"] = Value::from(f);
+                }
+                e
+            }
+            None => serde_json::json!({"file": file, "line": line, "count": null, "why": why}),
+        })
+        .collect();
+    (list, units)
 }
 
 /// File the run's [`executed_record`] is written to, before the run's own record names it.
@@ -903,9 +1045,10 @@ pub fn record(
             hdir,
             cov_dir,
             work,
+            writers,
             ..
         } => {
-            let record = executed_record(runtime, dump_cov, hdir, cov_dir, work);
+            let record = executed_record_with(runtime, dump_cov, hdir, cov_dir, work, writers);
             let _ = fs::write(
                 hdir.join(EXECUTED_FILE),
                 serde_json::to_string(&record).unwrap_or_default(),
@@ -991,6 +1134,9 @@ pub enum CoverageOutcome<'a> {
         cov_dir: &'a Path,
         /// Scratch project.
         work: &'a Path,
+        /// The writer lines of the harness's targets (project-relative file, 1-based line):
+        /// the lines whose executions the coverage record counts, when the runtime can.
+        writers: Vec<lines::Wanted>,
     },
     /// The build failed or no point produced data: `reason` is `build_fails` or
     /// `no_harness`.
@@ -1057,6 +1203,7 @@ mod tests {
                     hdir: dir.path(),
                     cov_dir: dir.path(),
                     work: dir.path(),
+                    writers: Vec::new(),
                 },
             )
             .unwrap();
@@ -1583,6 +1730,81 @@ mod tests {
     }
 
     #[test]
+    fn node_functions_of_a_bundle_are_reported_at_their_source_position() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().canonicalize().unwrap();
+        let cov = work.join("cov");
+        for (f, text) in [
+            ("cov/.keep", ""),
+            (
+                "src/reg.ts",
+                "const L: any[] = [];\nexport function on(f: any) {\n  L.push(f);\n}\n",
+            ),
+            (
+                "lib/index.js",
+                "const L = [];\nfunction on(f) { L.push(f); }\nmodule.exports = { on };\n//# sourceMappingURL=index.js.map\n",
+            ),
+            (
+                "lib/index.js.map",
+                r#"{"version":3,"sources":["../src/reg.ts"],"mappings":";AACA"}"#,
+            ),
+            ("lib/plain.js", "function plain() {}\nplain();\n"),
+        ] {
+            let p = work.join(f);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, text).unwrap();
+        }
+        let shown = work.to_string_lossy().replace('\\', "/");
+        let shown = shown.strip_prefix("//?/").unwrap_or(&shown).to_owned();
+        let url = |f: &str| {
+            if shown.starts_with('/') {
+                format!("file://{shown}/{f}")
+            } else {
+                format!("file:///{shown}/{f}")
+            }
+        };
+        // `on` starts at offset 14 (line 2 of the bundle), `plain` at offset 0.
+        fs::write(
+            cov.join("coverage-1.json"),
+            json!({"result":[
+                {"url":url("lib/index.js"),"functions":[
+                    {"functionName":"on","ranges":[{"startOffset":14,"count":3}]}]},
+                {"url":url("lib/plain.js"),"functions":[
+                    {"functionName":"plain","ranges":[{"startOffset":0,"count":1}]}]}]})
+            .to_string(),
+        )
+        .unwrap();
+        let fns = node_function_lines(&cov, &work);
+        assert!(
+            fns.contains(&("src/reg.ts".to_owned(), "on".to_owned(), 2)),
+            "{fns:?}"
+        );
+        assert!(!fns.iter().any(|(f, _, _)| f == "lib/index.js"), "{fns:?}");
+        // A script without a map keeps its built position.
+        assert!(
+            fns.contains(&("lib/plain.js".to_owned(), "plain".to_owned(), 1)),
+            "{fns:?}"
+        );
+        let ex = exercised(
+            Runtime::Node,
+            &d(&["src/reg.ts::on", "src/reg.ts::off"]),
+            &[],
+            &work,
+            &cov,
+            &work,
+        );
+        assert_eq!(ex.entries.len(), 1);
+        let rec = executed_record(Runtime::Node, &[], &work, &cov, &work);
+        let listed: Vec<_> = rec["functions"].as_array().unwrap().iter().collect();
+        assert!(
+            listed
+                .iter()
+                .any(|f| f["file"] == "src/reg.ts" && f["name"] == "on" && f["line"] == 2),
+            "{rec}"
+        );
+    }
+
+    #[test]
     fn native_measures_nothing_and_says_so() {
         let ex = exercised(
             Runtime::Native,
@@ -1663,5 +1885,64 @@ mod tests {
         assert!(ex.entries.is_empty() && ex.limitations[0].contains("no Rust coverage data"));
         let rec = executed_record(Runtime::Rust, &[], dir.path(), &empty, dir.path());
         assert_eq!(rec["kind"], "none");
+    }
+    #[test]
+    fn the_executed_record_counts_the_writer_lines_of_a_rust_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let cov = dir.path().join("cov");
+        fs::create_dir_all(&cov).unwrap();
+        let point = |mode: &str, units: u64, count: Value| {
+            json!({"functions": [{"file": "src/lib.rs", "name": "calc::put", "line": 6}],
+                "mode": mode, "units": units,
+                "lines": [{"file": "src/lib.rs", "line": 9, "count": count},
+                          {"file": "src/lib.rs", "line": 12, "count": null, "why": "no code region of the coverage export covers the line"}]})
+            .to_string()
+        };
+        fs::write(
+            cov.join("p1-fresh-cover.rust.json"),
+            point("fresh", 100, json!(4)),
+        )
+        .unwrap();
+        fs::write(
+            cov.join("p1-repeated-cover.rust.json"),
+            point("repeated", 100, json!(100)),
+        )
+        .unwrap();
+        let writers = vec![
+            ("src/lib.rs".to_owned(), 9),
+            ("src/lib.rs".to_owned(), 12),
+            ("src/lib.rs".to_owned(), 30),
+        ];
+        let rec = executed_record_with(Runtime::Rust, &[], dir.path(), &cov, dir.path(), &writers);
+        let lines = rec["lines"].as_array().unwrap();
+        // The count adds up over both key modes, `fresh` is the fresh run's own, and the units
+        // are the fresh run's.
+        assert_eq!(
+            lines[0],
+            json!({"file": "src/lib.rs", "line": 9, "count": 104, "fresh": 4})
+        );
+        assert_eq!(lines[1]["count"], Value::Null, "{rec}");
+        assert!(lines[1]["why"].as_str().unwrap().contains("no code region"));
+        assert_eq!(lines[2]["count"], Value::Null, "{rec}");
+        assert_eq!(rec["fresh_units"], 100, "{rec}");
+        // No writer asked for: the record is what it was.
+        let plain = executed_record_with(Runtime::Rust, &[], dir.path(), &cov, dir.path(), &[]);
+        assert!(plain.get("lines").is_none() && plain.get("fresh_units").is_none());
+        // A point written before the counts existed: every wanted line is unknown, with a reason.
+        fs::write(
+            cov.join("p1-fresh-cover.rust.json"),
+            json!({"functions": [{"file": "src/lib.rs", "name": "calc::put", "line": 6}]})
+                .to_string(),
+        )
+        .unwrap();
+        fs::remove_file(cov.join("p1-repeated-cover.rust.json")).unwrap();
+        let old = executed_record_with(Runtime::Rust, &[], dir.path(), &cov, dir.path(), &writers);
+        assert_eq!(old["lines"][0]["count"], Value::Null, "{old}");
+        assert!(
+            old["lines"][0]["why"]
+                .as_str()
+                .unwrap()
+                .contains("did not write counts")
+        );
     }
 }
