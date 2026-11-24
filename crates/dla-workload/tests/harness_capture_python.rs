@@ -217,10 +217,65 @@ fn file_names_classify_and_each_format_gets_its_own_command() {
 }
 
 #[test]
-fn python_keeps_histogram_alloc_and_nonheap() {
+fn python_keeps_heap_histogram_alloc_and_nonheap() {
     let all: capture::CaptureSet = "all".parse().unwrap();
     let py = all.intersect(&capture::supported(dla_core::runtime::Runtime::Python));
-    assert_eq!(py.names(), ["histogram", "nonheap", "alloc"]);
+    assert_eq!(py.names(), ["heap", "histogram", "nonheap", "alloc"]);
+    let heap: capture::CaptureSet = "heap".parse().unwrap();
+    assert_eq!(
+        heap.intersect(&capture::supported(dla_core::runtime::Runtime::Python))
+            .names(),
+        ["heap"]
+    );
+}
+
+#[test]
+fn the_holder_chains_file_is_a_heap_capture_with_a_heap_graph_command_of_its_own() {
+    let c = capture::classify("py-1.retain.json").unwrap();
+    assert_eq!((c.0, c.1), (CaptureKind::Heap, 1));
+    assert!(capture::classify("py-x.retain.json").is_none());
+    let file = |kind, label: &str, seq: u32, x: f64, tail: &str| CaptureFile {
+        kind,
+        path: format!("p/capture/7/py-{seq}.{tail}.json"),
+        label: label.to_owned(),
+        seq,
+        x: Some(x),
+        role: None,
+        bytes: 10,
+        ms: None,
+        captured_at: String::new(),
+    };
+    let files = vec![
+        file(CaptureKind::Alloc, "p1-fresh", 1, 100.0, "alloc"),
+        file(CaptureKind::Heap, "p1-fresh", 1, 400.0, "retain"),
+    ];
+    let cmds = capture::summarize_commands(&files, &|p| p.to_owned(), false);
+    assert_eq!(
+        cmds,
+        [
+            "dla summarize heap-graph p/capture/7/py-1.retain.json",
+            "dla summarize alloc-stack-diff p/capture/7/py-1.alloc.json"
+        ]
+    );
+    // Command mode, one process per point: only the newest file is read.
+    let points: Vec<CaptureFile> = (1..=3u32)
+        .map(|k| {
+            let mut f = file(
+                CaptureKind::Heap,
+                &format!("p{k}-native"),
+                1,
+                f64::from(k) * 100.0,
+                "retain",
+            );
+            f.path = format!("p{k}/capture/{k}/py-1.retain.json");
+            f
+        })
+        .collect();
+    let cmds = capture::summarize_commands(&points, &|p| p.to_owned(), false);
+    assert_eq!(
+        cmds,
+        ["dla summarize heap-graph p3/capture/3/py-1.retain.json"]
+    );
 }
 
 #[test]
@@ -1073,4 +1128,574 @@ fn a_probe_never_imports_and_says_so_for_shapes_a_project_really_has() {
             && l.as_str().unwrap().contains("pkg.sub")),
         "{limits:?}"
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// `dla harness run --capture heap`: the file, its listing and the raw-values switch
+
+/// A run directory with consent for tier 1 (raw values as given), the agent files in
+/// `harness/H1/agent` and a scratch project with one module that keeps an object per call under
+/// one dictionary key.
+struct Driven {
+    _dir: tempfile::TempDir,
+    ctx: dla_core::toolctx::ToolCtx,
+    hdir: PathBuf,
+}
+
+fn driven(raw_values: bool) -> Driven {
+    use dla_core::{
+        Ledger,
+        state::{Consent, ConsentGiver, RunState, now_utc},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    let run_dir = project.join(".dla/r1");
+    fs::create_dir_all(&run_dir).unwrap();
+    let mut st =
+        RunState::init(project.to_str().unwrap(), Some("s"), 3600, None, now_utc()).unwrap();
+    st.run_id = "r1".into();
+    st.consent = Some(Consent {
+        tiers: vec![1],
+        raw_values,
+        given_by: ConsentGiver::Runner,
+        recorded_at: now_utc(),
+    });
+    st.save(&run_dir).unwrap();
+    Ledger::create(&run_dir).unwrap();
+    let ctx = dla_core::toolctx::ToolCtx {
+        project,
+        run_dir: run_dir.clone(),
+        run_id: "r1".into(),
+        source_commit: "abc".into(),
+        data_flag: None,
+        worker: None,
+    };
+    let hdir = run_dir.join("harness/H1");
+    let (work, agent) = (hdir.join("work"), hdir.join("agent"));
+    fs::create_dir_all(&agent).unwrap();
+    fs::create_dir_all(&work).unwrap();
+    for e in fs::read_dir(repo().join("harness/python"))
+        .unwrap()
+        .flatten()
+    {
+        if e.path().is_file() {
+            fs::copy(e.path(), agent.join(e.file_name())).unwrap();
+        }
+    }
+    fs::write(
+        work.join("held.py"),
+        "KEPT = {}\n\n\ndef keep(i):\n    KEPT.setdefault('zz_marker_key', []).append(object())\n",
+    )
+    .unwrap();
+    Driven {
+        _dir: dir,
+        ctx,
+        hdir,
+    }
+}
+
+/// Runs the driver of `d` with `capture` and returns the outcome's run directory listing.
+fn run_driven(d: &Driven, capture: &str) {
+    run_driven_with(d, capture, "import held", "_state['held'].keep(i)", None);
+}
+
+/// [`run_driven`] with the import line of the setup hook, the unit hook and a directory of the
+/// project's source tree that is on the path but not in the scratch copy (an editable install).
+fn run_driven_with(d: &Driven, capture: &str, imports: &str, unit: &str, extra: Option<&Path>) {
+    use dla_core::{
+        harness::{AgentKind, CommandSpec, HarnessManifest, HarnessMode},
+        runtime::Runtime,
+        series::KeyMode,
+    };
+    let (work, agent) = (d.hdir.join("work"), d.hdir.join("agent"));
+    let setup = format!(
+        "import os, held\n    {imports}\n    _state['held'] = held\n    open({:?}, 'w').write(os.environ.get('DLA_RAW_VALUES', 'unset'))",
+        d.hdir.join("raw-env.txt").to_string_lossy()
+    );
+    let tmpl = fs::read_to_string(agent.join("dla_harness.py")).unwrap();
+    let driver = tmpl
+        .replace("@@DLA_STEP@@", "40")
+        .replace("@@DLA_WARMUP@@", "1")
+        .replace("@@DLA_ROUNDS@@", "3")
+        .replace("@@DLA_REPEAT@@", "50")
+        .replace(
+            "raise NotImplementedError(\"DLA-HOOK setup has not been filled in\")",
+            &setup,
+        )
+        .replace(
+            "raise NotImplementedError(\"DLA-HOOK unit has not been filled in\")",
+            unit,
+        );
+    fs::create_dir_all(d.hdir.join("driver")).unwrap();
+    fs::write(d.hdir.join("driver/dla_harness.py"), &driver).unwrap();
+    fs::write(work.join("dla_harness.py"), &driver).unwrap();
+    let m = HarnessManifest {
+        sibling_of: Default::default(),
+        purpose: None,
+        targets: Vec::new(),
+        schema_version: 1,
+        id: "H1".into(),
+        runtime: Runtime::Python,
+        mode: HarnessMode::Driver,
+        workload: Some("test".into()),
+        scratch: "harness/H1/work".into(),
+        build: None,
+        run: CommandSpec {
+            argv: vec![
+                "python3".into(),
+                work.join("dla_harness.py").to_string_lossy().into_owned(),
+            ],
+            cwd: ".".into(),
+            env: vec![(
+                "PYTHONPATH".to_owned(),
+                match extra {
+                    Some(e) => format!("{}:{}:{}", agent.display(), work.display(), e.display()),
+                    None => format!("{}:{}", agent.display(), work.display()),
+                },
+            )],
+        },
+        iter_arg: Some("{n}".into()),
+        warmup: 1,
+        iterations: 3,
+        step: 40,
+        key_modes: vec![KeyMode::Fresh],
+        probes: vec![],
+        agent: AgentKind::DriverPython,
+        detectors: vec![],
+        tools: vec![],
+        gaps: vec![],
+        timeout_secs: 120,
+        ffi: None,
+        captures: vec![],
+    };
+    m.save(&d.ctx.run_dir).unwrap();
+    fs::write(d.hdir.join("probes.json"), r#"{"probes":[]}"#).unwrap();
+    let opts = dla_workload::harness::run::RunOptions {
+        capture: capture.parse().unwrap(),
+        ..Default::default()
+    };
+    dla_workload::harness::run::run(&d.ctx, "H1", &opts).unwrap();
+}
+
+fn retain_file(d: &Driven) -> PathBuf {
+    let mut found = Vec::new();
+    let out = d.hdir.join("out");
+    for e in walk(&out) {
+        if e.file_name().is_some_and(|n| n == "py-1.retain.json") {
+            found.push(e);
+        }
+    }
+    assert_eq!(found.len(), 1, "{found:?}");
+    found.pop().unwrap()
+}
+
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let mut v = Vec::new();
+    for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            v.extend(walk(&p));
+        } else {
+            v.push(p);
+        }
+    }
+    v
+}
+
+#[test]
+fn a_heap_capture_run_writes_the_chains_file_lists_it_and_prints_its_summarize_command() {
+    if !have_python() {
+        return;
+    }
+    let d = driven(false);
+    run_driven(&d, "heap");
+    let file = retain_file(&d);
+    let doc = json(&file);
+    assert_eq!(doc["dla_pyretain"], 1, "{doc}");
+    let sites = doc["sites"].as_array().unwrap();
+    assert!(
+        sites.iter().any(|s| s["site"]
+            .as_str()
+            .is_some_and(|x| x.starts_with("held.py:"))
+            && s["chains"][0]["root"]["kind"] == "module-global"
+            && s["chains"][0]["root"]["key"] == "KEPT"),
+        "{doc}"
+    );
+    // captures.json lists it as a heap capture and prints the heap-graph command for it.
+    let list = json(&d.hdir.join("captures.json"));
+    let files = list["files"].as_array().unwrap();
+    let entry = files
+        .iter()
+        .find(|f| {
+            f["path"]
+                .as_str()
+                .is_some_and(|p| p.ends_with("py-1.retain.json"))
+        })
+        .unwrap_or_else(|| panic!("{list}"));
+    assert_eq!(entry["kind"], "heap", "{entry}");
+    assert_eq!(entry["seq"], 1);
+    let cmds: Vec<&str> = list["summarize"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(
+        cmds.iter()
+            .any(|c| c.starts_with("dla summarize heap-graph ") && c.ends_with("py-1.retain.json")),
+        "{cmds:?}"
+    );
+    // The agent's own record lists the file too (the run lists only what the agent confirms).
+    let out_records: Vec<Value> = walk(&d.hdir.join("out"))
+        .iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        .flat_map(|p| {
+            fs::read_to_string(p)
+                .unwrap()
+                .lines()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        })
+        .filter_map(|l| serde_json::from_str(&l).ok())
+        .collect();
+    assert!(
+        out_records
+            .iter()
+            .flat_map(captures)
+            .any(|c| c["kind"] == "heap" && c["file"] == "py-1.retain.json"),
+        "{out_records:?}"
+    );
+    // `all` includes it for a Python harness.
+    let d = driven(false);
+    run_driven(&d, "all");
+    retain_file(&d);
+}
+
+#[test]
+fn the_agent_gets_raw_values_only_when_the_runs_consent_allows_them() {
+    if !have_python() {
+        return;
+    }
+    let without = driven(false);
+    run_driven(&without, "heap");
+    assert_eq!(
+        fs::read_to_string(without.hdir.join("raw-env.txt")).unwrap(),
+        "unset"
+    );
+    let text = fs::read_to_string(retain_file(&without)).unwrap();
+    assert!(!text.contains("zz_marker_key"), "{text}");
+    let with = driven(true);
+    run_driven(&with, "heap");
+    assert_eq!(
+        fs::read_to_string(with.hdir.join("raw-env.txt")).unwrap(),
+        "1"
+    );
+    let text = fs::read_to_string(retain_file(&with)).unwrap();
+    assert!(text.contains("zz_marker_key"), "{text}");
+    // A run that asks for no heap capture never passes the switch, whatever the consent.
+    let none = driven(true);
+    run_driven(&none, "histogram");
+    assert_eq!(
+        fs::read_to_string(none.hdir.join("raw-env.txt")).unwrap(),
+        "unset"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// the walk to the holder does not go through a long shared chain once per object
+
+/// A module-level object that stores an exception and raises that same object again, 16 000
+/// times, with six lines that keep a list per call: every kept object of every line is held through
+/// the one traceback list of about 32 000 objects.
+const RERAISE_SCRIPT: &str = "\
+class Holder:
+    def __init__(self, ex):
+        self.ex = ex
+
+    def __getattr__(self, name):
+        raise self.ex
+
+
+_h = Holder(ImportError('missing'))
+
+
+def unit(i):
+    a1 = [i]
+    a2 = [i]
+    a3 = [i]
+    a4 = [i]
+    a5 = [i]
+    a6 = [i]
+    try:
+        _h.something
+    except ImportError:
+        pass
+    return len(a1) + len(a2) + len(a3) + len(a4) + len(a5) + len(a6)
+
+
+for n in range(16000):
+    unit(n)
+";
+
+#[test]
+fn a_chain_every_kept_object_runs_through_is_walked_once() {
+    if !have_python() {
+        return;
+    }
+    let run = Run::new();
+    fs::write(run.project.join("reraise_big.py"), RERAISE_SCRIPT).unwrap();
+    run.python(&["reraise_big.py"], &[("DLA_CAPTURE", "heap")]);
+    let doc = json(&run.pid_dir().join("py-1.retain.json"));
+    // The capture's own time, as the agent reports it: the walk that went through the list again
+    // for each object took the whole 60 s bound here, the walk that remembers its way takes a few
+    // seconds. The bound leaves room for a slow machine and is far from the old time.
+    let rec = run
+        .records()
+        .into_iter()
+        .rev()
+        .find(|r| !captures(r).is_empty())
+        .unwrap();
+    let heap = captures(&rec)
+        .into_iter()
+        .find(|c| c["kind"] == "heap")
+        .unwrap();
+    let ms = heap["ms"].as_u64().unwrap();
+    assert!(ms < 20_000, "the heap capture took {ms} ms");
+    // Every line that has kept objects has chains, and nothing was cut by the time bound.
+    let sites = doc["sites"].as_array().unwrap();
+    let lines: Vec<&Value> = sites
+        .iter()
+        .filter(|s| {
+            s["site"]
+                .as_str()
+                .is_some_and(|x| x.starts_with("reraise_big.py:"))
+                && s["kept"].as_u64().unwrap() >= 40
+        })
+        .collect();
+    assert!(lines.len() >= 6, "{doc}");
+    for s in &lines {
+        let objects: u64 = s["chains"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["count"].as_u64().unwrap())
+            .sum();
+        assert_eq!(objects, s["kept"].as_u64().unwrap(), "{s}");
+        assert!(
+            s["chains"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|c| c["root"]["kind"] == "module-global"),
+            "{s}"
+        );
+    }
+    let text = doc["limitations"].to_string();
+    assert!(!text.contains("time bound"), "{text}");
+    // The run of tracebacks is one step with its length.
+    let longest = lines
+        .iter()
+        .flat_map(|s| s["chains"].as_array().unwrap())
+        .flat_map(|c| c["steps"].as_array().unwrap())
+        .filter(|st| st["type"] == "traceback")
+        .filter_map(|st| st["repeat"].as_u64())
+        .max()
+        .unwrap();
+    assert!(longest > 10_000, "{longest}");
+}
+
+#[test]
+fn a_step_is_named_like_the_growing_lines_in_the_copy_in_the_source_tree_and_never_by_an_absolute_path()
+ {
+    if !have_python() {
+        return;
+    }
+    let d = driven(false);
+    // A module of the project's source tree that the scratch copy does not hold (an editable
+    // install runs from there): it keeps a function and a bound method of a standard library
+    // object per call, in a module list.
+    let src = d.ctx.project.join("lib");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(
+        src.join("editable.py"),
+        "import textwrap\n\nKEPT = []\n\n\ndef keep(i):\n    f = lambda: i\n    KEPT.append(f)\n    KEPT.append(textwrap.TextWrapper().fill)\n",
+    )
+    .unwrap();
+    run_driven_with(
+        &d,
+        "heap",
+        "import editable\n    _state['editable'] = editable",
+        "_state['held'].keep(i)\n    _state['editable'].keep(i)",
+        Some(&src),
+    );
+    let doc = json(&retain_file(&d));
+    let steps: Vec<(String, String)> = doc["sites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|s| s["chains"].as_array().unwrap())
+        .flat_map(|c| c["steps"].as_array().unwrap())
+        .filter_map(|st| {
+            Some((
+                st["type"].as_str()?.to_owned(),
+                st["at"].as_str()?.to_owned(),
+            ))
+        })
+        .collect();
+    let sites: Vec<&str> = doc["sites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|s| s["site"].as_str())
+        .collect();
+    assert!(
+        sites.iter().any(|s| s.starts_with("lib/editable.py:")),
+        "{sites:?}"
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|(t, at)| t == "function" && at.starts_with("lib/editable.py:")),
+        "{steps:?}"
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|(t, at)| t == "method" && at.starts_with("<outside>/textwrap.py:")),
+        "{steps:?}"
+    );
+    let text = doc.to_string();
+    assert!(
+        !text.contains(d.ctx.project.to_string_lossy().as_ref()) && !text.contains("\"/"),
+        "an absolute path in the file: {text}"
+    );
+}
+
+#[test]
+fn a_run_of_tracebacks_lists_the_places_it_names_in_the_order_met() {
+    if !have_python() {
+        return;
+    }
+    let run = Run::new();
+    // One stored exception raised through three different lines in turn: the run of tracebacks is
+    // one step, and `at` is the first line only.
+    fs::write(
+        run.project.join("reraise_ats.py"),
+        "class Holder:\n    def __init__(self, ex):\n        self.ex = ex\n\n    def __getattr__(self, name):\n        raise self.ex\n\n\n_h = Holder(ImportError('x'))\n\n\ndef first(i):\n    keep = [i]\n    try:\n        _h.a\n    except ImportError:\n        pass\n    return len(keep)\n\n\ndef second(i):\n    try:\n        _h.b\n    except ImportError:\n        pass\n\n\nfor n in range(300):\n    first(n)\n    second(n)\n",
+    )
+    .unwrap();
+    run.python(&["reraise_ats.py"], &[("DLA_CAPTURE", "heap")]);
+    let doc = json(&run.pid_dir().join("py-1.retain.json"));
+    let steps: Vec<&Value> = doc["sites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|s| s["chains"].as_array().unwrap())
+        .flat_map(|c| c["steps"].as_array().unwrap())
+        .filter(|st| st["type"] == "traceback" && st["repeat"].as_u64().unwrap_or(0) > 100)
+        .collect();
+    assert!(!steps.is_empty(), "{doc}");
+    for st in steps {
+        let ats: Vec<&str> = st["ats"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{st}"))
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(ats.len() >= 2 && ats.len() <= 6, "{ats:?}");
+        assert_eq!(ats[0], st["at"].as_str().unwrap(), "{st}");
+        let mut distinct = ats.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), ats.len(), "{ats:?}");
+        assert!(
+            ats.iter().all(|a| a.starts_with("reraise_ats.py:")),
+            "{ats:?}"
+        );
+    }
+}
+
+#[test]
+fn a_walk_through_a_long_chain_of_a_project_run_from_its_source_tree_is_not_slowed_by_naming_places()
+ {
+    if !have_python() {
+        return;
+    }
+    let run = Run::new();
+    // The source tree (an editable install runs from there) and a file outside both trees.
+    let src = run.dir.path().join("src");
+    let outside = run.dir.path().join("outside");
+    fs::create_dir_all(src.join("lib")).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(
+        outside.join("ext.py"),
+        "def call(h):\n    h.ext_attribute\n",
+    )
+    .unwrap();
+    fs::write(
+        src.join("lib/reraise_src.py"),
+        "import ext\n\n\nclass Holder:\n    def __init__(self, ex):\n        self.ex = ex\n\n    def __getattr__(self, name):\n        raise self.ex\n\n\n_h = Holder(ImportError('x'))\n\n\ndef unit(i):\n    a1 = [i]\n    a2 = [i]\n    a3 = [i]\n    a4 = [i]\n    a5 = [i]\n    a6 = [i]\n    for n in range(4):\n        try:\n            if n == 0:\n                _h.one\n            elif n == 1:\n                _h.two\n            elif n == 2:\n                _h.three\n            else:\n                ext.call(_h)\n        except ImportError:\n            pass\n    return len(a1) + len(a2) + len(a3) + len(a4) + len(a5) + len(a6)\n",
+    )
+    .unwrap();
+    fs::write(
+        run.project.join("run_src.py"),
+        "import atexit, os, sys\n\ncalls = [0]\nreal = os.path.realpath\n\n\ndef counting(*a, **k):\n    calls[0] += 1\n    return real(*a, **k)\n\n\nos.path.realpath = counting\nfrom lib import reraise_src\n\nfor n in range(4000):\n    reraise_src.unit(n)\n# The agent's dump runs now, then the calls it made are written.\natexit._run_exitfuncs()\nopen(sys.argv[1], 'w').write(str(calls[0]))\n",
+    )
+    .unwrap();
+    let path = format!(
+        "{}:{}:{}:{}",
+        run.agent.display(),
+        run.project.display(),
+        src.display(),
+        outside.display()
+    );
+    let count_file = run.dir.path().join("realpath-calls.txt");
+    run.python(
+        &["run_src.py", count_file.to_str().unwrap()],
+        &[
+            ("DLA_CAPTURE", "heap"),
+            ("DLA_SOURCE_ROOT", src.to_str().unwrap()),
+            ("PYTHONPATH", &path),
+        ],
+    );
+    let doc = json(&run.pid_dir().join("py-1.retain.json"));
+    let rec = run
+        .records()
+        .into_iter()
+        .rev()
+        .find(|r| !captures(r).is_empty())
+        .unwrap();
+    let ms = captures(&rec)
+        .into_iter()
+        .find(|c| c["kind"] == "heap")
+        .unwrap()["ms"]
+        .as_u64()
+        .unwrap();
+    assert!(ms < 20_000, "the heap capture took {ms} ms");
+    // A file name is resolved once, not once for every traceback of the run: the whole process,
+    // the 16 000 raises included, makes a few thousand calls at most (an uncached walk makes more
+    // than a hundred thousand, which on a deep path of a real source tree is the minute it took).
+    let calls: u64 = fs::read_to_string(&count_file).unwrap().parse().unwrap();
+    assert!(calls < 5_000, "{calls} calls of os.path.realpath");
+    let lines: Vec<&Value> = doc["sites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| {
+            s["site"]
+                .as_str()
+                .is_some_and(|x| x.starts_with("lib/reraise_src.py:"))
+                && s["kept"].as_u64().unwrap() >= 40
+        })
+        .collect();
+    assert!(lines.len() >= 6, "{doc}");
+    for s in &lines {
+        assert!(!s["chains"].as_array().unwrap().is_empty(), "{s}");
+    }
+    assert!(!doc["limitations"].to_string().contains("time bound"));
+    // The places of the run are named by the rule of the lines, and the file outside is no path.
+    let text = doc.to_string();
+    assert!(text.contains("<outside>/ext.py:"), "{text}");
+    assert!(!text.contains(run.dir.path().to_str().unwrap()), "{text}");
+    eprintln!("heap capture of the source-tree fixture: {ms} ms, {calls} calls");
 }

@@ -625,7 +625,7 @@ fn the_references_teach_the_stack_capture_after_an_alloc_test_at_a_growing_line(
     let verify = read("docs/VERIFY.md");
     for want in [
         "After `dla alloc-test` favors leak, capture the stacks that lead to the line",
-        "run the `dla harness run H --mode <m> --capture alloc` command it prints first, then the `dla summarize alloc-stack-diff` command that run prints",
+        "run the `dla harness run H --mode <m> --capture alloc,heap` command it prints first, then the two `dla summarize` commands that run prints",
         "then label, `dla bundle` and explain",
         "`stacks-not-captured`",
         "The frame above the growing line shows who receives the object",
@@ -860,5 +860,87 @@ fn the_references_say_a_finding_with_a_leak_favoring_alloc_test_is_confirmed_or_
     assert!(
         error.contains("\"leak-favored\""),
         "error.rs lacks the code"
+    );
+}
+
+#[test]
+fn the_references_teach_who_holds_the_objects_of_a_growing_line() {
+    // Line breaks do not matter: every text is read with its whitespace collapsed.
+    let read = |p: &str| {
+        fs::read_to_string(root().join(p))
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let python = read("skills/detect-leak-anywhere/references/python.md");
+    let stages = read("skills/detect-leak-anywhere/references/stages.md");
+    let readme = read("harness/python/README.md");
+    let verifier = read("agents/verifier.md");
+    let verify = read("docs/VERIFY.md");
+    for want in [
+        "a `py.blocks@<file:line>` column says where the surviving objects were made, not who keeps them",
+        "The route is a growing line, then who holds it, then one finding at the holder",
+        "`dla harness run H --mode <m> --capture alloc,heap`",
+        "(the trend says so in `holders_hint`)",
+        "the two `dla summarize` commands that run prints (`alloc-stack-diff` for the stacks, `heap-graph` for the holders): one capture serves both",
+        "a stack summary made before the finding was added counts for the finding once it exists in the bundle and for the capture offer",
+        "`dla ledger label` counts a stack only by its stated ties",
+        "`minor_sites` and tie nothing",
+        "`first` is null for a file of one dump point",
+        "the `py.type:<T>.count` columns of those types are the holder's too",
+        "Every process runs with `PYTHONDONTWRITEBYTECODE=1` (a value the environment has is kept)",
+        "`no_chain` (the command output says `no_chain_sites`)",
+        "(`other_holders` says how many were left out; an allocation-stack record is cut the same way to the stacks at the finding's line, `other_stacks`)",
+        "`ats` the distinct places that run names",
+        "is never at a place outside the project",
+        "`dla ledger add` warns when its `--owner` is a holder of a record",
+        "an `unreferenced` entry does not, so the stack summary is still required for a native line",
+        "a file outside the project is `<outside>/<name>`",
+        "`static:<module>.<name>` is a module global or a class attribute (static/global)",
+        "`stack:<function>@<file:line>` a function frame (blocked-stack)",
+        "`path`, the chain with the most objects from a kept object to the holder",
+        "it accounts for every line the holder keeps",
+        "never add a finding per line",
+        "`unreferenced`: no Python container refers to the blocks, so the test runner, pytest or the tracer do not hold them",
+        "is explained by the extension function the line calls",
+        "`heap` writes `py-1.retain.json` once, at the last dump point",
+        "`py-retain` (`heap-graph`) ties a holder to the finding whose owner is the holder",
+    ] {
+        assert!(python.contains(want), "python.md lacks: {want}");
+    }
+    for want in [
+        "`--capture histogram,alloc,nonheap,heap`",
+        "a growing `py.blocks@` line is explained by `--capture alloc,heap`",
+        "the one Python holder-chains file (`py-1.retain.json`: who keeps the objects of the growing lines)",
+    ] {
+        assert!(stages.contains(want), "stages.md lacks: {want}");
+    }
+    assert!(
+        readme.contains("`dla summarize heap-graph` reads the file (`py-retain`)")
+            && readme.contains("sets it to `1` when the run's consent allows raw values"),
+        "harness/python/README.md does not say what reads the chains file"
+    );
+    // The verifier is told what the record means and what a block no Python object holds is not.
+    for want in [
+        "`index.json` lists the harnesses behind the evidence (`harnesses`)",
+        "a driver made for this finding",
+        "a driver with no target",
+        "`minor_sites` (lines where it keeps only a small part, so it is not their holder)",
+        "The bundle holds only the holders of this finding's line (`other_holders` counts the others)",
+        "does not come from the test runner or from the measuring tools",
+        "A `static:` holder is a module global or a class attribute",
+        "a chain that ends at a module global or a class attribute names the holder",
+        "A holder with `unreferenced` keeps blocks that no Python container refers to",
+        "they are held from native code or a reference was lost there, so the answer is in the extension function the line calls",
+        "the test runner, pytest or the tracer do not hold them, and N-OBSERVER does not explain them",
+    ] {
+        assert!(verifier.contains(want), "agents/verifier.md lacks: {want}");
+    }
+    assert!(
+        verify.contains(
+            "| A growing line said where objects were made and nothing said who keeps them | corrected |"
+        ),
+        "VERIFY.md has no row for the holder chains"
     );
 }

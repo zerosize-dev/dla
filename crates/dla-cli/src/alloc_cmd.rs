@@ -1762,19 +1762,39 @@ pub(crate) struct StacksCtx<'a> {
 /// The two commands that capture the stacks of a growing allocation line and tie them to the
 /// finding: the capture run, then a line that says to run the summarize command it prints (a `#`
 /// line: nothing tries to execute it).
-pub(crate) fn stacks_commands(harness: &str, mode: &str, finding: &str, site: &str) -> [String; 2] {
-    [
-        format!("dla harness run {harness} --mode {mode} --capture alloc"),
+pub(crate) fn stacks_commands(
+    runtime: Runtime,
+    harness: &str,
+    mode: &str,
+    finding: &str,
+    site: &str,
+) -> [String; 2] {
+    let capture = dla_workload::harness::capture::stacks_capture(runtime);
+    let line = if dla_workload::harness::capture::heap_is_holder_chains(runtime) {
+        format!(
+            "# run the two dla summarize commands that run prints: alloc-stack-diff (it ties the stacks at {site} to {finding}) and heap-graph (who holds the objects of the line)"
+        )
+    } else {
         format!(
             "# run the dla summarize alloc-stack-diff command that run prints; it ties the stacks at {site} to {finding}"
-        ),
+        )
+    };
+    [
+        format!("dla harness run {harness} --mode {mode} --capture {capture}"),
+        line,
     ]
 }
 
 /// The sentence of the `stacks_hint` key (never cut by the output bound).
-pub(crate) fn stacks_hint(harness: &str, mode: &str, finding: &str) -> String {
+pub(crate) fn stacks_hint(runtime: Runtime, harness: &str, mode: &str, finding: &str) -> String {
+    let capture = dla_workload::harness::capture::stacks_capture(runtime);
+    if dla_workload::harness::capture::heap_is_holder_chains(runtime) {
+        return format!(
+            "the growth is a count of blocks allocated at one line, and a verifier and an explanation need the stack that leads to it and the object that holds it: run `dla harness run {harness} --mode {mode} --capture {capture}`, then the two summarize commands that run prints: `dla summarize alloc-stack-diff` (the stacks, which tie to {finding}) and `dla summarize heap-graph` (who holds the objects of the line)"
+        );
+    }
     format!(
-        "the growth is a count of blocks allocated at one line, and a verifier and an explanation need the stack that leads to it: run `dla harness run {harness} --mode {mode} --capture alloc`, then the `dla summarize alloc-stack-diff` command that run prints, which ties the stacks at the line to {finding}"
+        "the growth is a count of blocks allocated at one line, and a verifier and an explanation need the stack that leads to it: run `dla harness run {harness} --mode {mode} --capture {capture}`, then the `dla summarize alloc-stack-diff` command that run prints, which ties the stacks at the line to {finding}"
     )
 }
 
@@ -1800,14 +1820,14 @@ fn stacks_offer(
     let root = f.root_id();
     let root_f = ledger.finding(&root).unwrap_or(f);
     if ledger.evidence().any(|e| {
-        e.kind == EvidenceKind::AllocStack && dla_core::labels::names_finding(e, &[root_f])
+        e.kind == EvidenceKind::AllocStack && dla_core::labels::about_finding(e, &[root_f])
     }) {
         return None;
     }
     let site = column.split_once('@').map_or("the line", |(_, s)| s);
     Some((
-        stacks_commands(harness, c.mode, &root.to_string(), site),
-        stacks_hint(harness, c.mode, &root.to_string()),
+        stacks_commands(c.runtime, harness, c.mode, &root.to_string(), site),
+        stacks_hint(c.runtime, harness, c.mode, &root.to_string()),
     ))
 }
 
@@ -2174,15 +2194,34 @@ mod tests {
     fn a_leak_decided_by_a_site_column_leads_with_the_capture_and_the_summarize_line() {
         let (_d, l) = stacks_ledger();
         let next = offered(&l, Favors::Leak, SITE_COLUMN, Runtime::Python);
-        assert_eq!(next[0], "dla harness run H1 --mode fresh --capture alloc");
+        // Python: the heap capture is the holder chains, so the capture is `alloc,heap` and the
+        // run prints two summarize commands.
+        assert_eq!(
+            next[0],
+            "dla harness run H1 --mode fresh --capture alloc,heap"
+        );
         assert!(
-            next[1].starts_with("# run the dla summarize alloc-stack-diff command that run prints")
+            next[1].starts_with("# run the two dla summarize commands that run prints")
+                && next[1].contains("alloc-stack-diff")
+                && next[1].contains("heap-graph")
                 && next[1].contains("F1")
                 && next[1].contains("shop/store.py:5"),
             "{next:?}"
         );
         assert!(next[2].starts_with("dla ledger"), "{next:?}");
         assert!(next.len() <= MAX_NEXT, "{next:?}");
+        // A runtime whose heap capture is a whole-heap dump keeps the stacks capture alone.
+        let node = offered(&l, Favors::Leak, SITE_COLUMN, Runtime::Node);
+        assert_eq!(node[0], "dla harness run H1 --mode fresh --capture alloc");
+        assert!(
+            node[1].starts_with("# run the dla summarize alloc-stack-diff command that run prints"),
+            "{node:?}"
+        );
+        assert!(
+            stacks_hint(Runtime::Python, "H1", "fresh", "F1")
+                .contains("`dla summarize heap-graph` (who holds the objects of the line)")
+                && !stacks_hint(Runtime::Node, "H1", "fresh", "F1").contains("heap-graph"),
+        );
         // A column that is not an allocation-site column, or a runtime without the capture,
         // leaves the list as it was.
         for (col, rt) in [("os.rss", Runtime::Python), (SITE_COLUMN, Runtime::Jvm)] {

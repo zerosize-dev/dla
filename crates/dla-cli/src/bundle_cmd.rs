@@ -18,8 +18,9 @@
 //! frames only: the verifier has to find the site from the stacks and paths.
 //!
 //! The records a transition cites are not the only ones: the newest two allocation-stack and
-//! two retention-path records that name the finding by the rule `dla ledger label` applies
-//! (`labels::names_finding`) are bundled too. A confirmed or strong finding whose growth is a
+//! two retention-path records that are about the finding (`labels::about_finding`: the rule
+//! `dla ledger label` applies, `names_finding`, or an allocation stack with an untied growing row
+//! at the finding's line) are bundled too. A confirmed or strong finding whose growth is a
 //! count of blocks allocated at one line (`py.blocks@<file:line>`) would otherwise reach the
 //! verifier with no stack and no excerpt, so the bundle is refused with `stacks-not-captured`
 //! when the runtime can capture the stacks and no capture run of the harness that grew the
@@ -651,7 +652,7 @@ fn naming_records(ledger: &dla_core::Ledger, f: &dla_core::Finding) -> Vec<Evide
     for kind in [EvidenceKind::AllocStack, EvidenceKind::RetentionPath] {
         let mut named: Vec<EvidenceId> = ledger
             .evidence()
-            .filter(|e| e.kind == kind && dla_core::labels::names_finding(e, &subjects))
+            .filter(|e| e.kind == kind && dla_core::labels::about_finding(e, &subjects))
             .map(|e| e.evidence_id.clone())
             .collect();
         named.reverse();
@@ -661,40 +662,156 @@ fn naming_records(ledger: &dla_core::Ledger, f: &dla_core::Finding) -> Vec<Evide
     out
 }
 
-/// The allocation capture files `harness/<H>/captures.json` lists (kind `alloc`), with the
-/// time the list was written; `None` when there is no such list or it names none.
+/// The files `harness/<H>/captures.json` lists that lead to the growing line (kind `alloc`, and,
+/// for a runtime whose heap capture is the holder chains of the objects, the chains file), with
+/// the time the list was written; `None` when there is no such list or it names no allocation
+/// capture.
 fn alloc_captures(
     run_dir: &Path,
     harness: &str,
 ) -> Option<(Vec<dla_core::harness::CaptureFile>, std::time::SystemTime)> {
+    use dla_core::harness::CaptureKind;
     let path = dla_core::HarnessManifest::dir_in(run_dir, harness).join("captures.json");
     let v: Value = serde_json::from_str(&fs::read_to_string(&path).ok()?).ok()?;
     let files: Vec<dla_core::harness::CaptureFile> =
         serde_json::from_value(v.get("files")?.clone()).ok()?;
+    let chains = |f: &dla_core::harness::CaptureFile| {
+        f.kind == CaptureKind::Heap && f.path.ends_with(".retain.json")
+    };
+    let has_alloc = files.iter().any(|f| f.kind == CaptureKind::Alloc);
     let files: Vec<_> = files
         .into_iter()
-        .filter(|f| f.kind == dla_core::harness::CaptureKind::Alloc)
+        .filter(|f| f.kind == CaptureKind::Alloc || chains(f))
         .collect();
     let at = fs::metadata(&path).and_then(|m| m.modified()).ok()?;
-    (!files.is_empty()).then_some((files, at))
+    (has_alloc && !files.is_empty()).then_some((files, at))
 }
 
-/// True when an allocation-stack record was made from files of `files`: the raw file of the
-/// summary (`alloc/A<n>.json`) lists the sha256 of each input in its `captures` array, and the
-/// file of the capture has that digest.
-fn summarized(
-    run_dir: &Path,
+/// The summarize commands of the capture `files` that were not run: an `alloc-stack-diff`
+/// command is run when an allocation-stack record was made from one of its files, a `heap-graph`
+/// command when a retention-path record was. The raw file of a summary lists the sha256 of each
+/// input in its `captures` array (`alloc/A<n>.json`, `retain/R<n>.json`), and the file of the
+/// capture has that digest.
+fn unrun_commands(
+    tc: &ToolCtx,
     ledger: &dla_core::Ledger,
     files: &[dla_core::harness::CaptureFile],
-) -> bool {
-    let digests: Vec<String> = files
-        .iter()
-        .filter_map(|f| fs::read(run_dir.join(&f.path)).ok())
-        .map(|b| sha(&b))
+) -> (Vec<String>, usize) {
+    let base = tc.pointer("");
+    let all: Vec<String> =
+        dla_workload::harness::capture::summarize_commands(files, &|p| tc.pointer(p), false)
+            .into_iter()
+            .filter(|c| {
+                c.starts_with("dla summarize alloc-stack-diff ")
+                    || c.starts_with("dla summarize heap-graph ")
+            })
+            .collect();
+    let total = all.len();
+    let unrun = all
+        .into_iter()
+        .filter(|c| {
+            let kind = if c.starts_with("dla summarize alloc-stack-diff ") {
+                EvidenceKind::AllocStack
+            } else {
+                EvidenceKind::RetentionPath
+            };
+            let digests: Vec<String> = c
+                .split_whitespace()
+                .skip(3)
+                .filter_map(|p| p.strip_prefix(&base))
+                .filter_map(|rel| fs::read(tc.run_dir.join(rel)).ok())
+                .map(|b| sha(&b))
+                .collect();
+            !made_from(&tc.run_dir, ledger, kind, &digests)
+        })
         .collect();
+    (unrun, total)
+}
+
+/// The literal `dla summarize alloc-stack-diff --finding <F> <files>` command of the capture that
+/// an allocation-stack record about `finding` was made from, when the record states no tie to it
+/// (the summary was written before the finding existed): the record's raw file lists the sha256
+/// of each input, and the command is rebuilt from `harness/<H>/captures.json` by those digests.
+pub(crate) fn literal_summarize(
+    run_dir: &Path,
+    pointer: &dyn Fn(&str) -> String,
+    ledger: &dla_core::Ledger,
+    finding: &FindingId,
+) -> Option<String> {
+    let f = ledger.finding(finding)?;
+    let subjects = subjects_of(ledger, f);
+    let base = pointer("");
+    let heads = fs::read_dir(run_dir.join("harness")).ok()?;
+    let mut harness_files: Vec<Vec<dla_core::harness::CaptureFile>> = Vec::new();
+    for h in heads.flatten() {
+        let text = fs::read_to_string(h.path().join("captures.json")).ok();
+        let files = text
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .and_then(|v| v.get("files").cloned())
+            .and_then(|v| serde_json::from_value(v).ok());
+        harness_files.extend(files);
+    }
+    for rec in ledger
+        .evidence()
+        .filter(|e| {
+            e.kind == EvidenceKind::AllocStack
+                && !dla_core::labels::names_finding(e, &subjects)
+                && dla_core::labels::about_finding(e, &subjects)
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
+        let Some(raw) = e_raw(run_dir, rec) else {
+            continue;
+        };
+        let used: Vec<&str> = raw
+            .get("captures")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|c| c.get("sha256").and_then(Value::as_str))
+            .collect();
+        for files in &harness_files {
+            for cmd in dla_workload::harness::capture::summarize_commands(files, pointer, false)
+                .into_iter()
+                .filter(|c| c.starts_with("dla summarize alloc-stack-diff "))
+            {
+                let hit = cmd
+                    .split_whitespace()
+                    .skip(3)
+                    .filter_map(|p| p.strip_prefix(&base))
+                    .filter_map(|rel| fs::read(run_dir.join(rel)).ok())
+                    .any(|b| used.contains(&sha(&b).as_str()));
+                if hit {
+                    return Some(cmd.replacen(
+                        "dla summarize alloc-stack-diff ",
+                        &format!("dla summarize alloc-stack-diff --finding {finding} "),
+                        1,
+                    ));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The parsed raw file of a record, when it lies inside the run directory.
+fn e_raw(run_dir: &Path, rec: &dla_core::evidence::EvidenceRecord) -> Option<Value> {
+    let p = contained(run_dir, rec.raw.as_deref()?)?;
+    serde_json::from_slice(&fs::read(p).ok()?).ok()
+}
+
+/// True when a record of `kind` was made from a file with one of `digests`.
+fn made_from(
+    run_dir: &Path,
+    ledger: &dla_core::Ledger,
+    kind: EvidenceKind,
+    digests: &[String],
+) -> bool {
     ledger
         .evidence()
-        .filter(|e| e.kind == EvidenceKind::AllocStack)
+        .filter(|e| e.kind == kind)
         .filter_map(|e| contained(run_dir, e.raw.as_deref()?))
         .filter_map(|p| serde_json::from_slice::<Value>(&fs::read(p).ok()?).ok())
         .any(|raw| {
@@ -705,6 +822,139 @@ fn summarized(
                 .filter_map(|c| c.get("sha256").and_then(Value::as_str))
                 .any(|d| digests.iter().any(|x| x == d))
         })
+}
+
+/// The finding and, for a sibling, its root: the findings a record may name.
+fn subjects_of<'a>(
+    ledger: &'a dla_core::Ledger,
+    f: &'a dla_core::Finding,
+) -> Vec<&'a dla_core::Finding> {
+    let mut v = vec![f];
+    if let Some(root) = f.parent.as_ref().and_then(|p| ledger.finding(p)) {
+        v.push(root);
+    }
+    v
+}
+
+/// True for a holder entry of the Python holder chains (it lists `sites`) that holds a line of
+/// `subjects` or is owned by one of them.
+fn entry_is_mine(e: &Value, subjects: &[&dla_core::Finding]) -> bool {
+    let held = dla_core::holders::entry_sites(e);
+    subjects.iter().any(|f| {
+        f.site.as_deref().is_some_and(|s| held.contains(&s.trim()))
+            || f.owner
+                .as_deref()
+                .is_some_and(|o| dla_core::holders::entry_is_owner(e, o))
+    })
+}
+
+/// Whether a retention record stands in for the stack: a record that is not of the Python holder
+/// chains does; one that is does only when a holder entry that holds the finding's line (or is
+/// owned by its owner) has a `path` and is not `unreferenced`: an entry of objects that nothing refers
+/// to shows the type and no way to the line.
+fn retention_lifts(result: &Value, subjects: &[&dla_core::Finding]) -> bool {
+    let Some(list) = result.get("holders").and_then(Value::as_array) else {
+        return true;
+    };
+    if !list.iter().any(|e| e.get("sites").is_some()) {
+        return true;
+    }
+    list.iter().any(|e| {
+        entry_is_mine(e, subjects)
+            && e.get("unreferenced").is_none()
+            && e.get("path")
+                .or_else(|| e.get("paths"))
+                .and_then(Value::as_array)
+                .is_some_and(|p| !p.is_empty())
+    })
+}
+
+/// Cuts a copy of a retention record (its `result` or its raw file) of the Python holder chains to
+/// the holder entries that hold a line of `subjects` or are owned by them, before anything is
+/// scrubbed or any frame is collected, and says how many were left out (`other_holders`). The
+/// lines of the raw file's site list that no remaining entry holds go too. A record that names no
+/// entry of the finding is left as it is.
+fn focus_retention(v: &mut Value, subjects: &[&dla_core::Finding]) {
+    let Some(list) = v.get("holders").and_then(Value::as_array) else {
+        return;
+    };
+    if !list.iter().any(|e| e.get("sites").is_some())
+        || !list.iter().any(|e| entry_is_mine(e, subjects))
+    {
+        return;
+    }
+    let (mine, other): (Vec<Value>, Vec<Value>) = list
+        .iter()
+        .cloned()
+        .partition(|e| entry_is_mine(e, subjects));
+    let mut keep: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for e in &mine {
+        for key in ["sites", "minor_sites"] {
+            for s in e.get(key).and_then(Value::as_array).into_iter().flatten() {
+                let name = s.as_str().or_else(|| s.get("site").and_then(Value::as_str));
+                keep.extend(name.map(str::to_owned));
+            }
+        }
+    }
+    let kept_total: u64 = mine
+        .iter()
+        .filter_map(|e| e.get("kept").and_then(Value::as_u64))
+        .sum();
+    let Some(o) = v.as_object_mut() else { return };
+    // The totals are those of the entries left.
+    if o.get("kept").is_some_and(Value::is_u64) {
+        o.insert("kept".into(), json!(kept_total));
+    }
+    if o.get("sites").is_some_and(Value::is_u64) {
+        o.insert("sites".into(), json!(keep.len()));
+    }
+    o.insert("holders".into(), Value::Array(mine));
+    if !other.is_empty() {
+        o.insert("other_holders".into(), json!(other.len()));
+    }
+    if let Some(Value::Array(sites)) = o.get_mut("sites") {
+        sites.retain(|s| {
+            s.get("site")
+                .and_then(Value::as_str)
+                .is_none_or(|n| keep.contains(n))
+        });
+    }
+}
+
+/// Cuts a copy of an allocation-stack record (its `result`, with `top`, or its raw file, with
+/// `stacks`) to the stacks whose first project frame is the line of `subjects`, before anything
+/// is scrubbed or any frame is collected, and says how many were left out (`other_stacks`). A
+/// finding with no line, and a record with no stack at that line, leave the record whole.
+fn focus_stacks(v: &mut Value, subjects: &[&dla_core::Finding]) {
+    let sites: Vec<&str> = subjects
+        .iter()
+        .filter_map(|f| f.site.as_deref())
+        .map(str::trim)
+        .collect();
+    let mine = |row: &Value| {
+        row.get("site")
+            .and_then(Value::as_str)
+            .is_some_and(|s| sites.contains(&s.trim()))
+    };
+    let matches = ["top", "stacks"]
+        .iter()
+        .filter_map(|k| v.get(*k).and_then(Value::as_array))
+        .any(|rows| rows.iter().any(mine));
+    if sites.is_empty() || !matches {
+        return;
+    }
+    let Some(o) = v.as_object_mut() else { return };
+    let mut left_out = 0usize;
+    for key in ["top", "stacks"] {
+        if let Some(Value::Array(rows)) = o.get_mut(key) {
+            let before = rows.len();
+            rows.retain(|r| mine(r));
+            left_out = left_out.max(before - rows.len());
+        }
+    }
+    if left_out > 0 {
+        o.insert("other_stacks".into(), json!(left_out));
+    }
 }
 
 /// The check of a bundle with no stack: `Err(stacks-not-captured)` when the growth is a count of
@@ -728,10 +978,15 @@ fn stacks_check(
         || !matches!(f.state, FindingState::Confirmed | FindingState::Strong)
         || ids.iter().any(|e| {
             view.ledger.evidence_by_id(e).is_some_and(|r| {
-                matches!(
-                    r.kind.class(),
-                    EvidenceClass::Allocation | EvidenceClass::Retention
-                )
+                match r.kind.class() {
+                    EvidenceClass::Allocation => true,
+                    // A retention record shows the verifier the line and the call into an
+                    // extension only when the holder of the finding's line has a chain.
+                    EvidenceClass::Retention => {
+                        retention_lifts(&r.result, &subjects_of(&view.ledger, f))
+                    }
+                    _ => false,
+                }
             })
         })
     {
@@ -755,30 +1010,46 @@ fn stacks_check(
         .iter()
         .filter_map(|(h, _)| alloc_captures(&tc.run_dir, h).map(|(files, at)| (h, files, at)))
         .collect();
-    if let Some((h, _, _)) = captured
+    // Per capture: the summarize commands of it that were not run, and how many it has.
+    let pending: Vec<_> = captured
         .iter()
-        .find(|(_, files, _)| summarized(&tc.run_dir, &view.ledger, files))
+        .map(|(h, files, at)| (h, unrun_commands(tc, &view.ledger, files), *at))
+        .collect();
+    if let Some((h, _, _)) = pending
+        .iter()
+        .find(|(_, (unrun, total), _)| unrun.is_empty() && *total > 0)
     {
         return Ok(Some(format!(
             "an allocation capture of {h} was summarized and no growing stack ends at the finding's line, so the bundle holds no stack and no excerpt"
         )));
     }
-    // Captured and never summarized: the summarize command of the newest capture is the fix.
-    if let Some((h, files, _)) = captured.iter().max_by_key(|(_, _, at)| *at) {
-        let cmd =
-            dla_workload::harness::capture::summarize_commands(files, &|p| tc.pointer(p), false)
-                .into_iter()
-                .find(|c| c.starts_with("dla summarize alloc-stack-diff "));
-        if let Some(cmd) = cmd {
-            return Err(Failure::refuse(
-                core_codes::STACKS_NOT_CAPTURED,
-                format!(
-                    "an allocation capture of {h} exists and was not summarized, so no stack is tied to {id}; the bundle would give the verifier no stack and no source excerpt"
-                ),
-                format!("an alloc-stack record made from the capture of {h}"),
-                format!("{cmd} ; then dla bundle {id} again"),
-            ));
-        }
+    // Captured and not summarized: every command of the newest capture that was not run is the
+    // fix.
+    if let Some((h, (cmds, total), _)) = pending
+        .iter()
+        .filter(|(_, (unrun, _), _)| !unrun.is_empty())
+        .max_by_key(|(_, _, at)| *at)
+    {
+        let what = if cmds.len() == *total {
+            "was not summarized"
+        } else {
+            "was only partly summarized"
+        };
+        return Err(Failure::refuse(
+            core_codes::STACKS_NOT_CAPTURED,
+            format!(
+                "an allocation capture of {h} exists and {what}, so no stack is tied to {id}; the bundle would give the verifier no stack and no source excerpt"
+            ),
+            format!(
+                "{} made from the capture of {h}",
+                if *total > 1 {
+                    "an alloc-stack record and a retention record"
+                } else {
+                    "an alloc-stack record"
+                }
+            ),
+            format!("{} ; then dla bundle {id} again", cmds.join(" ; ")),
+        ));
     }
     // A hook driver (entry-path, probe or batch) first, else the test loop, else the first.
     let (h, m) = harnesses
@@ -787,7 +1058,8 @@ fn stacks_check(
         .or_else(|| harnesses.iter().find(|(_, m)| m.is_test_loop()))
         .unwrap_or(&harnesses[0]);
     let mode = crate::alloc_cmd::key_mode(m).as_str();
-    let commands = crate::alloc_cmd::stacks_commands(h, mode, &id.to_string(), "the line");
+    let commands =
+        crate::alloc_cmd::stacks_commands(m.runtime, h, mode, &id.to_string(), "the line");
     let loop_note = if m.is_test_loop() {
         format!(
             " A capture slows a test loop; a probe driver is the cheaper route: dla harness gen --lang {} --driver --probe {id}, then run it the same way.",
@@ -796,6 +1068,15 @@ fn stacks_check(
     } else {
         String::new()
     };
+    let then = if dla_workload::harness::capture::heap_is_holder_chains(m.runtime) {
+        format!(
+            "the two dla summarize commands that run prints (alloc-stack-diff ties the stacks at the line to {id}, heap-graph names who holds the objects of the line)"
+        )
+    } else {
+        format!(
+            "the dla summarize alloc-stack-diff command that run prints (it ties the stacks at the line to {id})"
+        )
+    };
     Err(Failure::refuse(
         core_codes::STACKS_NOT_CAPTURED,
         format!(
@@ -803,7 +1084,7 @@ fn stacks_check(
         ),
         format!("an allocation capture of {h} (harness/{h}/captures.json)"),
         format!(
-            "{} ; then the dla summarize alloc-stack-diff command that run prints (it ties the stacks at the line to {id}) ; then dla bundle {id} again.{loop_note}",
+            "{} ; then {then} ; then dla bundle {id} again.{loop_note}",
             commands[0]
         ),
     ))
@@ -915,6 +1196,52 @@ fn entry_path_files(
         out.push(entry);
     }
     Ok(out)
+}
+
+/// What a harness is, in plain words: the project's own tests in a loop, a driver made for the
+/// finding or for other targets, or a command of the project.
+fn harness_words(
+    m: &dla_core::HarnessManifest,
+    about: &dla_core::grown::HarnessAbout,
+) -> &'static str {
+    use dla_core::grown::HarnessAbout;
+    if m.is_test_loop() {
+        "the project's own tests in a loop"
+    } else if m.mode == dla_core::harness::HarnessMode::Driver {
+        if matches!(
+            about,
+            HarnessAbout::Target | HarnessAbout::EntryPath | HarnessAbout::Probe
+        ) {
+            "a driver made for this finding"
+        } else if m.targets.is_empty() && m.probes.is_empty() {
+            "a driver with no target"
+        } else {
+            "a driver for other targets"
+        }
+    } else {
+        "a command of the project"
+    }
+}
+
+/// The `harnesses` of `index.json`: the harnesses the evidence of the bundle comes from, each
+/// with its id, what it is in plain words, the units it runs per round and its key modes. It
+/// names no finding and no site: the verifier learns from it whether the growth was reproduced
+/// by a driver made for the line or only by a loop over the project's tests.
+fn harness_list(tc: &ToolCtx, id: &FindingId) -> Vec<Value> {
+    let Ok(view) = dla_core::RunView::load_for(&tc.run_dir, tc.worker.as_deref()) else {
+        return Vec::new();
+    };
+    dla_core::grown::harnesses_about(&view, id)
+        .into_iter()
+        .map(|(m, about)| {
+            json!({
+                "id": m.id,
+                "is": harness_words(&m, &about),
+                "units_per_round": m.step,
+                "key_modes": m.key_modes.iter().map(|k| k.as_str()).collect::<Vec<_>>(),
+            })
+        })
+        .collect()
 }
 
 /// At most this many test-loop harnesses go into a bundle.
@@ -1071,6 +1398,16 @@ fn build(
             continue;
         };
         let mut result = e.result.clone();
+        let subjects = ledger
+            .finding(id)
+            .map(|f| subjects_of(ledger, f))
+            .unwrap_or_default();
+        if e.kind == EvidenceKind::RetentionPath {
+            focus_retention(&mut result, &subjects);
+        }
+        if e.kind == EvidenceKind::AllocStack {
+            focus_stacks(&mut result, &subjects);
+        }
         strip_forbidden(&mut result);
         // Allocation and retention records keep the site in their structured frame fields.
         let frames_exempt = matches!(
@@ -1103,7 +1440,18 @@ fn build(
             } else if fs::metadata(&src).is_ok_and(|m| m.len() > MAX_COPY_BYTES) {
                 omitted.push(format!("{eid}: {raw} is over {MAX_COPY_BYTES} bytes"));
             } else {
-                let bytes = fs::read(&src).map_err(|e| io_fail(&src, e))?;
+                let mut bytes = fs::read(&src).map_err(|e| io_fail(&src, e))?;
+                if e.kind == EvidenceKind::RetentionPath
+                    && let Ok(mut doc) = serde_json::from_slice::<Value>(&bytes)
+                {
+                    focus_retention(&mut doc, &subjects);
+                    bytes = to_pretty_json(&doc).into_bytes();
+                } else if e.kind == EvidenceKind::AllocStack
+                    && let Ok(mut doc) = serde_json::from_slice::<Value>(&bytes)
+                {
+                    focus_stacks(&mut doc, &subjects);
+                    bytes = to_pretty_json(&doc).into_bytes();
+                }
                 let kept = bundle_bytes(&bytes, raw.ends_with(".json"), &needles, frames_exempt);
                 frames_in_bytes(&kept, &mut here);
                 write(&name, &kept)?;
@@ -1139,6 +1487,10 @@ fn build(
     if !tests.is_empty() {
         index["test_loop"] = Value::Array(tests);
     }
+    let behind = harness_list(tc, id);
+    if !behind.is_empty() {
+        index["harnesses"] = Value::Array(behind);
+    }
     if let Some(o) = owner {
         index["owner"] = json!(o);
     }
@@ -1172,6 +1524,190 @@ fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn finding_at(owner: Option<&str>, site: Option<&str>) -> dla_core::Finding {
+        let mut f = dla_core::Finding::candidate(
+            FindingId::new(1),
+            dla_core::Origin::parse("growth-series").unwrap(),
+            vec![EvidenceId::new(1)],
+        );
+        f.owner = owner.map(str::to_owned);
+        f.site = site.map(str::to_owned);
+        f
+    }
+
+    /// A record of two holders: a module global with a chain that keeps lines a.py:1 and a.py:2,
+    /// and the native entry of a.py:9, which has no chain.
+    fn two_holders() -> Value {
+        json!({"file": "x", "sites": [
+            {"site": "a.py:1"}, {"site": "a.py:2"}, {"site": "a.py:9"}, {"site": "a.py:7"}],
+            "holders": [
+            {"key": "static:m.g", "kept": 5,
+             "sites": [{"site": "a.py:1", "first": 1, "last": 9}, {"site": "a.py:2", "first": 1, "last": 9}],
+             "minor_sites": [{"site": "a.py:7"}],
+             "paths": [{"site": "a.py:1", "count": 5, "path": [{"type": "list", "at": "a.py:3"}]}],
+             "path": [{"type": "list", "at": "a.py:3"}]},
+            {"key": "a.py:9", "kept": 0, "unreferenced": "x",
+             "sites": [{"site": "a.py:9", "first": 1, "last": 9}]}]})
+    }
+
+    #[test]
+    fn a_retention_record_lifts_the_stack_only_when_the_holder_of_the_line_has_a_chain() {
+        let rec = two_holders();
+        let native = finding_at(None, Some("a.py:9"));
+        let global = finding_at(Some("m.g"), Some("a.py:1"));
+        assert!(
+            !retention_lifts(&rec, &[&native]),
+            "an unreferenced entry has no path"
+        );
+        // An entry of objects nothing refers to has the type as a one-step path and still no way
+        // to the line.
+        let with_path = json!({"holders": [{"key": "a.py:9", "unreferenced": "x",
+            "sites": [{"site": "a.py:9"}], "path": [{"type": "list"}]}]});
+        assert!(!retention_lifts(&with_path, &[&native]));
+        assert!(retention_lifts(&rec, &[&global]));
+        assert!(retention_lifts(&rec, &[&finding_at(None, Some("a.py:2"))]));
+        // Another adapter's record (no `sites` in its entries) counts as before.
+        assert!(retention_lifts(
+            &json!({"holders": [{"key": "static:a.B.c"}]}),
+            &[&native]
+        ));
+        // A record that names no entry of the finding does not lift the requirement.
+        assert!(!retention_lifts(
+            &rec,
+            &[&finding_at(None, Some("a.py:40"))]
+        ));
+    }
+
+    #[test]
+    fn each_finding_sees_only_its_own_holder_of_a_record_with_two() {
+        let native = finding_at(None, Some("a.py:9"));
+        let mut v = two_holders();
+        focus_retention(&mut v, &[&native]);
+        let keys: Vec<&str> = v["holders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["key"].as_str().unwrap())
+            .collect();
+        assert_eq!(keys, ["a.py:9"]);
+        assert_eq!(v["other_holders"], 1);
+        let sites: Vec<&str> = v["sites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["site"].as_str().unwrap())
+            .collect();
+        assert_eq!(sites, ["a.py:9"], "no line of the other holder is left");
+        assert!(!v.to_string().contains("a.py:3"), "{v}");
+        let mut v = two_holders();
+        focus_retention(&mut v, &[&finding_at(Some("m.g"), Some("a.py:1"))]);
+        assert_eq!(v["holders"].as_array().unwrap().len(), 1);
+        assert_eq!(v["holders"][0]["key"], "static:m.g");
+        let sites: Vec<&str> = v["sites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["site"].as_str().unwrap())
+            .collect();
+        assert_eq!(sites, ["a.py:1", "a.py:2", "a.py:7"]);
+        assert!(!v.to_string().contains("a.py:9"), "{v}");
+        // A record that names no entry of the finding, or an entry of no chains, is left alone.
+        let mut v = two_holders();
+        focus_retention(&mut v, &[&finding_at(None, Some("a.py:40"))]);
+        assert_eq!(v, two_holders());
+        let mut v = json!({"holders": [{"key": "static:a.B.c"}]});
+        focus_retention(&mut v, &[&native]);
+        assert_eq!(v, json!({"holders": [{"key": "static:a.B.c"}]}));
+    }
+
+    #[test]
+    fn each_finding_sees_only_its_own_stacks_of_a_record_with_stacks_of_two_lines() {
+        let rec = json!({"top": [
+            {"at": "m", "site": "a.py:15", "d_blocks": 880},
+            {"at": "m", "site": "b.py:6", "d_blocks": 880},
+            {"at": "m", "site": "a.py:15", "d_blocks": 2},
+            {"at": "d"}],
+            "stacks": [
+            {"site": "a.py:15", "frames": [{"function": "f", "file": "a.py", "line": 15}]},
+            {"site": "b.py:6", "frames": [{"function": "g", "file": "b.py", "line": 6}]}]});
+        let a = finding_at(None, Some("a.py:15"));
+        let b = finding_at(None, Some(" b.py:6 "));
+        let mut v = rec.clone();
+        focus_stacks(&mut v, &[&a]);
+        assert_eq!(v["top"].as_array().unwrap().len(), 2);
+        assert_eq!(v["stacks"].as_array().unwrap().len(), 1);
+        assert_eq!(v["other_stacks"], 2);
+        let mut frames = Vec::new();
+        frames_in_value(&v, &mut frames);
+        assert!(frames.iter().all(|(f, _)| f == "a.py"), "{frames:?}");
+        assert!(!v.to_string().contains("b.py"), "{v}");
+        let mut v = rec.clone();
+        focus_stacks(&mut v, &[&b]);
+        assert_eq!(v["top"].as_array().unwrap().len(), 1);
+        assert!(!v.to_string().contains("a.py"), "{v}");
+        // No stack at the finding's line, or no line: the record stays whole.
+        let mut v = rec.clone();
+        focus_stacks(&mut v, &[&finding_at(None, Some("c.py:1"))]);
+        assert_eq!(v, rec);
+        focus_stacks(&mut v, &[&finding_at(Some("m.g"), None)]);
+        assert_eq!(v, rec);
+    }
+
+    #[test]
+    fn the_totals_of_a_focused_retention_record_are_those_of_the_entries_left() {
+        let mut v = two_holders();
+        v["kept"] = json!(5);
+        v["sites"] = json!(4);
+        focus_retention(&mut v, &[&finding_at(None, Some("a.py:9"))]);
+        assert_eq!(v["kept"], 0);
+        assert_eq!(v["sites"], 1);
+        let mut v = two_holders();
+        v["kept"] = json!(5);
+        v["sites"] = json!(4);
+        focus_retention(&mut v, &[&finding_at(Some("m.g"), Some("a.py:1"))]);
+        assert_eq!(v["kept"], 5);
+        assert_eq!(v["sites"], 3, "two lines kept and one minor");
+    }
+
+    #[test]
+    fn a_harness_is_told_in_plain_words_without_a_finding_or_a_site() {
+        use dla_core::grown::HarnessAbout;
+        let m = |mode: &str, tools: &[&str]| -> dla_core::HarnessManifest {
+            serde_json::from_value(json!({
+                "id": "H3", "runtime": "python", "mode": mode, "scratch": "x",
+                "run": {"argv": ["x"], "cwd": "."}, "warmup": 1, "iterations": 8, "step": 50,
+                "key_modes": ["fresh", "repeated"], "agent": "driver-python", "timeout_secs": 60,
+                "tools": tools,
+            }))
+            .unwrap()
+        };
+        let probe = HarnessAbout::Probe;
+        let column = HarnessAbout::Column("py.blocks@a.py:1".into());
+        assert_eq!(
+            harness_words(&m("driver", &[]), &probe),
+            "a driver made for this finding"
+        );
+        assert_eq!(
+            harness_words(&m("driver", &[]), &HarnessAbout::Target),
+            "a driver made for this finding"
+        );
+        assert_eq!(
+            harness_words(&m("driver", &[]), &column),
+            "a driver with no target"
+        );
+        let mut other = m("driver", &[]);
+        other.targets = vec!["F9".parse().unwrap()];
+        assert_eq!(harness_words(&other, &column), "a driver for other targets");
+        assert_eq!(
+            harness_words(&m("driver", &["pytest-loop"]), &column),
+            "the project's own tests in a loop"
+        );
+        assert_eq!(
+            harness_words(&m("command", &[]), &HarnessAbout::OwnWorkload),
+            "a command of the project"
+        );
+    }
 
     #[test]
     fn the_newest_two_records_of_each_kind_that_name_the_finding_are_taken() {

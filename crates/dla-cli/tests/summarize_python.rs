@@ -300,6 +300,7 @@ fn the_python_adapters_conform() {
     conforms("py-memray", "alloc-stack-diff");
     conforms("py-types", "type-histogram-diff");
     conforms("py-resources", "non-heap");
+    conforms("py-retain", "heap-graph");
 }
 
 #[test]
@@ -642,4 +643,541 @@ fn two_files_give_the_evidence_and_say_what_is_missing() {
     let v = summarize(&p, "type-histogram-diff", "py-types", &files, &[]);
     assert_eq!(v["gate"], "fail", "{v}");
     assert!(v["needed"].as_str().unwrap().contains("3"), "{v}");
+}
+
+// ---------------------------------------------------------------------------------------
+// heap-graph: the holder chains of `--capture heap`
+// ---------------------------------------------------------------------------------------
+
+/// A hand-written `py-1.retain.json` with one site of each kind: a module global that holds two
+/// lines (one through a stored exception's traceback), a class attribute, a frame, an object
+/// nothing refers to, a line no object belongs to, and a chain that reached no root.
+const RETAIN: &str = r#"{"dla_pyretain":1,"frames":1,"sites":[
+ {"site":"pkg/cms.py:40","blocks_first":100,"blocks_last":600,"found_tracked":600,"found_untracked":0,"kept":40,
+  "chains":[{"count":30,"root":{"kind":"module-global","module":"pkg.cms","key":"_native"},
+             "steps":[{"type":"pkg.cms.Payload","via":"f_locals.local"},{"type":"frame","via":"tb_frame","at":"pkg/cms.py:44"},
+                      {"type":"traceback","via":"__traceback__","at":"pkg/cms.py:44","repeat":598},{"type":"ImportError","via":".ex"},
+                      {"type":"pkg._util.Deferred","via":"._native"}]},
+            {"count":10,"root":{"kind":"module-global","module":"pkg.cms","key":"_native"},
+             "steps":[{"type":"traceback","via":"__traceback__","at":"pkg/cms.py:44","repeat":590},{"type":"ImportError","via":".ex"},
+                      {"type":"pkg._util.Deferred","via":"._native"}]}]},
+ {"site":"pkg/cms.py:52","blocks_first":50,"blocks_last":300,"found_tracked":300,"found_untracked":0,"kept":40,
+  "chains":[{"count":40,"root":{"kind":"module-global","module":"pkg.cms","key":"_native"},
+             "steps":[{"type":"frame","via":"tb_frame","at":"pkg/cms.py:55"},
+                      {"type":"traceback","via":"__traceback__","at":"pkg/cms.py:44","repeat":280},{"type":"ImportError","via":".ex"},
+                      {"type":"pkg._util.Deferred","via":"._native"}]}]},
+ {"site":"pkg/store.py:9","blocks_first":20,"blocks_last":220,"found_tracked":200,"found_untracked":0,"kept":40,
+  "chains":[{"count":40,"root":{"kind":"class-attribute","class":"pkg.store.Store","attribute":"items"},
+             "steps":[{"type":"pkg.store.Item","via":"[7]"},{"type":"list","via":".items"}]}]},
+ {"site":"pkg/work.py:21","blocks_first":0,"blocks_last":120,"found_tracked":120,"found_untracked":0,"kept":40,
+  "chains":[{"count":40,"root":{"kind":"frame","function":"_worker","at":"pkg/work.py:30"},
+             "steps":[{"type":"pkg.work.Job","via":"[3]"},{"type":"list","via":"f_locals.acc"}]}]},
+ {"site":"pkg/cb.py:5","blocks_first":10,"blocks_last":110,"found_tracked":100,"found_untracked":0,"kept":40,
+  "chains":[{"count":40,"root":{"kind":"no-referrer"},"steps":[{"type":"pkg.cb.Callback"}]}]},
+ {"site":"pkg/font.py:580","blocks_first":200,"blocks_last":1200,"found_tracked":0,"found_untracked":0,"kept":0,
+  "note":"no object was found for this site: the blocks do not belong to an object any Python container refers to, so native code holds them or a reference was lost there",
+  "chains":[]},
+ {"site":"pkg/deep.py:3","blocks_first":10,"blocks_last":60,"found_tracked":50,"found_untracked":0,"kept":40,
+  "chains":[{"count":40,"root":{"kind":"depth-limit"},"steps":[{"type":"int","via":".n"}]}]}
+],"limitations":["values are not written: a dict key is shown as its type (DLA_RAW_VALUES=1 allows raw values)"]}"#;
+
+/// The retention-path records of the ledger, newest last.
+fn retention(p: &Project) -> Vec<Value> {
+    p.evidence("retention-path")
+}
+
+fn holder<'a>(rec: &'a Value, key: &str) -> &'a Value {
+    rec["result"]["holders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["key"] == key)
+        .unwrap_or_else(|| panic!("no holder {key}: {}", rec["result"]))
+}
+
+#[test]
+fn every_root_kind_becomes_a_holder_with_its_kind_sites_objects_and_path() {
+    let p = Project::new();
+    let f = p.put("in/py-1.retain.json", RETAIN.as_bytes());
+    let v = summarize(&p, "heap-graph", "py-retain", std::slice::from_ref(&f), &[]);
+    assert_eq!(v["backend"], "py-retain", "{v}");
+    let recs = retention(&p);
+    assert_eq!(recs.len(), 1);
+    let rec = &recs[0];
+    assert_eq!(rec["authority"], "live");
+    let hs = rec["result"]["holders"].as_array().unwrap();
+    // One holder per distinct root: the module global holds two lines, the others one each; the
+    // chain that reached no root names no holder.
+    let keys: Vec<&str> = hs.iter().map(|h| h["key"].as_str().unwrap()).collect();
+    assert_eq!(
+        keys,
+        [
+            "static:pkg.cms._native",
+            "pkg/cb.py:5",
+            "stack:_worker@pkg/work.py:30",
+            "static:pkg.store.Store.items",
+            "pkg/font.py:580"
+        ],
+        "{}",
+        rec["result"]
+    );
+    let kinds: Vec<&str> = hs
+        .iter()
+        .map(|h| h["holder_kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "static/global",
+            "native-handle/global-ref",
+            "blocked-stack",
+            "static/global",
+            "native-handle/global-ref"
+        ]
+    );
+    let g = holder(rec, "static:pkg.cms._native");
+    assert_eq!(g["kept"], 80);
+    let sites: Vec<(&str, u64, u64)> = g["sites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            (
+                s["site"].as_str().unwrap(),
+                s["first"].as_u64().unwrap(),
+                s["last"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        sites,
+        [("pkg/cms.py:40", 100, 600), ("pkg/cms.py:52", 50, 300)]
+    );
+    // The chain with the most objects, as a path with its links, places and repeats.
+    let path: Vec<&str> = g["path"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["type"].as_str().unwrap())
+        .collect();
+    // The chain with the most objects (40) is the one of the second line.
+    assert_eq!(path.first().copied(), Some("frame"));
+    assert_eq!(path.last().copied(), Some("pkg._util.Deferred"));
+    let tb = g["path"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["type"] == "traceback")
+        .unwrap();
+    assert_eq!(
+        (tb["via"].as_str(), tb["at"].as_str(), tb["repeat"].as_u64()),
+        (Some("__traceback__"), Some("pkg/cms.py:44"), Some(280))
+    );
+    assert!(holder(rec, "pkg/cb.py:5")["unreferenced"].is_string());
+    let note = holder(rec, "pkg/font.py:580");
+    assert!(
+        note["unreferenced"]
+            .as_str()
+            .unwrap()
+            .contains("native code holds them")
+    );
+    assert_eq!(note["kept"], 0);
+    assert_eq!(note["sites"][0]["last"], 1200);
+    // The raw file keeps every holder, every chain and the digest of the input.
+    let raw: Value = serde_json::from_str(
+        &fs::read_to_string(p.run_dir.join(v["raw"]["path"].as_str().unwrap())).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        raw["captures"][0]["sha256"],
+        sha(&fs::read(p.path().join(&f)).unwrap())
+    );
+    let gp = raw["holders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["key"] == "static:pkg.cms._native")
+        .unwrap();
+    assert_eq!(gp["paths"].as_array().unwrap().len(), 3);
+    assert_eq!(gp["owner"], "pkg.cms._native");
+    let font = raw["sites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["site"] == "pkg/font.py:580")
+        .unwrap();
+    assert!(
+        font["unreferenced"]
+            .as_str()
+            .unwrap()
+            .contains("native code holds them"),
+        "{font}"
+    );
+    assert!(
+        rec["limitations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l.as_str().unwrap().contains("depth limit")),
+        "{rec}"
+    );
+}
+
+#[test]
+fn a_holder_that_no_finding_names_gets_the_command_that_adds_one() {
+    let p = Project::new();
+    let f = p.put("in/py-1.retain.json", RETAIN.as_bytes());
+    let v = summarize(&p, "heap-graph", "py-retain", &[f], &[]);
+    let id = v["evidence"][0].as_str().unwrap();
+    let next: Vec<&str> = v["next"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c.as_str().unwrap())
+        .collect();
+    // The site is the place of the step nearest the root that has one (the traceback), the owner
+    // is the module global, and the holder kind is the one of the root.
+    assert_eq!(
+        next[0],
+        format!(
+            "dla ledger add --origin growth-series --evidence {id} --site pkg/cms.py:44 --owner pkg.cms._native --region heap --holder static/global"
+        )
+    );
+    // A holder in native code or a frame has no owner and no step with a place: its finding is
+    // at the site that grew, and the kind is the one the holder has.
+    assert_eq!(
+        next[1],
+        format!(
+            "dla ledger add --origin growth-series --evidence {id} --site pkg/cb.py:5 --region heap --holder native-handle/global-ref"
+        )
+    );
+    assert_eq!(
+        next[2],
+        format!(
+            "dla ledger add --origin growth-series --evidence {id} --site pkg/work.py:21 --region heap --holder blocked-stack"
+        )
+    );
+    assert_eq!(next.len(), 3, "{next:?}");
+}
+
+#[test]
+fn a_finding_whose_owner_or_site_names_the_holder_is_tied_and_gets_its_route() {
+    let p = Project::new();
+    let f = p.put("in/py-1.retain.json", RETAIN.as_bytes());
+    let first = summarize(&p, "heap-graph", "py-retain", std::slice::from_ref(&f), &[]);
+    let e1 = first["evidence"][0].as_str().unwrap().to_owned();
+    // Rule 1: the owner of the finding is the holder's.
+    let by_owner = ok(
+        p.path(),
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "growth-series",
+            "--evidence",
+            &e1,
+            "--site",
+            "pkg/cms.py:44",
+            "--owner",
+            "pkg.cms._native",
+            "--region",
+            "heap",
+            "--holder",
+            "static/global",
+        ],
+    );
+    let f_owner = by_owner["id"].as_str().unwrap().to_owned();
+    // A finding at a site the frame holder holds, with no owner.
+    let by_site = ok(
+        p.path(),
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "growth-series",
+            "--evidence",
+            &e1,
+            "--site",
+            "pkg/work.py:21",
+            "--region",
+            "heap",
+            "--holder",
+            "blocked-stack",
+        ],
+    );
+    let f_site = by_site["id"].as_str().unwrap().to_owned();
+    // A non-leak sibling that carries the owner of another holder and a site it keeps ties nothing.
+    ok(
+        p.path(),
+        &[
+            "ledger",
+            "add",
+            "--sibling-of",
+            &f_owner,
+            "--origin",
+            "hypothesis",
+            "--hypothesis",
+            "N-WARM",
+            "--refute-if",
+            "growth continues over the extra cycles",
+            "--evidence",
+            &e1,
+            "--owner",
+            "pkg.store.Store.items",
+            "--site",
+            "pkg/store.py:9",
+        ],
+    );
+    let g = p.put("in/second/py-1.retain.json", RETAIN.as_bytes());
+    let v = summarize(&p, "heap-graph", "py-retain", &[g], &[]);
+    let rec = retention(&p).pop().unwrap();
+    let ties = rec["result"]["ties"].as_array().unwrap();
+    let tie_of = |key: &str| {
+        ties.iter()
+            .find(|t| t["holder"] == key)
+            .unwrap_or_else(|| panic!("no tie for {key}: {ties:?}"))
+    };
+    let t = tie_of("static:pkg.cms._native");
+    assert_eq!(t["finding"], f_owner.as_str());
+    assert_eq!(t["tie"]["rule"], "holder");
+    let t = tie_of("stack:_worker@pkg/work.py:30");
+    assert_eq!(t["finding"], f_site.as_str());
+    assert_eq!(t["tie"]["rule"], "site");
+    assert!(
+        ties.iter()
+            .all(|t| t["holder"] != "static:pkg.store.Store.items"),
+        "{ties:?}"
+    );
+    let named: Vec<&str> = rec["result"]["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        named,
+        [f_owner.as_str(), f_site.as_str()]
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+    );
+    // The holders the findings name come first, and no add command is printed for them.
+    let next: Vec<&str> = v["next"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c.as_str().unwrap())
+        .collect();
+    assert!(!next.is_empty());
+    for c in &next {
+        assert!(
+            !c.contains("--site pkg/cms.py:44") && !c.contains("--site pkg/work.py"),
+            "{next:?}"
+        );
+    }
+    assert!(
+        next.iter()
+            .any(|c| c.contains(&f_owner) || c.contains(&f_site)),
+        "{next:?}"
+    );
+    // The same label rule the other retention records get: the record names the finding.
+    let lines = p.lines();
+    let finding = lines
+        .iter()
+        .find(|l| l["type"] == "finding_added" && l["finding"]["id"] == f_owner.as_str())
+        .unwrap();
+    assert_eq!(finding["finding"]["owner"], "pkg.cms._native");
+}
+
+#[test]
+fn a_file_that_is_not_a_holder_chains_file_is_refused_with_the_fix() {
+    let p = Project::new();
+    let bad = p.put("in/r.json", b"{\"dla_pyretain\":null,\"sites\":[]}");
+    let e = refused(
+        p.path(),
+        &["summarize", "heap-graph", "--backend", "py-retain", &bad],
+    );
+    assert_eq!(e["code"], "malformed-artifact");
+    assert!(e["fix"].as_str().unwrap().contains("--capture heap"));
+    let torn = p.put("in/torn.json", b"{\"dla_pyretain\":1,\"sites\":[{\"site\":");
+    let e = refused(
+        p.path(),
+        &["summarize", "heap-graph", "--backend", "py-retain", &torn],
+    );
+    assert_eq!(e["code"], "malformed-artifact");
+}
+
+#[test]
+fn auto_reads_a_holder_chains_file_and_a_values_name_is_a_shape() {
+    let p = Project::new();
+    let tricky = RETAIN.replace(
+        "\"via\":\"f_locals.local\"",
+        "\"via\":\"[\\\"AKIAIOSFODNN7EXAMPLE1\\\"]\"",
+    );
+    let f = p.put("in/py-1.retain.json", tricky.as_bytes());
+    let v = ok(p.path(), &["summarize", "heap-graph", &f]);
+    assert_eq!(v["backend"], "py-retain");
+    for (path, t) in p.run_texts() {
+        assert!(
+            !t.contains(SECRET) || path.ends_with("py-1.retain.json"),
+            "secret in {}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn a_file_of_one_dump_point_is_read_and_the_record_says_growth_was_not_computed() {
+    let p = Project::new();
+    let one = r#"{"dla_pyretain":1,"frames":1,"sites":[
+ {"site":"pkg/a.py:3","blocks_first":null,"blocks_last":50,"found_tracked":40,"found_untracked":0,"kept":40,
+  "chains":[{"count":40,"root":{"kind":"module-global","module":"pkg.a","key":"_reg"},"steps":[{"type":"pkg.a.E","via":"[0]"},{"type":"list","via":"._reg"}]}]}],
+ "limitations":[]}"#;
+    let f = p.put("in/py-1.retain.json", one.as_bytes());
+    let v = summarize(&p, "heap-graph", "py-retain", &[f], &[]);
+    let rec = retention(&p).pop().unwrap();
+    let h = holder(&rec, "static:pkg.a._reg");
+    assert!(h["sites"][0]["first"].is_null(), "{h}");
+    assert_eq!(h["sites"][0]["last"], 50);
+    assert!(
+        rec["limitations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l.as_str().unwrap().contains("growth was not computed")),
+        "{rec}"
+    );
+    // The holder still gets its command and its ties work as with two dump points.
+    assert!(
+        v["next"][0]
+            .as_str()
+            .unwrap()
+            .contains("--owner pkg.a._reg"),
+        "{v}"
+    );
+}
+
+#[test]
+fn sites_with_kept_objects_and_no_chain_are_counted_with_the_reason_of_the_file() {
+    let p = Project::new();
+    let cut = r#"{"dla_pyretain":1,"frames":1,"sites":[
+ {"site":"pkg/a.py:3","blocks_first":0,"blocks_last":50,"found_tracked":40,"found_untracked":0,"kept":40,
+  "chains":[{"count":40,"root":{"kind":"module-global","module":"pkg.a","key":"_reg"},"steps":[{"type":"int"}]}]},
+ {"site":"pkg/a.py:4","blocks_first":0,"blocks_last":50,"found_tracked":40,"found_untracked":0,"kept":40,"chains":[]},
+ {"site":"pkg/a.py:5","blocks_first":0,"blocks_last":50,"found_tracked":40,"found_untracked":0,"kept":40,"chains":[]}],
+ "limitations":["the time bound (60 s) stopped the walk: 80 kept objects have no chain"]}"#;
+    let f = p.put("in/py-1.retain.json", cut.as_bytes());
+    let v = summarize(&p, "heap-graph", "py-retain", &[f], &[]);
+    assert_eq!(v["no_chain_sites"], 2, "{v}");
+    assert!(
+        v["no_chain_why"].as_str().unwrap().contains("time bound"),
+        "{v}"
+    );
+    let rec = retention(&p).pop().unwrap();
+    assert_eq!(rec["result"]["no_chain"]["sites"], 2);
+    assert!(
+        rec["result"]["no_chain"]["why"]
+            .as_str()
+            .unwrap()
+            .contains("time bound"),
+        "{rec}"
+    );
+    assert!(
+        rec["limitations"].as_array().unwrap().iter().any(|l| l
+            .as_str()
+            .unwrap()
+            .contains("2 site(s) have kept objects and no chain")),
+        "{rec}"
+    );
+}
+
+#[test]
+fn the_record_lists_the_types_a_holder_keeps_and_its_minor_sites() {
+    let p = Project::new();
+    let f = p.put("in/py-1.retain.json", RETAIN.as_bytes());
+    summarize(&p, "heap-graph", "py-retain", &[f], &[]);
+    let rec = retention(&p).pop().unwrap();
+    let g = holder(&rec, "static:pkg.cms._native");
+    let types: Vec<&str> = g["types"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t.as_str())
+        .collect();
+    // The kept object of each chain and the step that repeats; not the links in between.
+    assert!(
+        types.contains(&"traceback") && types.contains(&"frame"),
+        "{types:?}"
+    );
+    assert!(
+        !types.contains(&"ImportError") && !types.contains(&"pkg._util.Deferred"),
+        "{types:?}"
+    );
+    // A site where a holder keeps a few of the objects sampled is a minor one.
+    let minor = r#"{"dla_pyretain":1,"frames":1,"sites":[
+ {"site":"pkg/m.py:1","blocks_first":0,"blocks_last":50,"found_tracked":40,"found_untracked":0,"kept":40,
+  "chains":[{"count":36,"root":{"kind":"module-global","module":"pkg.m","key":"big"},"steps":[{"type":"int"}]},
+            {"count":4,"root":{"kind":"module-global","module":"pkg.m","key":"small"},"steps":[{"type":"int"}]}]}],"limitations":[]}"#;
+    let f = p.put("in/second.retain.json", minor.as_bytes());
+    summarize(&p, "heap-graph", "py-retain", &[f], &[]);
+    let rec = retention(&p).pop().unwrap();
+    let small = holder(&rec, "static:pkg.m.small");
+    assert_eq!(small["sites"].as_array().unwrap().len(), 0, "{small}");
+    assert_eq!(small["minor_sites"][0], "pkg/m.py:1");
+    assert_eq!(
+        holder(&rec, "static:pkg.m.big")["sites"][0]["site"],
+        "pkg/m.py:1"
+    );
+}
+
+#[test]
+fn an_owner_the_record_names_with_a_site_it_does_not_keep_is_warned_about_and_not_refused() {
+    let p = Project::new();
+    let f = p.put("in/py-1.retain.json", RETAIN.as_bytes());
+    let v = summarize(&p, "heap-graph", "py-retain", &[f], &[]);
+    let e = v["evidence"][0].as_str().unwrap().to_owned();
+    let add = |site: &str| {
+        ok(
+            p.path(),
+            &[
+                "ledger",
+                "add",
+                "--origin",
+                "growth-series",
+                "--evidence",
+                &e,
+                "--site",
+                site,
+                "--owner",
+                "pkg.cms._native",
+                "--region",
+                "heap",
+                "--holder",
+                "static/global",
+            ],
+        )
+    };
+    let outside = add("pkg/driver.py:97");
+    assert_eq!(outside["state"], "candidate", "not refused: {outside}");
+    let w = outside["warnings"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{outside}"))
+        .iter()
+        .filter_map(|x| x.as_str())
+        .find(|x| x.contains("measured column"))
+        .unwrap_or_else(|| panic!("{outside}"));
+    assert!(
+        w.contains("pkg/cms.py:40") && w.contains("pkg/cms.py:52") && w.contains("measured column"),
+        "{w}"
+    );
+    // A line the holder keeps gets no such warning.
+    let held = add("pkg/cms.py:40");
+    assert!(
+        held["warnings"].as_array().is_none_or(|a| a
+            .iter()
+            .all(|x| !x.as_str().unwrap().contains("measured column"))),
+        "{held}"
+    );
 }

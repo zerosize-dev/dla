@@ -168,15 +168,33 @@ pub fn supported(rt: Runtime) -> CaptureSet {
             alloc: true,
         },
         // Python: type counters (histogram), tracemalloc and memray stacks (alloc), threads,
-        // tasks and ResourceWarnings by creation site (nonheap).
+        // tasks and ResourceWarnings by creation site (nonheap), and the holder chains of the
+        // objects made at the growing lines (heap).
         Runtime::Python => CaptureSet {
-            heap: false,
+            heap: true,
             histogram: true,
             jfr: false,
             nonheap: true,
             alloc: true,
         },
         _ => CaptureSet::default(),
+    }
+}
+
+/// True for a runtime whose `heap` capture is the holder chains of the objects made at the lines
+/// that grew (Python), not a dump of the whole heap: it answers who keeps the objects of an
+/// allocation line, so the capture that explains such a line is `alloc,heap`.
+pub fn heap_is_holder_chains(rt: Runtime) -> bool {
+    rt == Runtime::Python && supported(rt).heap
+}
+
+/// The `--capture` value that captures the stacks and, where it exists, the holders of a growing
+/// allocation line.
+pub fn stacks_capture(rt: Runtime) -> &'static str {
+    if heap_is_holder_chains(rt) {
+        "alloc,heap"
+    } else {
+        "alloc"
     }
 }
 
@@ -314,6 +332,13 @@ pub fn classify(name: &str) -> Option<(CaptureKind, u32, &'static str)> {
             CaptureKind::Alloc,
             n,
             "memray allocations still live at the end",
+        ));
+    }
+    if let Some(n) = seq_of("py-", ".retain.json") {
+        return Some((
+            CaptureKind::Heap,
+            n,
+            "python objects that keep the growing lines alive (holder chains)",
         ));
     }
     if let Some(n) = seq_of("py-", ".types.json") {
@@ -564,6 +589,11 @@ pub fn summarize_commands(
         if sel.is_empty() {
             return;
         }
+        // The holder chains are taken once, at the last dump point of a process: a command-mode
+        // series has one file per point, and the newest is the one the lines that grew show in.
+        if tail == [".retain.json"] {
+            sel = vec![sel[sel.len() - 1]];
+        }
         if compact && kind == CaptureKind::Histogram && sel.len() > COMPACT_HISTOGRAMS {
             // First, last and evenly spaced files between.
             let n = sel.len();
@@ -579,6 +609,8 @@ pub fn summarize_commands(
     // point is a process of its own, and three or more dumps, one per point, are a per-point
     // series over n (heap-graph reads the format of the files, so one command per format).
     for (_, g) in &groups {
+        // Python: the holder chains of one process (one file per process).
+        push("heap-graph", CaptureKind::Heap, &[".retain.json"], g);
         if !command_mode {
             push("heap-graph", CaptureKind::Heap, &[], g);
             continue;
@@ -894,7 +926,11 @@ mod tests {
         let go = all.intersect(&supported(Runtime::Go));
         assert_eq!(go.names(), ["nonheap", "alloc"]);
         let py = all.intersect(&supported(Runtime::Python));
-        assert_eq!(py.names(), ["histogram", "nonheap", "alloc"]);
+        assert_eq!(py.names(), ["heap", "histogram", "nonheap", "alloc"]);
+        assert!(heap_is_holder_chains(Runtime::Python));
+        assert!(!heap_is_holder_chains(Runtime::Node) && !heap_is_holder_chains(Runtime::Jvm));
+        assert_eq!(stacks_capture(Runtime::Python), "alloc,heap");
+        assert_eq!(stacks_capture(Runtime::Node), "alloc");
         assert!(all.intersect(&supported(Runtime::Rust)).is_empty());
     }
 

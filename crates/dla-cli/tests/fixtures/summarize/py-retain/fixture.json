@@ -1,0 +1,10 @@
+{
+ "op": "heap-graph",
+ "inputs": [
+  "retain-1.json"
+ ],
+ "secrets": [
+  "AKIAIOSFODNN7EXAMPLE1"
+ ],
+ "note": "one real py-1.retain.json (DLA_CAPTURE=heap) of a driver run over a small test project written for the purpose (a module global dict, a class attribute list, a module-level object that stores and re-raises an exception, objects held only by a native-style callback, frames of a worker and a generator, and a line whose blocks no object belongs to); the dict key shown as <str> is replaced by a quoted key-like name, which is what a run with raw values writes, to plant a secret"
+}

@@ -770,6 +770,15 @@ fn tied_findings<'a>(view: &'a RunView, t: &TrendReport, c: &ColumnTrend) -> Vec
                 .map(|f| f.id.clone()),
         );
     }
+    // A line a holder keeps alive is accounted for by the finding at that holder (see
+    // [`held_by_findings`]); it is not growth of a finding of its own.
+    if at_line && let Some(site) = crate::grown::column_site(c) {
+        ids.extend(
+            held_by_findings(view, site)
+                .into_iter()
+                .map(|f| f.id.clone()),
+        );
+    }
     if !at_line
         && let Some(ev) = evidence_for_column(view, t, c)
         && let Ok(eid) = ev.parse::<crate::ids::EvidenceId>()
@@ -806,7 +815,84 @@ fn tied_findings<'a>(view: &'a RunView, t: &TrendReport, c: &ColumnTrend) -> Vec
     }
     ids.sort();
     ids.dedup();
-    ids.iter().filter_map(|i| view.ledger.finding(i)).collect()
+    let mut found: Vec<&Finding> = ids.iter().filter_map(|i| view.ledger.finding(i)).collect();
+    // A per-type count (`py.type:<T>.count`) that no rule above ties belongs to the holder that
+    // keeps objects of that type, when a retention record names a finding for it.
+    if found.is_empty() && py_type_of(&c.name).is_some() {
+        found = held_column_findings(view, c);
+        found.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+    found
+}
+
+/// The leak-side findings that a `retention-path` record names for a holder that holds `site`
+/// (the Python holder chains, `holders[].sites`): a finding whose owner is the holder's, or that
+/// is at a site the holder holds (`finding_is_at_site`). A record that names no finding for the
+/// holder ties nothing, and a non-leak sibling never ties. This is how one finding at the
+/// holder accounts for every line whose objects it keeps.
+fn held_by_findings<'a>(view: &'a RunView, site: &str) -> Vec<&'a Finding> {
+    let mut out: Vec<&Finding> = Vec::new();
+    for rec in view.ledger.evidence() {
+        for entry in crate::holders::entries_holding(rec, site) {
+            findings_of_entry(view, entry, &mut out);
+        }
+    }
+    out
+}
+
+/// The leak-side findings that a `retention-path` record names for a holder that lists the object
+/// type `ty` among those it keeps (`holders[].types`), by the rule of [`held_by_findings`]: the
+/// `py.type:<T>.count` column of such a type is the holder's, not a finding of its own.
+fn held_type_findings<'a>(view: &'a RunView, ty: &str) -> Vec<&'a Finding> {
+    let mut out: Vec<&Finding> = Vec::new();
+    for rec in view.ledger.evidence() {
+        for entry in crate::holders::entries_with_type(rec, ty) {
+            findings_of_entry(view, entry, &mut out);
+        }
+    }
+    out
+}
+
+/// The type of a `py.type:<T>.count` column (`.pre_gc` left off).
+fn py_type_of(column: &str) -> Option<&str> {
+    let base = column.strip_suffix(".pre_gc").unwrap_or(column);
+    base.strip_prefix("py.type:")?.strip_suffix(".count")
+}
+
+/// The findings a retention record holds a column for: the line of a `py.blocks@` column, the
+/// type of a `py.type:` column.
+fn held_column_findings<'a>(view: &'a RunView, c: &ColumnTrend) -> Vec<&'a Finding> {
+    if crate::grown::is_alloc_site_column(&c.name) {
+        return crate::grown::column_site(c)
+            .map(|site| held_by_findings(view, site))
+            .unwrap_or_default();
+    }
+    py_type_of(&c.name)
+        .map(|ty| held_type_findings(view, ty))
+        .unwrap_or_default()
+}
+
+/// Adds to `out` the leak-side findings of one holder entry: its owner is the holder's, or it is at
+/// a line the holder keeps.
+fn findings_of_entry<'a>(view: &'a RunView, entry: &serde_json::Value, out: &mut Vec<&'a Finding>) {
+    use crate::finding::Polarity;
+    let held = crate::holders::entry_sites(entry);
+    for f in view.ledger.findings() {
+        if f.polarity() != Polarity::Leak || out.iter().any(|o| o.id == f.id) {
+            continue;
+        }
+        let by_owner = f
+            .owner
+            .as_deref()
+            .is_some_and(|o| crate::holders::entry_is_owner(entry, o));
+        if by_owner
+            || held
+                .iter()
+                .any(|s| crate::grown::finding_is_at_site(&view.ledger, f, s))
+        {
+            out.push(f);
+        }
+    }
 }
 
 /// The number in a trend id (`T3` is 3).
@@ -1241,7 +1327,19 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
                 }
                 continue;
             }
+            // A line a holder keeps alive, tied to the finding at that holder: the finding's own
+            // item names its route, so this one names the finding and never an add command.
+            let by_holder: Vec<String> = held_column_findings(view, c)
+                .iter()
+                .filter(|f| !f.state.is_dispositioned())
+                .map(|f| f.id.to_string())
+                .collect();
             let fix = match evidence_for_column(view, t, c) {
+                _ if !tied.is_empty() && !by_holder.is_empty() => format!(
+                    "dla gate check --final   # after {} has a disposition (its own item in this list names the command): its holder keeps the objects of {}",
+                    by_holder.join(", "),
+                    readable_column(&c.name)
+                ),
                 // An allocation-site count that no finding is at: the add command names the line.
                 Some(e) => tied
                     .is_empty()
@@ -2979,5 +3077,216 @@ mod in_run_column_tests {
         // Everything after the step is the same text.
         let tail = |t: &str| t.split_once(". If no harness").unwrap().1.to_owned();
         assert_eq!(tail(&plain), tail(&with));
+    }
+}
+
+#[cfg(test)]
+mod holder_chain_tests {
+    use super::*;
+    use crate::{
+        Ledger, NewFinding, Origin,
+        evidence::{Authority, EvidenceCoverage, NewEvidence, Source, Tool},
+    };
+
+    /// A run with a Python harness series S1 whose trend has the non-flat site columns
+    /// `py.blocks@a.py:1` and `py.blocks@a.py:2`, a retention record of authority `authority`
+    /// whose holder `static:pkg.m._reg` holds both lines, and the findings `findings` as
+    /// `(owner, site, sibling_of_first)`.
+    fn scene(
+        authority: Authority,
+        findings: &[(&str, &str, bool)],
+    ) -> (tempfile::TempDir, RunView) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut l = Ledger::create(dir.path()).unwrap();
+        let mut add = |kind: EvidenceKind, authority: Authority, result: serde_json::Value| {
+            l.add_evidence(NewEvidence {
+                source: Source::Repo {
+                    commit: "c".into(),
+                    path: None,
+                },
+                tool: Tool {
+                    name: "t".into(),
+                    version: "1".into(),
+                },
+                authority,
+                kind,
+                result,
+                raw: None,
+                coverage: EvidenceCoverage::default(),
+                limitations: vec![],
+                unknowns: vec![],
+            })
+            .unwrap();
+        };
+        add(
+            EvidenceKind::StaticHit,
+            Authority::Static,
+            serde_json::json!({}),
+        );
+        add(
+            EvidenceKind::RetentionPath,
+            authority,
+            serde_json::json!({"holders": [
+                {"key": "static:pkg.m._reg", "types": ["frame", "traceback"],
+                 "sites": [{"site": "a.py:1"}, {"site": "a.py:2"}]},
+                {"key": "stack:w@a.py:9", "sites": [{"site": "a.py:5"}]}
+            ]}),
+        );
+        for (owner, site, sibling) in findings {
+            let mut nf = NewFinding::new(
+                Origin::parse(if *sibling { "hypothesis" } else { "census" }).unwrap(),
+                vec![crate::EvidenceId::new(1)],
+            );
+            if !owner.is_empty() {
+                nf.owner = Some((*owner).into());
+            }
+            nf.site = Some((*site).into());
+            if *sibling {
+                nf.sibling_of = Some(FindingId::new(1));
+                nf.hypothesis = Some("N-WARM: warm-up".into());
+                nf.refute_if = Some(crate::grown::REFUTE_IF.into());
+            }
+            l.add_finding(nf).unwrap();
+        }
+        let state =
+            crate::state::RunState::init("/p", None, 3600, None, crate::state::now_utc()).unwrap();
+        let mut view = RunView::new(state, l, None);
+        let col = |name: &str| -> ColumnTrend {
+            serde_json::from_value(serde_json::json!({
+                "name": name, "unit": "count", "kind": "counter", "region": "heap",
+                "n": 8, "noise": 0.0, "rise": 100.0, "shape": "steady", "gate": "pass",
+                "gate_failed": [],
+            }))
+            .unwrap()
+        };
+        view.trends = vec![TrendReport {
+            schema_version: 1,
+            id: "T1".into(),
+            series: "S1".into(),
+            thresholds: dla_stats::GateThresholds::default(),
+            columns: vec![
+                col("py.blocks@a.py:1"),
+                col("py.blocks@a.py:2"),
+                col("py.blocks@a.py:5"),
+                col("py.blocks@a.py:9"),
+                col("py.type:frame.count"),
+                col("py.type:traceback.count.pre_gc"),
+                col("py.type:dict.count"),
+            ],
+            targets: vec![],
+        }];
+        view.series_harness.insert("S1".into(), "H1".into());
+        (dir, view)
+    }
+
+    fn tied(view: &RunView, column: &str) -> Vec<String> {
+        let t = &view.trends[0];
+        let c = t.columns.iter().find(|c| c.name == column).unwrap();
+        tied_findings(view, t, c)
+            .iter()
+            .map(|f| f.id.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn the_finding_at_the_holder_accounts_for_every_line_the_holder_keeps() {
+        // F1's owner is the holder; no finding is at either line.
+        let (_d, v) = scene(Authority::Live, &[("pkg.m._reg", "a.py:50", false)]);
+        assert_eq!(tied(&v, "py.blocks@a.py:1"), ["F1"]);
+        assert_eq!(tied(&v, "py.blocks@a.py:2"), ["F1"]);
+        // A line the holder does not keep, and a holder that no finding names, tie nothing.
+        assert!(tied(&v, "py.blocks@a.py:9").is_empty());
+        assert!(tied(&v, "py.blocks@a.py:5").is_empty());
+    }
+
+    #[test]
+    fn a_finding_at_a_line_the_holder_keeps_is_tied_to_the_other_lines_too() {
+        let (_d, v) = scene(Authority::Live, &[("", "a.py:2", false)]);
+        assert_eq!(tied(&v, "py.blocks@a.py:1"), ["F1"]);
+        // A holder with no owner in the record (a stack): the finding at its line, and nothing else.
+        let (_d, v) = scene(Authority::Live, &[("other.mod.attr", "a.py:5", false)]);
+        assert_eq!(tied(&v, "py.blocks@a.py:5"), ["F1"]);
+        assert!(tied(&v, "py.blocks@a.py:1").is_empty());
+    }
+
+    #[test]
+    fn a_record_that_names_no_finding_and_a_record_read_from_source_tie_nothing() {
+        let (_d, v) = scene(Authority::Live, &[("another.owner", "a.py:77", false)]);
+        for c in ["py.blocks@a.py:1", "py.blocks@a.py:2", "py.blocks@a.py:5"] {
+            assert!(tied(&v, c).is_empty(), "{c}");
+        }
+        let (_d, v) = scene(Authority::Static, &[("pkg.m._reg", "a.py:50", false)]);
+        assert!(tied(&v, "py.blocks@a.py:1").is_empty());
+    }
+
+    #[test]
+    fn the_types_a_holder_keeps_are_its_own_columns_and_the_other_types_are_not() {
+        let (_d, v) = scene(Authority::Live, &[("pkg.m._reg", "a.py:50", false)]);
+        assert_eq!(tied(&v, "py.type:frame.count"), ["F1"]);
+        assert_eq!(tied(&v, "py.type:traceback.count.pre_gc"), ["F1"]);
+        // A type that is only a link in a chain is not listed, so it ties to nothing.
+        assert!(tied(&v, "py.type:dict.count").is_empty());
+        // No finding names the holder: nothing is tied; a sibling never ties.
+        let (_d, v) = scene(Authority::Live, &[("other.owner", "a.py:77", false)]);
+        assert!(tied(&v, "py.type:frame.count").is_empty());
+        let (_d, v) = scene(
+            Authority::Live,
+            &[
+                ("other.owner", "a.py:40", false),
+                ("pkg.m._reg", "a.py:1", true),
+            ],
+        );
+        assert!(tied(&v, "py.type:frame.count").is_empty());
+        // The item of such a column names the finding and no add command.
+        let (_d, v) = scene(Authority::Live, &[("pkg.m._reg", "a.py:50", false)]);
+        let all = missing(&v, GateTarget::Final, None);
+        let item = all
+            .iter()
+            .find(|m| m.id == "T1:py.type:frame.count")
+            .unwrap_or_else(|| panic!("{all:?}"));
+        assert!(
+            item.fix.contains("F1") && !item.fix.contains("dla ledger add"),
+            "{item:?}"
+        );
+    }
+
+    #[test]
+    fn a_sibling_never_ties() {
+        // F1.n1 has the holder's owner and a held site and is a non-leak hypothesis.
+        let (_d, v) = scene(
+            Authority::Live,
+            &[
+                ("other.owner", "a.py:40", false),
+                ("pkg.m._reg", "a.py:1", true),
+            ],
+        );
+        assert!(
+            tied(&v, "py.blocks@a.py:1").is_empty(),
+            "{:?}",
+            tied(&v, "py.blocks@a.py:1")
+        );
+        assert!(tied(&v, "py.blocks@a.py:2").is_empty());
+    }
+
+    #[test]
+    fn the_item_of_a_held_line_names_the_finding_while_it_has_no_disposition() {
+        let (_d, v) = scene(Authority::Live, &[("pkg.m._reg", "a.py:50", false)]);
+        let all = missing(&v, GateTarget::Final, None);
+        let item = all
+            .iter()
+            .find(|m| m.id == "T1:py.blocks@a.py:1")
+            .unwrap_or_else(|| panic!("{all:?}"));
+        assert!(item.description.contains("no disposition"), "{item:?}");
+        assert!(
+            item.fix.contains("F1") && !item.fix.contains("dla ledger add"),
+            "{item:?}"
+        );
+        // A line no holder keeps is tied to no finding.
+        let item = all
+            .iter()
+            .find(|m| m.id == "T1:py.blocks@a.py:9")
+            .unwrap_or_else(|| panic!("{all:?}"));
+        assert!(item.description.contains("tied to no finding"), "{item:?}");
+        assert!(!item.fix.contains("F1"), "{item:?}");
     }
 }

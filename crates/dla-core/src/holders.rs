@@ -12,6 +12,9 @@
 //! * `dla-v8-snapshot` `retention-path`: `holders[].key` (`static:<module>.<name>`,
 //!   `closure:<module>.<var>`, `field:<module>.<Class>.<field>`).
 //! * `valgrind-vgdb` `retention-path`: `alloc` (`function (file:line)`), `root` and `path[]`.
+//! * `dla-py-retain` `retention-path`: `holders[].key` (`static:<module>.<name>`,
+//!   `stack:<function>@<file:line>`, or the site for a holder in native code) and
+//!   `holders[].sites[].site`, the lines whose objects the holder keeps.
 //! * `alloc-stack`: `top[].root` (the root holder of a sampled path, JFR OldObjectSample).
 //!
 //! The layout decides, never the tool name, so a record of a new tool with one of these
@@ -174,6 +177,73 @@ fn list_keys<'a>(result: &'a Value, list: &str) -> impl Iterator<Item = &'a Valu
         .flatten()
 }
 
+/// The `file:line` sites a `holders` entry of a retention record holds (`sites[].site`): the
+/// lines whose live objects the holder keeps alive. Only the Python holder chains
+/// (`py-retain`) write them.
+pub fn entry_sites(entry: &Value) -> Vec<&str> {
+    entry
+        .get("sites")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|s| s.get("site").and_then(Value::as_str))
+        .map(str::trim)
+        .collect()
+}
+
+/// The `holders` entries of a retention record that hold `site`. Empty for a record of
+/// authority `static`, for another kind and for a record whose entries list no sites.
+pub fn entries_holding<'a>(record: &'a EvidenceRecord, site: &str) -> Vec<&'a Value> {
+    if record.authority == Authority::Static || record.kind != EvidenceKind::RetentionPath {
+        return Vec::new();
+    }
+    let site = site.trim();
+    list_keys(&record.result, "holders")
+        .filter(|e| entry_sites(e).contains(&site))
+        .collect()
+}
+
+/// The types of the objects a `holders` entry keeps (`types`, the type of each kept object and of
+/// each step that repeats): the `py.type:<T>.count` columns it accounts for.
+pub fn entry_types(entry: &Value) -> Vec<&str> {
+    entry
+        .get("types")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect()
+}
+
+/// The `holders` entries of a retention record that list the type `ty` among the objects they
+/// keep. Empty for a record of authority `static` and for another kind.
+pub fn entries_with_type<'a>(record: &'a EvidenceRecord, ty: &str) -> Vec<&'a Value> {
+    if record.authority == Authority::Static || record.kind != EvidenceKind::RetentionPath {
+        return Vec::new();
+    }
+    list_keys(&record.result, "holders")
+        .filter(|e| entry_types(e).contains(&ty))
+        .collect()
+}
+
+/// The `holders` entries of a retention record that are the holder of `owner` and list lines
+/// (`sites`): the Python holder chains. Empty for a record of authority `static` and for another
+/// kind.
+pub fn entries_owned_by<'a>(record: &'a EvidenceRecord, owner: &str) -> Vec<&'a Value> {
+    if record.authority == Authority::Static || record.kind != EvidenceKind::RetentionPath {
+        return Vec::new();
+    }
+    list_keys(&record.result, "holders")
+        .filter(|e| !entry_sites(e).is_empty() && entry_names_owner(e, owner))
+        .collect()
+}
+
+/// True when the `holders` entry `entry` is the holder of `owner` (its key names the owner,
+/// exactly or as a shorter form).
+pub fn entry_is_owner(entry: &Value, owner: &str) -> bool {
+    entry_names_owner(entry, owner)
+}
+
 fn entry_names_owner(entry: &Value, owner: &str) -> bool {
     entry
         .get("key")
@@ -272,6 +342,15 @@ pub fn names_holder(record: &EvidenceRecord, finding: &Finding) -> bool {
                 && ["holders", "via"]
                     .iter()
                     .any(|l| list_keys(r, l).any(|e| entry_names_owner(e, owner)))
+            {
+                return true;
+            }
+            // A holder that keeps the objects of a line (the Python holder chains) is the
+            // holder of a finding at that line.
+            if finding
+                .site
+                .as_deref()
+                .is_some_and(|s| !entries_holding(record, s).is_empty())
             {
                 return true;
             }
@@ -462,6 +541,44 @@ mod tests {
     }
 
     #[test]
+    fn a_python_holder_names_the_finding_at_a_line_it_keeps_and_the_one_that_owns_it() {
+        let r = rec(
+            EvidenceKind::RetentionPath,
+            Authority::Live,
+            "dla-py-retain",
+            json!({"holders": [
+                {"key": "static:shop.registry._deferred", "holder_kind": "static/global",
+                 "sites": [{"site": "shop/a.py:13"}, {"site": "shop/a.py:15"}]},
+                {"key": "shop/font.py:580", "holder_kind": "native-handle/global-ref",
+                 "sites": [{"site": "shop/font.py:580"}]}]}),
+        );
+        // By owner, and by a line the holder keeps.
+        assert!(names_holder(
+            &r,
+            &finding(Some("shop.registry._deferred"), Some("shop/a.py:90"))
+        ));
+        assert!(names_holder(&r, &finding(None, Some("shop/a.py:15"))));
+        assert!(names_holder(&r, &finding(None, Some(" shop/font.py:580 "))));
+        // Not by a line that no holder keeps, nor by a record read from source text.
+        assert!(!names_holder(&r, &finding(None, Some("shop/a.py:14"))));
+        assert!(!names_holder(
+            &r,
+            &finding(Some("shop.other._x"), Some("shop/a.py:1"))
+        ));
+        let s = rec(
+            EvidenceKind::RetentionPath,
+            Authority::Static,
+            "dla-py-retain",
+            json!({"holders": [{"key": "x.y", "sites": [{"site": "a.py:1"}]}]}),
+        );
+        assert!(!names_holder(&s, &finding(None, Some("a.py:1"))));
+        // The entries a line is held by.
+        assert_eq!(entries_holding(&r, "shop/a.py:13").len(), 1);
+        assert!(entries_holding(&r, "shop/a.py:14").is_empty());
+        assert!(entries_holding(&s, "a.py:1").is_empty());
+    }
+
+    #[test]
     fn a_thread_local_holder_key_names_its_static_field() {
         let r = rec(
             EvidenceKind::RetentionPath,
@@ -637,6 +754,17 @@ mod tests {
             &bare,
             &finding(Some("shop.Cache.entries"), Some("src/A.java:9"))
         ));
+        // A bare stack at the finding's line is not retention: it names no holder, for a finding
+        // with an owner or without one, whatever the tool.
+        assert!(!names_holder(&bare, &finding(None, Some(" src/A.java:9 "))));
+        let py = rec(
+            EvidenceKind::AllocStack,
+            Authority::Live,
+            "py-tracemalloc",
+            json!({"mode": "single", "top": [{"at": "a", "site": "a.py:9"}]}),
+        );
+        assert!(!names_holder(&py, &finding(Some("m.g"), Some("a.py:9"))));
+        assert!(!names_holder(&py, &finding(None, Some("a.py:9"))));
     }
 
     #[test]

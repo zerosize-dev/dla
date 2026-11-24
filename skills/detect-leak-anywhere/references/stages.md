@@ -395,8 +395,10 @@ under the run directory and need tier 1.
     `heap-graph` needs a driver. Snapshots need about 12x the heap in free memory and hold memory contents.
   - Go: `--capture alloc,nonheap` (heap profiles, goroutine dumps and the goroutine leak profile; an older
     project toolchain gets one extra pass with a cached Go 1.27, else a `missing` row).
-  - Python: `--capture histogram,alloc,nonheap` (type counts, tracemalloc stacks and memray when the
-    program's interpreter has it, threads, tasks, ResourceWarning sites). `alloc` slows the points that take it.
+  - Python: `--capture histogram,alloc,nonheap,heap` (type counts, tracemalloc stacks and memray when the
+    program's interpreter has it, threads, tasks, ResourceWarning sites, and with `heap` the holder chains
+    of the objects made at the lines that grew, read by `heap-graph`). `alloc` and `heap` slow the points
+    that take them; a growing `py.blocks@` line is explained by `--capture alloc,heap` (one run, two summarize commands).
   - Rust and native, program started directly: `--tool valgrind` (memcheck XML plus the vgdb chain
     files) or `--tool heaptrack` (`heaptrack_print` report and a first-to-last diff) instead of a
     measured series. A wrapper (make, sh) gets no vgdb chain. A missing tool refuses with
@@ -476,7 +478,7 @@ coverage rows are in `references/backends.md`; `dla summarize --list` prints bac
 
 | Op | Use it for | Gives |
 |---|---|---|
-| `heap-graph` | HPROF dumps or V8 snapshots of one process (3 or more), 3 or more command-mode heap captures of one harness (a per-point series over n), or the native vgdb chain | retention path per dump, a `holder:` growth column, `via_holders` |
+| `heap-graph` | HPROF dumps or V8 snapshots of one process (3 or more), 3 or more command-mode heap captures of one harness (a per-point series over n), the native vgdb chain, or the one Python holder-chains file (`py-1.retain.json`: who keeps the objects of the growing lines) | retention path per dump, a `holder:` growth column, `via_holders` |
 | `type-histogram-diff` | class histograms, shim stack groups | growth by type or by allocation stack |
 | `alloc-stack-diff` | JFR old objects, valgrind, heaptrack, dhat, LeakSanitizer, Go heap profiles, Node sampling profiles, Python tracemalloc and memray | growth by allocation stack, site is the first project frame |
 | `non-heap` | thread dumps, class loaders, NMT, descriptors; Go goroutine dumps and leak profile; Node resources; Python threads, tasks, ResourceWarnings | counts by group; ties to a finding only by creation site (Go goroutines, Node `Type@file:line`, Python threads and tasks); a JVM class loader group ties by exact loader class to the finding whose holder is declared with that class; JVM thread dumps and the other counts never tie |

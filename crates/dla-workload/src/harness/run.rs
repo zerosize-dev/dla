@@ -55,7 +55,7 @@ use dla_core::{
         HarnessMode,
     },
     series::{Axis, KeyMode, SeriesSourceKind},
-    state::{ProcessKind, ProcessRecord, now_utc},
+    state::{ProcessKind, ProcessRecord, RunState, now_utc},
     toolctx::{EvidenceSpec, StageOutcome, ToolCtx},
 };
 use dla_sample::os::{self, OsSample, Sampler, SamplerConfig, SamplerOutput};
@@ -833,6 +833,8 @@ struct Paths {
     /// Python: the project the scratch copy was made from (`DLA_SOURCE_ROOT`). A library
     /// installed in editable mode runs from there, not from the copy.
     source: Option<String>,
+    /// The run's consent allows raw values in captures (`DLA_RAW_VALUES` for a Python agent).
+    raw_values: bool,
 }
 
 impl Paths {
@@ -866,9 +868,14 @@ impl Paths {
             .then(|| ctx.project.canonicalize().ok())
             .flatten()
             .map(|p| dla_core::paths::plain(p).to_string_lossy().into_owned());
+        let raw_values = RunState::load(&ctx.run_dir)
+            .ok()
+            .and_then(|s| s.consent)
+            .is_some_and(|c| c.raw_values);
         Ok(Self {
             packages,
             source,
+            raw_values,
             out: hdir.join(OUT),
             logs: hdir.join(LOGS),
             cov: hdir.join(COV),
@@ -1174,6 +1181,21 @@ impl PointEnv<'_> {
         if let Some(p) = &self.paths.source {
             set("DLA_SOURCE_ROOT", p.clone());
         }
+        // A Python process writes no bytecode cache: the first process of a harness would compile the
+        // agent and the project's modules and leave more objects alive than the later ones that
+        // load the cache (the first point of a series would read high), and a library run from
+        // its source tree would get `__pycache__` written into the user's project. A value the
+        // environment already has is kept.
+        if m.runtime == dla_core::runtime::Runtime::Python
+            && !m
+                .run
+                .env
+                .iter()
+                .any(|(k, _)| k == "PYTHONDONTWRITEBYTECODE")
+            && std::env::var_os("PYTHONDONTWRITEBYTECODE").is_none()
+        {
+            set("PYTHONDONTWRITEBYTECODE", "1".to_owned());
+        }
         set("DLA_ITER", self.n.to_string());
         set("DLA_TICK_MS", "100".to_owned());
         if let Some(p) = self.purge {
@@ -1182,12 +1204,18 @@ impl PointEnv<'_> {
         if let Some((kinds, full)) = self.capture {
             let v = kinds.env_value(full);
             if !v.is_empty() {
+                let heap = v.split(',').any(|k| k == "heap");
                 set(dla_core::harness::ENV_CAPTURE, v);
                 set(
                     dla_core::harness::ENV_CAPTURE_DIR,
                     self.capture_dir().to_string_lossy().into_owned(),
                 );
                 set(dla_core::harness::ENV_CAPTURE_DUMPS, self.dumps.to_string());
+                // The Python agent writes dict keys into its holder chains only with this switch.
+                if self.paths.raw_values && m.runtime == dla_core::runtime::Runtime::Python && heap
+                {
+                    set(dla_core::harness::ENV_RAW_VALUES, "1".to_owned());
+                }
             }
         }
         if m.mode == HarnessMode::Driver {
@@ -4443,6 +4471,7 @@ mod tests {
             probes: None,
             packages: None,
             source: None,
+            raw_values: false,
         }
     }
 

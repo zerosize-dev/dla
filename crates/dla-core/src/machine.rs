@@ -1466,3 +1466,64 @@ fn check_direction<'a>(
         ),
     ))
 }
+
+#[cfg(test)]
+mod stack_tests {
+    use super::*;
+    use crate::{
+        EvidenceId, FindingId, Origin,
+        evidence::{Authority, EvidenceCoverage, NewEvidence, Source, Tool},
+    };
+    use serde_json::json;
+
+    fn stack(tool: &str) -> EvidenceRecord {
+        NewEvidence {
+            source: Source::Repo {
+                commit: "c".into(),
+                path: None,
+            },
+            tool: Tool {
+                name: tool.into(),
+                version: "1".into(),
+            },
+            authority: Authority::Live,
+            kind: EvidenceKind::AllocStack,
+            result: json!({"mode": "single", "top": [{"at": "m", "site": "a.py:9", "d_blocks": 40}]}),
+            raw: None,
+            coverage: EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        }
+        .into_record(EvidenceId::new(5))
+    }
+
+    fn finding(owner: Option<&str>) -> Finding {
+        let mut f = Finding::candidate(
+            FindingId::new(1),
+            Origin::parse("growth-series").unwrap(),
+            vec![EvidenceId::new(1)],
+        );
+        f.owner = owner.map(str::to_owned);
+        f.site = Some("a.py:9".into());
+        f
+    }
+
+    #[test]
+    fn a_stack_that_starts_at_the_findings_line_is_still_not_a_second_class() {
+        // A Python stack, a stack of another tool, a finding with an owner and one without: the
+        // stack is about the finding (`labels::about_finding`), and it is still not retention.
+        for tool in ["py-tracemalloc", "jfr"] {
+            for owner in [Some("m.g"), None] {
+                let (f, s) = (finding(owner), stack(tool));
+                assert!(crate::labels::about_finding(&s, &[&f]), "{tool} {owner:?}");
+                assert!(!crate::labels::names_finding(&s, &[&f]), "{tool} {owner:?}");
+                let gap =
+                    second_class_gap(&f, &[], &s).unwrap_or_else(|| panic!("{tool} {owner:?}"));
+                assert!(
+                    gap.contains("a bare allocation stack is not retention"),
+                    "{gap}"
+                );
+            }
+        }
+    }
+}

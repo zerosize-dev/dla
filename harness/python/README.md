@@ -17,6 +17,8 @@ cd <scratch project root>
 PYTHONPATH=<harness dir>[:<existing PYTHONPATH>] DLA_HARNESS_OUT=... python3 -m pkg.load --iterations N
 ```
 
+`dla harness run` sets `PYTHONDONTWRITEBYTECODE=1` for every process it starts (a value the environment already has is kept): the first process of a harness would compile the agent and the project's modules and keep more objects alive than the later ones that load the cache, so the first point of a series would read high, and a library run from its source tree would get `__pycache__` written into the project.
+
 The agent chain-imports the next `sitecustomize` found on `sys.path` (the project's, or the
 system's), skips `pip`/`venv`/`ensurepip`/`build` runs, starts tracemalloc (`DLA_TRACEMALLOC_FRAMES` frames: 10 when `--capture alloc` or `nonheap` is asked for, else 1, in command and driver mode alike: see "Allocation sites" for the depth) and, on
 3.12+, a `sys.monitoring` `PY_START` collector (each code object disables itself after its first
@@ -156,6 +158,7 @@ and rounds in between); command mode takes one set at exit. Nothing here raises 
 | `alloc` | `py-1.memray.json` | `alloc-stack-diff` (`py-memray`) | allocations still live when the run ended, from memray, when memray imports in the target's interpreter; `DLA_PY_MEMRAY=0` leaves it out |
 | `histogram` | `py-<n>.types.json` | `type-histogram-diff` (`py-types`) | the 300 types with the most instances in `gc.get_objects()`, with shallow `sys.getsizeof` bytes |
 | `nonheap` | `py-<n>.nonheap.json` | `non-heap` (`py-resources`) | threads by name pattern (digit runs as `*`) and by creation site, pending asyncio tasks by coroutine, frame and creation site, ResourceWarnings by allocation site |
+| `heap` | `py-<n>.retain.json` | `heap-graph` (`py-retain`) | who holds the live objects of the lines that grew (see "Who holds the objects" below); one file, at the last dump point |
 
 memray: the tracker starts at interpreter start-up (only when `alloc` is captured and memray imports
 here) and stops at the start of the final record, so the agent's own work is not in the report. The
@@ -167,6 +170,35 @@ not used.
 
 A run with `--capture alloc` is for attribution, not for the trend: tracemalloc with several frames and
 memray add memory and time to the points that take them (the `os.rss` of those points is higher).
+
+Who holds the objects (`--capture heap`): `py.blocks` says where the surviving objects were made, this says who
+keeps them. The agent remembers the block count per site (the counting of `py.blocks`) at the first dump point; at the
+last one it takes the sites that grew, largest growth first (with one dump point only, the largest sites, and a
+limitation says so), finds the live objects made at those lines (`tracemalloc.get_object_traceback`, over every object
+the collector tracks, every object such an object refers to and, through untracked containers like tuples, theirs),
+builds the referrer relation once, and searches breadth first from a reservoir of the objects of each site toward a
+root: the `__dict__` of a module in `sys.modules` (`module-global`), a class dictionary (`class-attribute`), a frame
+running on a thread or suspended in a generator or coroutine (`frame`), or an object no tracked object refers to
+(`no-referrer`: held from native code or by the interpreter); among roots at the same depth in that order. The file is
+`{"dla_pyretain":1,"frames":N,"sites":[{"site","blocks_first","blocks_last","found_tracked","found_untracked","kept","note"?,"chains":[{"count","root","steps":[{"type","via"?,"at"?,"repeat"?}]}]}],"limitations":[...]}`.
+A chain runs from the kept object to the root: `type` is `module.QualName`, `via` is how the NEXT step (the holder)
+refers to this one (`.attr`, `[index]`, `["key"]`, `tb_frame`, `tb_next`, `__traceback__`, `f_locals.name`,
+`__closure__[i]`, `__self__`), `at` is `file:line` of a function, frame or traceback, and a run of tracebacks is one
+step with `repeat`. Chains with the same types, links and root are one group with a `count`. A site whose blocks grew
+and for which no object was found says so in `note` (native code holds the blocks, or a reference was lost there).
+Values are not written: a dict key is shown as its type unless `DLA_RAW_VALUES` is a true value (`1`, `true`, `yes`,
+`on`); `dla harness run --capture heap` sets it to `1` when the run's consent allows raw values and leaves it unset
+otherwise. `dla summarize heap-graph` reads the file (`py-retain`): one holder per distinct root, with the lines it
+keeps and the chain with the most objects. Bounds, all constants in the agent: 12 sites, 40 kept objects per site, 40 steps from the object to the root, and a time bound for the whole
+capture of 60 s (`DLA_HEAP_SECS` changes it; checked between objects; what was not done is said in `limitations`).
+A step with `repeat` also lists the distinct places the run names (`ats`, at most 6, in the order met; `at` is the first). A walk that reaches an object whose way to a root is known already (every chain of a stored exception raised again and again runs through the same traceback list) stops there and takes the rest of that way, so the list is walked once; a run of tracebacks is kept as one item and rendered as one step. `at` names a file like the growing lines (relative to the project, in the copy and in the source tree of an editable install alike); a file outside the project is `<outside>/<file name>`. Everything the capture builds is freed before it returns.
+
+Cost (measured on a shared 4-core machine, another job using some of the cores, Python 3.13 and 3.12, tracemalloc
+tracing with 1 frame): about 17 s and about 110 MB (3.13) to 240 MB (3.12) of extra peak resident memory, 120 MB of
+it traced by tracemalloc, for a heap of 892,000 tracked objects (about 1.5 million objects in all). The cost is
+linear in the number of objects and dominated by tracemalloc (the same relation without tracing takes 0.6 s), so a
+heap of several million objects reaches the time bound. It is taken once, at the last dump point: use it for
+attribution after a trend shows a line that grows, not for the trend.
 
 Creation sites: with `nonheap` the agent wraps `threading.Thread.__init__` (the site is the innermost
 project frame that is not an `__init__`), sets `PYTHONASYNCIODEBUG=1` so tasks keep their creation

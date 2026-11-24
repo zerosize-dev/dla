@@ -204,6 +204,51 @@ pub fn names_finding(e: &EvidenceRecord, subjects: &[&Finding]) -> bool {
         && (subjects.iter().any(|s| names_holder(e, s)) || names_subject(&e.result, subjects))
 }
 
+/// True when `e` is about one of `subjects`: [`names_finding`], or an allocation-stack record with
+/// a growing `top` row whose `site` (the first project frame of the stack) is the finding's line
+/// and that the record ties to no finding (`ties[].stack` is not that row's `at`). A summary made
+/// before the finding existed is about it once it does, as one made after it is; a row the record
+/// already ties to some finding is not about another one. This is NOT the label rule (a label
+/// counts a stack only by its stated ties, `names_finding`) and not the retention test of
+/// `strong` or of an observed explanation (`names_holder`): it decides what a bundle holds, what
+/// `dla alloc-test` offers to capture and whether `stacks-not-captured` applies.
+pub fn about_finding(e: &EvidenceRecord, subjects: &[&Finding]) -> bool {
+    names_finding(e, subjects) || subjects.iter().any(|s| untied_stack_at(e, s))
+}
+
+/// True for an allocation-stack record with an untied growing row at `finding`'s line.
+pub fn untied_stack_at(e: &EvidenceRecord, finding: &Finding) -> bool {
+    if e.kind != EvidenceKind::AllocStack || e.authority == Authority::Static {
+        return false;
+    }
+    let Some(site) = finding.site.as_deref() else {
+        return false;
+    };
+    let tied_stacks: Vec<&str> = e
+        .result
+        .get("ties")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|t| t.get("stack").and_then(Value::as_str))
+        .collect();
+    e.result
+        .get("top")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|row| {
+            row.get("site")
+                .and_then(Value::as_str)
+                .is_some_and(|s| s.trim() == site.trim())
+                && !row.get("at").and_then(Value::as_str).is_some_and(|at| {
+                    // The record clips the stack it ties to 40 characters.
+                    let cut = |x: &str| x.chars().take(40).collect::<String>();
+                    tied_stacks.iter().any(|t| cut(t) == cut(at))
+                })
+        })
+}
+
 /// Why `e` does not count for the finding behind `subjects`; `Ok` when it does.
 /// `label` is the `N-*` id being claimed, if any.
 fn tie(
@@ -1201,5 +1246,72 @@ mod producer_tests {
             d.contains("dla trend <S> --against <S2> --finding F3"),
             "{d}"
         );
+    }
+}
+
+#[cfg(test)]
+mod about_tests {
+    use super::*;
+    use crate::{
+        EvidenceId, FindingId, Origin,
+        evidence::{EvidenceCoverage, NewEvidence, Source, Tool},
+    };
+    use serde_json::json;
+
+    fn stack(result: Value) -> EvidenceRecord {
+        NewEvidence {
+            source: Source::Repo {
+                commit: "c".into(),
+                path: None,
+            },
+            tool: Tool {
+                name: "py-tracemalloc".into(),
+                version: "1".into(),
+            },
+            authority: Authority::Live,
+            kind: EvidenceKind::AllocStack,
+            result,
+            raw: None,
+            coverage: EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        }
+        .into_record(EvidenceId::new(5))
+    }
+
+    fn finding(n: u32, site: &str) -> Finding {
+        let mut f = Finding::candidate(
+            FindingId::new(n),
+            Origin::parse("growth-series").unwrap(),
+            vec![EvidenceId::new(1)],
+        );
+        f.site = Some(site.into());
+        f
+    }
+
+    #[test]
+    fn a_stack_at_the_line_is_about_the_finding_unless_the_record_ties_that_row_elsewhere() {
+        let f = finding(1, "a.py:9");
+        let top = json!([{"at": "m.f", "site": "a.py:9", "d_blocks": 40}, {"at": "m.g", "site": "b.py:2"}]);
+        // An untied row at the line: about the finding, but the label rule does not count it.
+        let untied = stack(json!({"top": top}));
+        assert!(about_finding(&untied, &[&f]));
+        assert!(!names_finding(&untied, &[&f]));
+        // A row the record ties to some other finding does not count for this one.
+        let other = stack(json!({"top": top, "finding": "F9", "candidates": ["F9"],
+            "ties": [{"stack": "m.f", "finding": "F9", "candidates": ["F9"]}]}));
+        assert!(!about_finding(&other, &[&f]));
+        // No row at the line.
+        assert!(!about_finding(&untied, &[&finding(1, "a.py:10")]));
+        // A record that states the finding is about it (and the label rule counts it).
+        let states = stack(
+            json!({"top": [{"at": "m.f"}], "finding": "F1", "candidates": ["F1"],
+            "ties": [{"stack": "m.f", "finding": "F1", "candidates": ["F1"]}]}),
+        );
+        assert!(about_finding(&states, &[&f]) && names_finding(&states, &[&f]));
+        // A finding with no line is never matched by a row.
+        let mut nolines = finding(1, "a.py:9");
+        nolines.site = None;
+        assert!(!about_finding(&untied, &[&nolines]));
     }
 }

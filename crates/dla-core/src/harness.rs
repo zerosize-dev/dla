@@ -74,6 +74,8 @@ pub const ENV_CAPTURE: &str = "DLA_CAPTURE";
 pub const ENV_CAPTURE_DIR: &str = "DLA_CAPTURE_DIR";
 /// Environment variable with the number of heap dumps a driver takes (default 4).
 pub const ENV_CAPTURE_DUMPS: &str = "DLA_CAPTURE_DUMPS";
+/// Environment variable that lets a Python agent write raw values (`1`) into its captures.
+pub const ENV_RAW_VALUES: &str = "DLA_RAW_VALUES";
 
 string_enum! {
     /// How the harness drives the workload.

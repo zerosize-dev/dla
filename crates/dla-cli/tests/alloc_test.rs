@@ -58,6 +58,7 @@ fn dla(project: &Path, args: &[&str]) -> Out {
         "CLAUDE_SESSION_ID",
         "CLAUDE_CODE_SESSION_ID",
         "DLA_DATA_DIR",
+        "PYTHONDONTWRITEBYTECODE",
     ] {
         c.env_remove(var);
     }
@@ -592,4 +593,66 @@ fn frozen_garbage_is_tied_to_the_freeze_site_by_a_count_column_and_reads_growth(
         .find(|c| c["name"] == column)
         .unwrap_or_else(|| panic!("{a}"));
     assert_eq!(c["plateau"], "growth-continues", "{c}");
+}
+
+#[test]
+fn the_first_point_of_a_command_mode_python_series_lies_on_the_line_and_no_cache_is_written() {
+    if skip_without_python() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    frozen_project(&project);
+    let init = ok(&project, &["run", "init", "--session-id", "t"]);
+    let run_dir = project.join(".dla").join(init["run_id"].as_str().unwrap());
+    ok(&project, &["consent", "--tiers", "1-2"]);
+    ok(&project, &["census", "--lang", "python"]);
+    ok(&project, &["workload", "discover"]);
+    ok(
+        &project,
+        &["harness", "gen", "--lang", "python", "--step", "150"],
+    );
+    ok(&project, &["harness", "run", "H1"]);
+    // The frozen count of every point: the first process compiles nothing that a later one loads
+    // from a cache, so the first step is the same as the others.
+    let series: Value =
+        serde_json::from_str(&fs::read_to_string(run_dir.join("series/S1.json")).unwrap()).unwrap();
+    let col = series["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|c| c["name"] == "py.gc_frozen@batcher/worker.py:23")
+        .unwrap();
+    let values: Vec<f64> = series["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["values"][col].as_f64().unwrap())
+        .collect();
+    eprintln!("frozen counts per point: {values:?}");
+    let steps: Vec<f64> = values.windows(2).map(|w| w[1] - w[0]).collect();
+    assert!(steps.len() >= 5, "{values:?}");
+    assert!(
+        steps.iter().all(|d| (*d - steps[1]).abs() < 1.0),
+        "the first point reads high: {values:?}"
+    );
+    // No process wrote a cache into the agent's or the scratch copy's directory.
+    fn caches(dir: &Path, out: &mut Vec<PathBuf>) {
+        for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if p.file_name().is_some_and(|n| n == "__pycache__") {
+                    out.push(p);
+                } else {
+                    caches(&p, out);
+                }
+            }
+        }
+    }
+    let mut found = Vec::new();
+    for sub in ["agent", "work"] {
+        caches(&run_dir.join("harness/H1").join(sub), &mut found);
+    }
+    caches(&project.join("batcher"), &mut found);
+    assert!(found.is_empty(), "{found:?}");
 }

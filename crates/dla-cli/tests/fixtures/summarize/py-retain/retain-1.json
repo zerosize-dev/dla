@@ -1,0 +1,448 @@
+{
+ "dla_pyretain": 1,
+ "frames": 1,
+ "sites": [
+  {
+   "site": "case_a.py:13",
+   "blocks_first": 101,
+   "blocks_last": 601,
+   "found_tracked": 300,
+   "found_untracked": 300,
+   "kept": 40,
+   "chains": [
+    {
+     "count": 21,
+     "root": {
+      "kind": "module-global",
+      "module": "case_a",
+      "key": "_registry"
+     },
+     "steps": [
+      {
+       "type": "case_a.Entry",
+       "via": "[\"AKIAIOSFODNN7EXAMPLE1\"]"
+      },
+      {
+       "type": "dict",
+       "via": "._registry"
+      }
+     ]
+    },
+    {
+     "count": 19,
+     "root": {
+      "kind": "module-global",
+      "module": "case_a",
+      "key": "_registry"
+     },
+     "steps": [
+      {
+       "type": "str",
+       "via": "[key]"
+      },
+      {
+       "type": "dict",
+       "via": "._registry"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "site": "case_c.py:14",
+   "blocks_first": 100,
+   "blocks_last": 600,
+   "found_tracked": 600,
+   "found_untracked": 0,
+   "kept": 40,
+   "chains": [
+    {
+     "count": 24,
+     "root": {
+      "kind": "module-global",
+      "module": "case_c",
+      "key": "_name"
+     },
+     "steps": [
+      {
+       "type": "frame",
+       "via": "tb_frame",
+       "at": "case_c.py:14"
+      },
+      {
+       "type": "traceback",
+       "via": "__traceback__",
+       "at": "case_c.py:14",
+       "repeat": 598
+      },
+      {
+       "type": "ImportError",
+       "via": ".ex"
+      },
+      {
+       "type": "case_c.Holder",
+       "via": "._name"
+      }
+     ]
+    },
+    {
+     "count": 16,
+     "root": {
+      "kind": "module-global",
+      "module": "case_c",
+      "key": "_name"
+     },
+     "steps": [
+      {
+       "type": "traceback",
+       "via": "__traceback__",
+       "at": "case_c.py:14",
+       "repeat": 594
+      },
+      {
+       "type": "ImportError",
+       "via": ".ex"
+      },
+      {
+       "type": "case_c.Holder",
+       "via": "._name"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "site": "case_c.py:23",
+   "blocks_first": 100,
+   "blocks_last": 600,
+   "found_tracked": 600,
+   "found_untracked": 0,
+   "kept": 40,
+   "chains": [
+    {
+     "count": 21,
+     "root": {
+      "kind": "module-global",
+      "module": "case_c",
+      "key": "_name"
+     },
+     "steps": [
+      {
+       "type": "frame",
+       "via": "tb_frame",
+       "at": "case_c.py:26"
+      },
+      {
+       "type": "traceback",
+       "via": "__traceback__",
+       "at": "case_c.py:23",
+       "repeat": 587
+      },
+      {
+       "type": "ImportError",
+       "via": ".ex"
+      },
+      {
+       "type": "case_c.Holder",
+       "via": "._name"
+      }
+     ]
+    },
+    {
+     "count": 19,
+     "root": {
+      "kind": "module-global",
+      "module": "case_c",
+      "key": "_name"
+     },
+     "steps": [
+      {
+       "type": "traceback",
+       "via": "__traceback__",
+       "at": "case_c.py:23",
+       "repeat": 593
+      },
+      {
+       "type": "ImportError",
+       "via": ".ex"
+      },
+      {
+       "type": "case_c.Holder",
+       "via": "._name"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "site": "case_d.py:14",
+   "blocks_first": 101,
+   "blocks_last": 601,
+   "found_tracked": 300,
+   "found_untracked": 0,
+   "kept": 40,
+   "chains": [
+    {
+     "count": 40,
+     "root": {
+      "kind": "no-referrer"
+     },
+     "steps": [
+      {
+       "type": "case_d.Callback"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "site": "case_g.py:16",
+   "blocks_first": 78,
+   "blocks_last": 498,
+   "found_tracked": 498,
+   "found_untracked": 0,
+   "kept": 40,
+   "chains": [
+    {
+     "count": 40,
+     "root": {
+      "kind": "frame",
+      "function": "_worker",
+      "at": "case_g.py:17"
+     },
+     "steps": [
+      {
+       "type": "case_g.Item",
+       "via": "[496]"
+      },
+      {
+       "type": "list",
+       "via": "f_locals.acc"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "site": "case_b.py:14",
+   "blocks_first": 51,
+   "blocks_last": 301,
+   "found_tracked": 300,
+   "found_untracked": 0,
+   "kept": 40,
+   "chains": [
+    {
+     "count": 40,
+     "root": {
+      "kind": "class-attribute",
+      "class": "case_b.Store",
+      "attribute": "items"
+     },
+     "steps": [
+      {
+       "type": "case_b.Thing",
+       "via": "[158]"
+      },
+      {
+       "type": "list",
+       "via": ".items"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "site": "case_c.py:21",
+   "blocks_first": 50,
+   "blocks_last": 300,
+   "found_tracked": 300,
+   "found_untracked": 0,
+   "kept": 40,
+   "chains": [
+    {
+     "count": 40,
+     "root": {
+      "kind": "module-global",
+      "module": "case_c",
+      "key": "_name"
+     },
+     "steps": [
+      {
+       "type": "case_c.Payload",
+       "via": "f_locals.local"
+      },
+      {
+       "type": "frame",
+       "via": "tb_frame",
+       "at": "case_c.py:26"
+      },
+      {
+       "type": "traceback",
+       "via": "__traceback__",
+       "at": "case_c.py:23",
+       "repeat": 595
+      },
+      {
+       "type": "ImportError",
+       "via": ".ex"
+      },
+      {
+       "type": "case_c.Holder",
+       "via": "._name"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "site": "case_e.py:7",
+   "blocks_first": 51,
+   "blocks_last": 301,
+   "found_tracked": 0,
+   "found_untracked": 300,
+   "kept": 40,
+   "chains": [
+    {
+     "count": 40,
+     "root": {
+      "kind": "module-global",
+      "module": "case_e",
+      "key": "_names"
+     },
+     "steps": [
+      {
+       "type": "str",
+       "via": "[299]"
+      },
+      {
+       "type": "list",
+       "via": "._names"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "site": "case_h.py:14",
+   "blocks_first": 51,
+   "blocks_last": 301,
+   "found_tracked": 300,
+   "found_untracked": 0,
+   "kept": 40,
+   "chains": [
+    {
+     "count": 40,
+     "root": {
+      "kind": "frame",
+      "function": "_gen",
+      "at": "case_h.py:15"
+     },
+     "steps": [
+      {
+       "type": "case_h.Cell2",
+       "via": "[49]"
+      },
+      {
+       "type": "list",
+       "via": "f_locals.acc"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "site": "case_i.py:9",
+   "blocks_first": 50,
+   "blocks_last": 300,
+   "found_tracked": 0,
+   "found_untracked": 0,
+   "kept": 0,
+   "note": "no object was found for this site: the blocks do not belong to an object any Python container refers to, so native code holds them or a reference was lost there",
+   "chains": []
+  },
+  {
+   "site": "case_g.py:15",
+   "blocks_first": 0,
+   "blocks_last": 241,
+   "found_tracked": 0,
+   "found_untracked": 243,
+   "kept": 40,
+   "chains": [
+    {
+     "count": 40,
+     "root": {
+      "kind": "frame",
+      "function": "_worker",
+      "at": "case_g.py:17"
+     },
+     "steps": [
+      {
+       "type": "int",
+       "via": ".n"
+      },
+      {
+       "type": "case_g.Item",
+       "via": "[338]"
+      },
+      {
+       "type": "list",
+       "via": "f_locals.acc"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "site": "case_h.py:13",
+   "blocks_first": 0,
+   "blocks_last": 44,
+   "found_tracked": 0,
+   "found_untracked": 44,
+   "kept": 40,
+   "chains": [
+    {
+     "count": 39,
+     "root": {
+      "kind": "frame",
+      "function": "_gen",
+      "at": "case_h.py:15"
+     },
+     "steps": [
+      {
+       "type": "int",
+       "via": ".n"
+      },
+      {
+       "type": "case_h.Cell2",
+       "via": "[256]"
+      },
+      {
+       "type": "list",
+       "via": "f_locals.acc"
+      }
+     ]
+    },
+    {
+     "count": 1,
+     "root": {
+      "kind": "frame",
+      "function": "_gen",
+      "at": "case_h.py:15"
+     },
+     "steps": [
+      {
+       "type": "int",
+       "via": "f_locals.n"
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "limitations": [
+  "tracemalloc keeps 1 frame per block: an object that a library function allocates for project code has no site and is not found (DLA_TRACEMALLOC_FRAMES=<n> keeps n frames)",
+  "an object is attributed to the line that allocated its own block; the buffers of a list or a dict (made on the line that grew them) are blocks of the site but not objects",
+  "objects are found when the collector tracks them or when a tracked object, or an untracked container reached from one, refers to them",
+  "values are not written: a dict key is shown as its type (DLA_RAW_VALUES=1 allows raw values)"
+ ]
+}
