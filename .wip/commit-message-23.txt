@@ -1,0 +1,74 @@
+Two causes of the misses on projects the tool had never seen
+
+One frozen build was run once, unattended, on five open-source libraries
+that had never been used while the tool was built, each at a release with
+one documented leak. It found none of the five. This change removes the
+causes of two of the misses. Both were read from the kept run records and
+reproduced by hand before anything was changed.
+
+A Python library. Eleven minutes into the run a capture named the
+documented holder: a module-level provider object of the API package that
+keeps five growing lines. The summary was asked for another finding and
+piped through `head`; no finding existed at the holder and nothing in the
+gate, the status or the queue named it again. Later the loop over the
+project's tests showed the line that makes the leaked object among 48
+growing lines; the model added 48 findings in a shell loop, wrote one
+driver for many of them, and in that driver the method returned before the
+line. The alloc-test said non-leak, because the function had run and none
+of the line's blocks stayed, and the refute was accepted.
+
+- A holder of the project that a capture names and no finding covers is
+  now the first item of the classify gate, with the literal `dla ledger
+  add` command. `dla run status` leads with it, `dla summarize heap-graph`
+  starts with it under `_attention` even when asked about another finding,
+  and `dla harness gen --next` is refused with `measured-holder-first`
+  until the finding exists. The agent records whose each holder is: of the
+  project, or of the tests (the driver, test files, the test runner).
+- Growing lines that only the tests hold are no gate items. A series with
+  untied growing lines and no capture gets one item, the capture, in place
+  of one add command per line.
+- The Python agent counts how often each line it is asked about was
+  executed. A missing allocation-site column counts against a leak only
+  when the line's own count rose, and not when a capture shows an object of
+  the project keeping that line. "The function ran" is no longer read as
+  "the line ran".
+- A column that never grew in a series is not a plateau. For a bound
+  finding the alloc-test of another driver in which the deciding columns
+  are flat from the first measured point is inconclusive and names the
+  harness that measured the growth. The harness that measured it keeps the
+  old reading (a leak grows with every unit, so growth that does not come
+  back there was not one), and so does an entry-path harness of the
+  finding. This rule holds for every runtime.
+
+Replayed on that library with the changed binary: the driver on the other
+branch is inconclusive and cannot refute; after a capture the holder is the
+first gate item and the queue waits; following the printed commands the
+documented leak is confirmed in 25 commands. The walk on the library with C
+extension modules gives the same two confirmed findings as before.
+
+A Go library. The documented holder is a slice field of an unexported
+type, appended in fourteen methods. The census never listed it: it takes a
+container field only of a long-lived owner, it worked out which types hold
+which from identifiers that start with an upper case letter, and it did
+not treat a type built in a function that a package-level `var`
+initializer calls as long-lived. Most state-holding types of a Go library
+are unexported.
+
+- Held types are read from the field declarations, of any case, and count
+  when the project declares a type of that name. A type built by a
+  composite literal or `new` in a package-level `var`, in an entry-named
+  function, or one call away from a `var` initializer or `init`, is
+  long-lived.
+
+On that library the census lists 469 candidates where it listed 439, and
+the slice with its fourteen writers and its reset is among them.
+
+Not covered. The slice still ranks late in its package, because its reset
+counts as a remover. An entry-path harness that fails to reach a real leak
+can still close it as a non-leak. The line count was run on one
+interpreter version; its fallback only by forcing it. The other three
+misses have causes of their own that this change does not touch: a
+candidate whose adding line is guarded by a capacity that a run never
+reaches, a holder that needs a kind of thread no driver used, and a Node
+library written in TypeScript whose built files the harness copy leaves
+out and whose measured places are lines of the bundle.

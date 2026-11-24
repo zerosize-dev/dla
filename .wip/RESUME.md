@@ -2459,3 +2459,38 @@ flat test-loop readings get only 9 second looks.
   assertion). Known remaining hole, recorded on purpose: an entry-path harness that fails to
   reach a real leak can still close it the non-leak way.
 - Node brief ready: wip-notes/node-ts-brief.md (start after H3; scratch u114).
+
+## 14:50 UTC 2026-11-24 (approx.): H3 reported; combined tree frozen and sent to CI; Rust cause found
+
+- H3 built: `exemption()` in crates/dla-cli/src/alloc_cmd.rs: never-grew is skipped on an
+  entry-path harness whose targets hold the finding, and on the harness of the growth (the
+  finding cites growth evidence of a series of it or a capture of it names the finding:
+  harness_about Evidence | Capture; or an earlier trend of a series of this harness has a grown,
+  not whole-process column tied to the root). Text there: "the growth of F did not come back on
+  the harness that measured it". Two holder_first tests added; trigger test repaired (I read the
+  diff: blocking[0] is asserted measured_capture, trigger items found in gate/final.json, every
+  content assertion kept); alloc_test_jvm warm-up test and the registry trigger test pass
+  unchanged (builder). Residual risk noted: Capture also exempts a harness whose capture names
+  the finding.
+- My edits to docs/VERIFY.md: removed the words "After brief H" from a row; added the row for
+  the Go census change (last row).
+- Combined tree (G + H + H2 + H3 + my VERIFY edits): fmt clean, build ok, schema --check ok,
+  29 files +2024/-64, three new files. Frozen: u112/dla-H3 (sha 1ce2ae370e4d), u112/dla-bench-H3.
+  Snapshot a37fcfb pushed WITHOUT [skip ci]; CI waiter bg6z2r0ip (logs u115/ci-snap-23).
+  Replays and the Pillow walk on dla-H3 running: task bvjtfa7ie.
+- Commit message draft: wip-notes/commit-message-23.txt.
+- RUST (blind fastrace run), cause found: the crate has the feature `enable`
+  (fastrace/Cargo.toml: enable = ["fastrace-macro/enable"]), off by default; span.rs has 25
+  `feature = "enable"` cfg sites, local_collector.rs 10, local_span.rs 8: without it the spans
+  are no-ops and the collector never runs. The blind run never passed `--features enable`
+  (transcript: only the help text), so the candidate at spsc.rs:21 read "not executed" in H1 and
+  in the focus harness H3 and was closed static-only. The capacity of 10240 comes second.
+  The tool says "gated behind a feature" only for a whole module.
+  NEXT BRIEF R (small, not written): when a crate has features that are not default and that
+  gate code (`#[cfg(feature = "x")]`, `cfg!(feature = "x")`), every target block of that crate
+  and the remedy of a target whose code did not run name the features with their counts of
+  gated sites per file and the command with `--features`; the queue does not close a target as
+  not reached after a focus harness while such a feature was never tried.
+- Order of work now: verify the combined tree (replays, suite, own mutations, static and
+  dynamic acceptance, CI) -> main; builder N (Node/TypeScript, brief ready) starts when my local
+  suite is done; then brief R.
