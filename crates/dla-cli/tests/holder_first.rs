@@ -975,3 +975,71 @@ fn a_line_that_ran_and_kept_nothing_is_inconclusive_when_a_record_shows_a_projec
     );
     assert_ne!(o.code, 0, "{}", o.text);
 }
+
+#[test]
+fn a_flat_series_on_the_harness_that_measured_the_growth_is_non_leak_and_says_it_did_not_come_back()
+{
+    if !have_python() {
+        return;
+    }
+    // H1 grew the table of F1 (its probe). Its unit is changed so that it no longer feeds the
+    // table, and the alloc-test on H1 for F1 reads the table flat: the growth was a growth of
+    // every unit of H1, and it did not come back there.
+    let r = prepared(KEEPS);
+    let driver = r.run_dir.join("harness/H1/driver/dla_harness.py");
+    let text = fs::read_to_string(&driver).unwrap();
+    let old = "_state[\"cache\"].put(i)";
+    assert_eq!(text.matches(old).count(), 1);
+    fs::write(&driver, text.replace(old, "pass")).unwrap();
+    let a = r.ok(&["alloc-test", "H1", "--finding", "F1"]);
+    assert_eq!(a["favors"], "non-leak", "{a}");
+    let basis = a["basis"].as_str().unwrap();
+    assert!(
+        basis.starts_with("the growth of F1 did not come back on the harness that measured it: ")
+            && basis.ends_with("so it was not a growth of every unit"),
+        "{basis}"
+    );
+    assert!(
+        a["supports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s == "N-WARM"),
+        "{a}"
+    );
+}
+
+#[test]
+fn a_flat_series_on_an_entry_path_harness_of_the_finding_is_non_leak_as_before() {
+    if !have_python() {
+        return;
+    }
+    let r = prepared(KEEPS);
+    let g = r.ok(&[
+        "harness", "gen", "--lang", "python", "--driver", "--entry", "F1",
+    ]);
+    let h = g["summary"]["harness"].as_str().unwrap().to_owned();
+    let edit = r.project.join(g["summary"]["edit"].as_str().unwrap());
+    let text = fs::read_to_string(&edit)
+        .unwrap()
+        .replace(
+            "    raise NotImplementedError(\"DLA-HOOK setup has not been filled in\")",
+            "    from shop import providers\n    _state[\"providers\"] = providers",
+        )
+        .replace(
+            "    raise NotImplementedError(\"DLA-HOOK unit has not been filled in\")",
+            "    _state[\"providers\"].make(i, True)",
+        );
+    assert!(!text.contains("has not been filled in"));
+    fs::write(&edit, text).unwrap();
+    fs::write(
+        r.run_dir.join(format!("harness/{h}/driver/VARIES.txt")),
+        "the id of the object a caller asks the provider for\n",
+    )
+    .unwrap();
+    r.ok(&["harness", "run", &h, "--mode", "fresh"]);
+    // The entry-path harness asks whether a caller can feed the holder: a flat reading there keeps
+    // its old meaning.
+    let a = r.ok(&["alloc-test", &h, "--finding", "F1"]);
+    assert_eq!(a["favors"], "non-leak", "{a}");
+}

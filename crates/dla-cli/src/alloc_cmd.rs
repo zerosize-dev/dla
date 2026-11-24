@@ -142,6 +142,9 @@ struct ColumnResult {
     note: Option<String>,
     /// Points of the extra window that would let a held-back plateau stand.
     points_needed: Option<u32>,
+    /// A deciding column that did not grow in the main window of this series (see
+    /// [`judge::grew`]), whether or not that is held against the verdict.
+    flat: bool,
 }
 
 impl ColumnResult {
@@ -256,16 +259,16 @@ fn test_column(
         0.0
     };
     let mut plateau = judge::plateau(main, extra, counter, reference, min_rise);
-    // A deciding column of a finding that did not grow in the main window of this series did
-    // not stop growing: the series does not reproduce the growth, whatever its extra window.
-    if bound
-        && voting
+    // A deciding column that did not grow in the main window of this series did not stop
+    // growing: for a finding the series is judged on (`bound`, see `Exemption` for the two
+    // cases it is not), it does not reproduce the growth, whatever its extra window says.
+    let flat = voting
         && matches!(
             plateau.verdict,
             PlateauVerdict::Plateau | PlateauVerdict::Inconclusive
         )
-        && !judge::grew(main, counter, reference, min_rise)
-    {
+        && !judge::grew(main, counter, reference, min_rise);
+    if bound && flat {
         plateau.verdict = PlateauVerdict::NeverGrew;
     }
     let purge = event.map(|e| {
@@ -336,6 +339,7 @@ fn test_column(
         supports,
         note,
         points_needed: rises.and_then(|r| r.points_needed),
+        flat,
     })
 }
 
@@ -1299,6 +1303,73 @@ fn absent_site_reading(
     }
 }
 
+/// Why a flat series is a fair reading for a finding (see [`exemption`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Exemption {
+    /// The harness measured the growth of the finding in an earlier series: a leak grows with
+    /// every unit, so growth that does not come back there was not a per-unit leak.
+    Growth,
+    /// An entry-path harness declared for the finding: it asks whether a caller can feed the
+    /// holder, so a flat reading there keeps its meaning.
+    EntryPath,
+}
+
+/// The two cases in which an alloc-test series that did not show the growth of `root` is still a
+/// fair reading. "The harness of the growth" is `harness` when the series of some earlier trend of
+/// the run was measured by `harness` (its `source.harness`), is not the series under test, and
+/// has a column tied to `root` ([`dla_core::grown::column_tied_to`]) that counts as growth
+/// ([`dla_core::grown::counts_as_growth`]), or when [`dla_core::grown::harness_about`] says that
+/// the finding cites growth evidence of a series of `harness` or that a capture of it names the
+/// finding. A declared target, a probe, a column that is tied but did not grow and a workload
+/// harness do not make a harness the harness of the growth. An entry-path harness declared for
+/// the finding has the purpose `entry-path` and `root` (or the finding itself) among its targets.
+fn exemption(
+    view: &dla_core::RunView,
+    run_dir: &Path,
+    ledger: &Ledger,
+    manifest: &HarnessManifest,
+    finding: &Finding,
+    trends: &[&TrendReport],
+    this_series: &str,
+) -> Option<Exemption> {
+    let root = finding.root_id();
+    if manifest.is_entry_path()
+        && manifest
+            .targets
+            .iter()
+            .any(|t| t == &root || t == &finding.id)
+    {
+        return Some(Exemption::EntryPath);
+    }
+    // The finding cites the growth evidence of a series of this harness, or a capture of it names
+    // the finding: the harness measured the growth ([`dla_core::grown::harness_about`]).
+    if matches!(
+        dla_core::grown::harness_about(view, manifest, &root),
+        Some(
+            dla_core::grown::HarnessAbout::Evidence(_) | dla_core::grown::HarnessAbout::Capture(_)
+        )
+    ) {
+        return Some(Exemption::Growth);
+    }
+    trends
+        .iter()
+        .filter(|t| t.series != this_series)
+        .filter(|t| {
+            t.columns.iter().any(|c| {
+                dla_core::grown::counts_as_growth(c)
+                    && !dla_core::gate::is_whole_process(&c.name)
+                    && dla_core::grown::column_tied_to(ledger, c, &root)
+            })
+        })
+        .any(|t| {
+            SeriesFile::load(run_dir, &t.series)
+                .ok()
+                .and_then(|s| s.source.harness)
+                .is_some_and(|h| h == manifest.id)
+        })
+        .then_some(Exemption::Growth)
+}
+
 /// The harness and series of the newest trend of the run, other than the one of `this`, that
 /// shows growth tied to the finding `root` (a column that passed the gate or a non-flat
 /// allocation-site column: [`dla_core::grown::counts_as_growth`]). The series' harness is the one
@@ -1512,6 +1583,20 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         _ => {}
     }
     let iterations = manifest.iterations as usize;
+    // A series that did not show the growth counts against it only on a harness that is neither the
+    // one that measured the growth nor an entry-path harness of the finding.
+    let exemption = bound.as_ref().and_then(|f| {
+        let view = dla_core::RunView::load_for(&tc.run_dir, tc.worker.as_deref()).ok()?;
+        exemption(
+            &view,
+            &tc.run_dir,
+            &ledger,
+            &manifest,
+            f,
+            &all_refs,
+            &series.id,
+        )
+    });
     let mut results: Vec<ColumnResult> = picked
         .tested
         .iter()
@@ -1520,7 +1605,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
                 &series,
                 n,
                 picked.voting.contains(n),
-                bound.is_some(),
+                bound.is_some() && exemption.is_none(),
                 iterations,
                 event.as_ref(),
                 &mut limitations,
@@ -1610,6 +1695,29 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         }
         _ => (favors, supports),
     };
+    // On the harness that measured the growth a flat series keeps its old reading, and says that the
+    // growth did not come back there.
+    if exemption == Some(Exemption::Growth)
+        && let Some(f) = bound.as_ref()
+        && let deciding = results
+            .iter()
+            .filter(|r| match &picked.primary {
+                Some(p) => &r.name == p,
+                None => r.voting,
+            })
+            .collect::<Vec<_>>()
+        && !deciding.is_empty()
+        && deciding.iter().all(|r| r.flat)
+    {
+        let text = format!(
+            "the growth of {} did not come back on the harness that measured it: {} is flat from its first measured point in this series of {}, so it was not a growth of every unit",
+            f.root_id(),
+            deciding[0].name,
+            a.harness
+        );
+        picked.basis = text.clone();
+        limitations.push(text);
+    }
     // A required column that keeps rising is decided by its capture, a longer run does not; one
     // that only could not be judged (still levelling off) may show its plateau in a longer window.
     let split_open = |names: &[String]| split_rising(&results, &picked, names);
@@ -2605,6 +2713,7 @@ mod tests {
             supports: vec![format!("{name} supports")],
             note: None,
             points_needed: None,
+            flat: false,
         };
         let picked = pick::Picked {
             tested: vec!["jvm.nonheap_used".into(), "jvm.nmt.symbol".into()],
@@ -2663,6 +2772,7 @@ mod tests {
             supports: vec![],
             note: None,
             points_needed: None,
+            flat: false,
         }
     }
 
