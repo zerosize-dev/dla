@@ -201,7 +201,30 @@ pub fn names_finding(e: &EvidenceRecord, subjects: &[&Finding]) -> bool {
         e.kind,
         EvidenceKind::RetentionPath | EvidenceKind::AllocStack
     ) && e.authority != Authority::Static
-        && (subjects.iter().any(|s| names_holder(e, s)) || names_subject(&e.result, subjects))
+        && (subjects.iter().any(|s| names_holder(e, s))
+            || names_subject(&e.result, subjects)
+            || subjects.iter().any(|s| stack_starts_at(e, s)))
+}
+
+/// True when `e` is an allocation-stack record with a growing stack whose first project frame is
+/// the line of `finding` (`top[].site`): the stack is about that finding, whether the summary was
+/// written before the finding existed or after. This says the record is about the finding, never
+/// that a holder was seen: `names_holder` (the retention test of `strong` and of an observed
+/// explanation) does not use it.
+fn stack_starts_at(e: &EvidenceRecord, finding: &Finding) -> bool {
+    e.kind == EvidenceKind::AllocStack
+        && finding.site.as_deref().is_some_and(|site| {
+            e.result
+                .get("top")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .any(|row| {
+                    row.get("site")
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| s.trim() == site.trim())
+                })
+        })
 }
 
 /// Why `e` does not count for the finding behind `subjects`; `Ok` when it does.

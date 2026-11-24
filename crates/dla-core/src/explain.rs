@@ -624,3 +624,44 @@ mod site_tests {
         assert!(!names_site("W.java:120", "W.java:12"));
     }
 }
+
+#[cfg(test)]
+mod observed_stack_tests {
+    use super::*;
+    use crate::{
+        EvidenceId, FindingId, Origin,
+        evidence::{Authority, EvidenceCoverage, NewEvidence, Source, Tool},
+    };
+
+    #[test]
+    fn an_observed_explanation_is_refused_on_a_bare_stack_at_the_findings_line() {
+        let s = NewEvidence {
+            source: Source::Repo {
+                commit: "c".into(),
+                path: None,
+            },
+            tool: Tool {
+                name: "py-tracemalloc".into(),
+                version: "1".into(),
+            },
+            authority: Authority::Live,
+            kind: EvidenceKind::AllocStack,
+            result: serde_json::json!({"top": [{"at": "m", "site": "a.py:9"}]}),
+            raw: None,
+            coverage: EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        }
+        .into_record(EvidenceId::new(5));
+        for owner in [Some("m.g"), None] {
+            let mut f = Finding::candidate(
+                FindingId::new(1),
+                Origin::parse("growth-series").unwrap(),
+                vec![EvidenceId::new(1)],
+            );
+            f.owner = owner.map(str::to_owned);
+            f.site = Some("a.py:9".into());
+            assert!(observed_ok(&s, &f).is_err(), "{owner:?}");
+        }
+    }
+}

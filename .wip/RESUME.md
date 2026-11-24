@@ -1883,3 +1883,13 @@ flat test-loop readings get only 9 second looks.
   final gate.
 - Then: own mutations, whole suite (3.13) + Python test files under 3.12, static bench, full
   dynamic bench with frozen binaries, non-skip snapshot for CI, commit, version 0.9.0-preview.7.
+
+## 02:55 UTC 2026-11-24
+
+- v0.9.0-preview.6 PUBLISHED (release run 45312904399 success; prerelease; target 28979b4; five
+  platform archives, their .sha256 files and SHA256SUMS). Task 98 closed. Task 99: the
+  jvm-pool-warmup flake (not diagnosed).
+- Builder round R5 running: (1) cache in `_source_rel` and one place per code location (walk
+  19.5 s -> 81.7 s regression of R4 on the editable-install library); (2) the stack-site clause
+  moves out of `holders::names_holder` (it let a bare allocation stack count as retention for
+  `strong` and for an observed explanation) into `labels::names_finding` and the label rule.

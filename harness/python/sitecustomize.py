@@ -2181,6 +2181,7 @@ def _heap_build(objs, base, counts, limitations):
                         notes.append(text.format(tally[key]))
         finally:
             scan = relation = roots = None  # the relation of a large heap is large: free it first
+            _heap_places.clear()
             if was_on:
                 gc.enable()
     return {

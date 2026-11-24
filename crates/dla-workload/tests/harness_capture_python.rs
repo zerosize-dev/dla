@@ -1614,3 +1614,88 @@ fn a_run_of_tracebacks_lists_the_places_it_names_in_the_order_met() {
         );
     }
 }
+
+#[test]
+fn a_walk_through_a_long_chain_of_a_project_run_from_its_source_tree_is_not_slowed_by_naming_places()
+ {
+    if !have_python() {
+        return;
+    }
+    let run = Run::new();
+    // The source tree (an editable install runs from there) and a file outside both trees.
+    let src = run.dir.path().join("src");
+    let outside = run.dir.path().join("outside");
+    fs::create_dir_all(src.join("lib")).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(
+        outside.join("ext.py"),
+        "def call(h):\n    h.ext_attribute\n",
+    )
+    .unwrap();
+    fs::write(
+        src.join("lib/reraise_src.py"),
+        "import ext\n\n\nclass Holder:\n    def __init__(self, ex):\n        self.ex = ex\n\n    def __getattr__(self, name):\n        raise self.ex\n\n\n_h = Holder(ImportError('x'))\n\n\ndef unit(i):\n    a1 = [i]\n    a2 = [i]\n    a3 = [i]\n    a4 = [i]\n    a5 = [i]\n    a6 = [i]\n    for n in range(4):\n        try:\n            if n == 0:\n                _h.one\n            elif n == 1:\n                _h.two\n            elif n == 2:\n                _h.three\n            else:\n                ext.call(_h)\n        except ImportError:\n            pass\n    return len(a1) + len(a2) + len(a3) + len(a4) + len(a5) + len(a6)\n",
+    )
+    .unwrap();
+    fs::write(
+        run.project.join("run_src.py"),
+        "import atexit, os, sys\n\ncalls = [0]\nreal = os.path.realpath\n\n\ndef counting(*a, **k):\n    calls[0] += 1\n    return real(*a, **k)\n\n\nos.path.realpath = counting\nfrom lib import reraise_src\n\nfor n in range(4000):\n    reraise_src.unit(n)\n# The agent's dump runs now, then the calls it made are written.\natexit._run_exitfuncs()\nopen(sys.argv[1], 'w').write(str(calls[0]))\n",
+    )
+    .unwrap();
+    let path = format!(
+        "{}:{}:{}:{}",
+        run.agent.display(),
+        run.project.display(),
+        src.display(),
+        outside.display()
+    );
+    let count_file = run.dir.path().join("realpath-calls.txt");
+    run.python(
+        &["run_src.py", count_file.to_str().unwrap()],
+        &[
+            ("DLA_CAPTURE", "heap"),
+            ("DLA_SOURCE_ROOT", src.to_str().unwrap()),
+            ("PYTHONPATH", &path),
+        ],
+    );
+    let doc = json(&run.pid_dir().join("py-1.retain.json"));
+    let rec = run
+        .records()
+        .into_iter()
+        .rev()
+        .find(|r| !captures(r).is_empty())
+        .unwrap();
+    let ms = captures(&rec)
+        .into_iter()
+        .find(|c| c["kind"] == "heap")
+        .unwrap()["ms"]
+        .as_u64()
+        .unwrap();
+    assert!(ms < 20_000, "the heap capture took {ms} ms");
+    // A file name is resolved once, not once for every traceback of the run: the whole process,
+    // the 16 000 raises included, makes a few thousand calls at most (an uncached walk makes more
+    // than a hundred thousand, which on a deep path of a real source tree is the minute it took).
+    let calls: u64 = fs::read_to_string(&count_file).unwrap().parse().unwrap();
+    assert!(calls < 5_000, "{calls} calls of os.path.realpath");
+    let lines: Vec<&Value> = doc["sites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| {
+            s["site"]
+                .as_str()
+                .is_some_and(|x| x.starts_with("lib/reraise_src.py:"))
+                && s["kept"].as_u64().unwrap() >= 40
+        })
+        .collect();
+    assert!(lines.len() >= 6, "{doc}");
+    for s in &lines {
+        assert!(!s["chains"].as_array().unwrap().is_empty(), "{s}");
+    }
+    assert!(!doc["limitations"].to_string().contains("time bound"));
+    // The places of the run are named by the rule of the lines, and the file outside is no path.
+    let text = doc.to_string();
+    assert!(text.contains("<outside>/ext.py:"), "{text}");
+    assert!(!text.contains(run.dir.path().to_str().unwrap()), "{text}");
+    eprintln!("heap capture of the source-tree fixture: {ms} ms, {calls} calls");
+}
