@@ -2004,3 +2004,25 @@ flat test-loop readings get only 9 second looks.
 - Open: task 99 (jvm-pool-warmup flake), Jetty 12.0.31 not run, the two gc.freeze tests under the
   uv-managed 3.12, `dla run status` lists a killed harness as running, a holder finding added at a
   line its holder does not keep has no column of its own (warning only).
+
+## 08:55 UTC 2026-11-24: the owner asks whether the work is fitted to one project; blind test started
+
+- Owner's question (verbatim): "Are you sure we are not trying to fix Pillow specific case? Will
+  fixing Pillow generally help skill to find leaks?"
+- Facts from these notes used in the answer: every project of the list was a development target
+  (aiohttp found in run 2 and 3; grpc-go in run 4; axios in run 5; tokio-util in run 5; spring in
+  run 8; Pillow found in runs 2, 3, 6, 10 and MISSED in 7, 8, 9 after my own changes). No project
+  was ever run blind. No project was run twice on one build, so no repeat rate exists. None of the
+  five earlier projects was rerun after the Python and gate changes of the last two days.
+- Decision: no more Pillow runs after pillow-11. Next is a BLIND TEST on one frozen build
+  (0.9.0-preview.7): projects never run before, one unattended run each, generic prompt, no fix
+  between runs, score at the end.
+- Sonnet research agent HO started 08:55 (brief wip-notes/holdout-research-brief.md, scratch u106):
+  ten candidates, two per runtime. It writes u106/candidates.md (no hint of the leak; I read it
+  before the runs) and u106/answer-key.md (I read it ONLY after all runs have ended).
+- Blind-test rules for me: do not open answer-key.md before the last run ends; take the first
+  candidate of each runtime whose install works (the second only if the first cannot be built);
+  one run each, `--timeout 9000 --max-turns 600`, same prompt file prompt-generic.txt; no edit of
+  skills/, agents/, data/, hooks/ or the binary between runs; Jetty 12.0.31 runs as a sixth
+  project (on the owner's list, never run, leak class known to me, so it is not blind).
+- pillow-11 at 08:47: still running, 87 harnesses, run folder 558 MB, 13.2 GB free.
