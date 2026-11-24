@@ -1108,6 +1108,40 @@ fn settle_shim_only(
     Some(m)
 }
 
+/// The channel a Rust project pins with `rust-toolchain.toml` or `rust-toolchain` at or above
+/// `cwd` (not above `work`), and the file name.
+fn pinned_toolchain(work: &Path, cwd: &Path) -> Option<(String, String)> {
+    let mut dir = Some(cwd);
+    while let Some(d) = dir.filter(|d| d.starts_with(work)) {
+        for name in ["rust-toolchain.toml", "rust-toolchain"] {
+            let Ok(text) = fs::read_to_string(d.join(name)) else {
+                continue;
+            };
+            let channel = text
+                .parse::<toml::Table>()
+                .ok()
+                .and_then(|t| {
+                    t.get("toolchain")
+                        .and_then(|x| x.get("channel"))
+                        .and_then(toml::Value::as_str)
+                        .map(str::to_owned)
+                })
+                .or_else(|| {
+                    // The legacy form is the bare channel name on the first line.
+                    text.lines()
+                        .map(str::trim)
+                        .find(|l| !l.is_empty() && !l.starts_with('#') && !l.contains('='))
+                        .map(str::to_owned)
+                });
+            if let Some(c) = channel {
+                return Some((c, name.to_owned()));
+            }
+        }
+        dir = d.parent();
+    }
+    None
+}
+
 /// Runs the build step once. A failed build is the refusal `harness-failed`.
 fn build_once(
     ctx: &ToolCtx,
@@ -1175,8 +1209,16 @@ fn build_once(
                 reason: crate::BUILD_FAILS,
             },
         )?;
+        // A project that pins its toolchain builds the harness with it: say which compiler spoke.
+        let pinned = if manifest.runtime == dla_core::runtime::Runtime::Rust {
+            pinned_toolchain(&paths.work, &cwd_of(paths, build))
+                .map(|(channel, file)| format!(" with the pinned toolchain {channel} ({file})"))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         return Err(failed(
-            format!("harness {} did not build: {why}", manifest.id),
+            format!("harness {} did not build{pinned}: {why}", manifest.id),
             format!("{BUILD_MISSING}; see {}", ctx.pointer(&log_rel)),
             // A hook driver's own hook body is what does not compile (the build log names the
             // file), not the work copy of the project; a JUnit repeat has no hooks.
@@ -4034,6 +4076,28 @@ mod test_hooks {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_pinned_toolchain_is_read_from_the_toml_or_the_bare_file_at_or_above_the_crate() {
+        let dir = tempfile::tempdir().unwrap();
+        let w = dir.path();
+        std::fs::create_dir_all(w.join("m/src")).unwrap();
+        assert_eq!(super::pinned_toolchain(w, &w.join("m")), None);
+        std::fs::write(
+            w.join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"1.80.0\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            super::pinned_toolchain(w, &w.join("m")),
+            Some(("1.80.0".to_owned(), "rust-toolchain.toml".to_owned()))
+        );
+        std::fs::write(w.join("m/rust-toolchain"), "# pinned\nnightly-2024-05-01\n").unwrap();
+        assert_eq!(
+            super::pinned_toolchain(w, &w.join("m")),
+            Some(("nightly-2024-05-01".to_owned(), "rust-toolchain".to_owned()))
+        );
+    }
+
     #[test]
     fn the_lines_the_agent_counts_are_listed_once_and_bounded() {
         let v = |l: &[&str]| l.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();

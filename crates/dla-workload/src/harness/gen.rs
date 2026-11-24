@@ -1236,6 +1236,55 @@ fn workspace_lib_members(work: &Path, cwd: &str) -> Option<Vec<String>> {
     Some(out)
 }
 
+/// What the driver writes before `extern "C" {`: `unsafe ` for a crate of edition 2024 or
+/// later (it requires it), nothing for an older one (a compiler before Rust 1.82 rejects it).
+fn rust_unsafe_extern(work: &Path, cwd: &str) -> String {
+    if crate_edition(work, cwd) >= 2024 {
+        "unsafe ".to_owned()
+    } else {
+        String::new()
+    }
+}
+
+/// The edition of the crate at `cwd` of `work`: its `package.edition`, or the `workspace.package`
+/// one of the nearest workspace root above it when the crate says `edition.workspace = true`;
+/// 2015 when none is written (cargo's default).
+pub(crate) fn crate_edition(work: &Path, cwd: &str) -> u32 {
+    let dir = work.join(if cwd == "." { "" } else { cwd });
+    let read = |d: &Path| -> Option<toml::Table> {
+        fs::read_to_string(d.join("Cargo.toml")).ok()?.parse().ok()
+    };
+    let year = |v: &toml::Value| v.as_str().and_then(|s| s.parse::<u32>().ok());
+    let Some(own) = read(&dir) else { return 2015 };
+    match own.get("package").and_then(|p| p.get("edition")) {
+        Some(v) if year(v).is_some() => return year(v).unwrap_or(2015),
+        Some(_) => {}
+        None => return 2015,
+    }
+    // `edition.workspace = true` (or `edition = { workspace = true }`).
+    let mut up = dir.as_path();
+    while let Some(parent) = up.parent() {
+        if !parent.starts_with(work) {
+            break;
+        }
+        up = parent;
+        if let Some(root) = read(up)
+            && let Some(e) = root
+                .get("workspace")
+                .and_then(|w| w.get("package"))
+                .and_then(|p| p.get("edition"))
+        {
+            return year(e).unwrap_or(2015);
+        }
+    }
+    // The root may be the crate's own manifest (a package that is its own workspace root).
+    own.get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("edition"))
+        .and_then(year)
+        .unwrap_or(2015)
+}
+
 fn cargo_lib(work: &Path, cwd: &str) -> Option<String> {
     let dir = work.join(if cwd == "." { "" } else { cwd });
     let manifest: toml::Table = fs::read_to_string(dir.join("Cargo.toml"))
@@ -1623,6 +1672,7 @@ fn build_driver(d: &DriverCtx<'_>) -> Result<DriverBuild, Refusal> {
                 ));
             };
             vars.push(("CRATE".into(), krate));
+            vars.push(("UNSAFE_EXTERN".into(), rust_unsafe_extern(d.work, cwd)));
             let text = fill_with(templates::RUST_DRIVER, &vars)?;
             write(&d.driver.join("dla_harness.rs"), &text)?;
             out.hooks = templates::hooks(&text);
@@ -3242,6 +3292,59 @@ fn jfr_available() -> bool {
 
 #[cfg(test)]
 mod tests {
+    fn write_all(root: &std::path::Path, files: &[(&str, &str)]) {
+        for (rel, text) in files {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        }
+    }
+
+    #[test]
+    fn the_driver_writes_unsafe_extern_only_for_edition_2024_and_later() {
+        let dir = tempfile::tempdir().unwrap();
+        write_all(
+            dir.path(),
+            &[
+                (
+                    "a/Cargo.toml",
+                    "[package]\nname = \"a\"\nedition = \"2021\"\n",
+                ),
+                (
+                    "b/Cargo.toml",
+                    "[package]\nname = \"b\"\nedition = \"2024\"\n",
+                ),
+                ("c/Cargo.toml", "[package]\nname = \"c\"\n"),
+                (
+                    "Cargo.toml",
+                    "[workspace]\nmembers = [\"d\", \"e\"]\n\n[workspace.package]\nedition = \"2024\"\n",
+                ),
+                (
+                    "d/Cargo.toml",
+                    "[package]\nname = \"d\"\nedition.workspace = true\n",
+                ),
+                (
+                    "e/Cargo.toml",
+                    "[package]\nname = \"e\"\nedition = { workspace = true }\n",
+                ),
+            ],
+        );
+        let text = |cwd: &str| {
+            super::templates::RUST_DRIVER.replace(
+                "@@DLA_UNSAFE_EXTERN@@",
+                &super::rust_unsafe_extern(dir.path(), cwd),
+            )
+        };
+        for plain in ["a", "c"] {
+            let t = text(plain);
+            assert!(t.contains("    extern \"C\" {"), "{plain}");
+            assert!(!t.contains("unsafe extern"), "{plain}");
+        }
+        for new in ["b", "d", "e"] {
+            assert!(text(new).contains("    unsafe extern \"C\" {"), "{new}");
+        }
+    }
+
     #[test]
     fn a_chosen_test_class_is_shown_by_its_simple_name_unless_another_shares_it() {
         let all = ["a.FooTests", "b.FooTests", "a.BarTests"];

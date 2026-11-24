@@ -8,6 +8,10 @@
 //! uses key = i % repeat (a bounded key space). Rounds: `DLA_WARMUP` warm-up rounds, then
 //! `DLA_ROUNDS` measured rounds of `DLA_STEP` units each (defaults are baked in at generation).
 //!
+//! Rust version: the driver builds with Rust 1.70 and newer (the newest thing in it is
+//! `Result::is_ok_and`). An `extern` block is written `unsafe extern` only for a crate of edition
+//! 2024 or later, which needs it and which older compilers cannot be pinned for.
+//!
 //! Build and run from the scratch project root (the driver is `src/bin/dla_harness.rs`):
 //!
 //! ```text
@@ -111,7 +115,9 @@ fn setup() -> State {
 }
 
 // DLA-CHOICE-BEGIN
-static CHOICE_N: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8]; // the n of each slot seen so far
+#[allow(clippy::declare_interior_mutable_const)]
+const NO_N: AtomicU64 = AtomicU64::new(0); // a const item, not an inline const (Rust 1.79)
+static CHOICE_N: [AtomicU64; 8] = [NO_N; 8]; // the n of each slot seen so far
 
 /// Choice number `slot` of `n` options, from the digits of `key` in mixed radix. Deterministic, no
 /// allocation and no state beyond the n of each slot (8 slots): the combinations of the slots used
@@ -198,7 +204,7 @@ fn os_values() -> Vec<(&'static str, u64)> {
 
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 fn malloc_trim() -> Option<String> {
-    unsafe extern "C" {
+    @@DLA_UNSAFE_EXTERN@@extern "C" {
         fn malloc_trim(pad: usize) -> i32;
     }
     // SAFETY: glibc's `malloc_trim` takes a padding size and has no other preconditions.
