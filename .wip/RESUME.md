@@ -3077,3 +3077,14 @@ unattended run at a time and no builder beside it.
 - Lock-fix commit prepared on main's version of scratch.rs (u127/scratch-lock.rs, only the three
   hunks of the lock fix; rustfmt clean). To commit with commit-message-27.txt when CI on
   987170a has finished (a push to main cancels the run in progress).
+
+## 22:20 UTC 2026-11-24: CI green on 987170a; lock fix on main alone; N2's whole dynamic run nearly done
+
+- CI on main 987170a (run 45484152459): all 15 jobs green.
+- Lock fix committed ALONE on main as ef20720 (main tree + u127/scratch-lock.rs, message 27),
+  pushed to main and dev. CI waiter bimgi1bdd (logs u115/ci-main-26).
+- N2's whole dynamic run (u126/dynamic2.out): 53 pass, 1 FAIL so far: python-zstd-options-3145
+  (decoy-control, NOT the xfail; the xfail is rust-tree-parent-links). It passed in CI on
+  987170a, so either the tree's changes (N, W, N2, queue fix) broke it or it is a flake. Wait for
+  N2's report; then run it alone on main's build and on the tree's build to tell which.
+- Next: N2 report -> verify -> full-tree CI -> one commit (N + N2 + W + queue fix) -> preview.8.
