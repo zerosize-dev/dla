@@ -1,0 +1,147 @@
+Built Node libraries are measured at their sources, and a holder counts as exercised only when a line that adds to it ran
+
+Two causes of misses from the unattended test on projects the tool had
+never seen, a rule that makes unexplained heap growth captured before it
+is left, and two defects that the whole dynamic acceptance showed in that
+rule.
+
+A NODE LIBRARY WRITTEN IN TYPESCRIPT
+
+Its `package.json` points at a bundled build output that git ignores, and
+each bundle has a source map. The run confirmed nothing. Read from its
+kept records and reproduced by hand:
+
+- `dla harness gen` copies the project from the git file list, so the
+  build output and `node_modules` were missing from the harness copy and a
+  driver could not load the package. The model worked around it in each of
+  86 drivers.
+- Every site the agent reported and every coverage answer was a position
+  in the bundle, while the candidates are lines of the `.ts` sources: 124
+  of 172 targets read "not reached", and listener counts that grew with
+  every request were tied to nothing.
+- The census listed declaration files and bundles as holders: 251
+  candidates, most of them not source.
+- The heap residual was above its threshold on 178 of 370 rows and was
+  left as unresolved with the remedy "capture, then summarize"; no capture
+  of a harness that showed the growth had been summarized.
+
+The change:
+
+- A Node harness copy also takes the git-ignored directories that the
+  package's manifest names (`main`, `module`, `bin`, the strings of
+  `exports`, the directories of `files`), and gets a link to the project's
+  `node_modules` beside each manifest it holds. The output of `harness gen`
+  says how many files and links that was. Thinning leaves the link alone.
+- The census skips declaration files and any script whose source map
+  names a file of the project: the sources are read instead.
+- A site in a script that has a source map is reported at the original
+  position when that source is a file of the project; the built position
+  is kept beside it. The agent maps listeners, timers, resources and
+  detector sites; coverage is mapped where `dla trend` reads it, so a
+  target at a `.ts` line is "executed" when its function ran in the
+  bundle; allocation-profile frames find their map through the script's
+  own comment. A project of plain JavaScript gives the records it gave
+  before.
+
+On the library, with a unit that sends one mocked request and no manual
+step: the census lists 87 candidates, all in the sources; the driver loads
+the built package; seven listener columns grow at lines of the TypeScript
+sources, two of them at lines of census candidates, and the heap by about
+28 KB per unit.
+
+UNEXPLAINED HEAP GROWTH IS CAPTURED BEFORE IT IS LEFT
+
+- A heap residual row above its threshold whose unattributed growth over
+  the span of its series is at least 64 KiB is a gate item
+  (`residual_capture`) with the capture command, and resolving its open
+  item as unresolved is refused (`capture-not-summarized`), until a
+  retention or allocation-stack summary computed from capture files of
+  that harness is recorded. This holds for the runtimes that have a
+  capture. A row under the floor stays an open item as before: a capture
+  cannot attribute a few bytes, and a decoy fixture had a row 14 bytes
+  over a tiny threshold.
+- An allocation-stack summary writes its result to `allocs/`, not under
+  the harness; it now counts for the harnesses its raw file names as the
+  source of its captures. Before, no Go capture could ever clear the item.
+- The benchmark's fixed policy does what the gate asks: for a
+  `residual_capture` item or a `capture-not-summarized` refusal it runs
+  the capture command and every summarize command that run prints, once
+  per harness, and goes on.
+
+A HOLDER COUNTS AS EXERCISED ONLY WHEN A LINE THAT ADDS TO IT RAN
+
+The changed tool was run again, unattended, on the Rust library of the
+earlier test. The run ended after 93 seconds with nothing confirmed. Its
+driver made the library's usual set-up call. The documented leak is a
+vector that a channel sender fills in three lines, and those lines run
+only when the ring buffer is full, which happens only without that
+set-up. `dla trend` answered `executed` for the target because the
+function ran; every column was flat; the queue counted the target as
+measured and `dla ledger close-rest` closed the rest. The Go library of
+the same test has the same shape: each of fourteen methods appends to the
+leaking slice only while no delegate is set, after an early return.
+
+- For each target with writer sites the harness records how often each
+  adding line ran: from the regions of the coverage export for Rust (the
+  innermost region that covers the line), from the blocks of the cover
+  profile for Go, from the block ranges of the V8 coverage for Node,
+  mapped through source maps where the project is built. A line that
+  nothing covers reads unknown and changes nothing. A site that resets or
+  reassigns is not counted.
+- New target verdict `writer_not_executed`: the function ran and every
+  adding line has a known count of 0. For a Rust run in fresh-key mode it
+  is also given when the adding lines ran fewer than one time per ten
+  units. A flat probe column is read the same way when the coverage says
+  the adding lines never ran.
+- The queue treats it as a missed target: it gets a focus harness, and
+  after two different drivers that never ran a writer line it is settled
+  as not reached, with a remedy that says so. `dla ledger close-rest`
+  leaves it while it is pending.
+- The block of the next driver shows, per adding line that did not run,
+  the line with its source text and count and the lines above it that
+  decide whether it runs: the conditions and loops that enclose it and
+  the `if`s before it that leave early, nearest first, six at most. The
+  same lines are in the remedy of `dla trend`; `dla harness gen` names
+  the targets in `_attention`.
+- A harness that was generated and never run no longer holds a target
+  that a later harness declared and ran. Before, a driver generated again
+  with a feature on left the first one "in flight", and the queue kept
+  sending the reader back to run it.
+
+Replayed on the Rust library with the driver the model wrote in that run:
+the documented holder reads `writer_not_executed` (":38 0, :49 0, :55 0"),
+stays in the queue, and the next driver's block shows the three lines
+under the `if` that tests whether the push found the buffer full.
+
+A HOLDER OF A CAPTURE WITH ONE DUMP POINT IS NOT CALLED GROWING
+
+The whole dynamic acceptance with the capture rule failed one decoy
+fixture. Its command-mode harness took the capture, and each process of a
+command-mode run is dumped once, so the holder-chain file had one dump
+point and growth was not computed. The summary still led with "a holder
+of the project has no finding: it keeps 1 growing line, act on it before
+anything else", for a class object that did not exist yet when the
+process started, and the final gate listed it. A line of a holder now
+counts as growing only when its counts show growth (a first count is
+known and the last is above it); the gate items, the refusal of `dla
+harness gen --next`, `dla run status` and the lead of `dla summarize
+heap-graph` use that rule. The holder still gets its add command.
+
+Whole dynamic acceptance before the last fix: 62 of 64 pass, one expected
+failure, and the decoy above, which passes with it. The four Go fixtures
+that the first form of the capture rule failed pass.
+
+Not covered. The holders of a Node heap snapshot summary carry a script
+name and no position, so they still name the bundle. A bundle whose map
+is inlined is still read by the census. The link to `node_modules` on
+Windows was compiled and not run. The JVM agent reports classes and
+methods only, so a JVM target is still read per function; the Python
+agent counts the lines of a finding's site, not its writer lines. Go
+coverage runs in `set` mode, so the "fewer than one per ten units"
+reading is given for Rust only, and a Go package in a module below the
+project root may read unknown. The Node mapping through a source map was
+tested on a hand-written map, not on a real bundler's output. Each
+allocation-stack backend's capture labels were read in the code; the
+dynamic acceptance exercised the Go, Python, Node, JVM and native ones.
+The debugger-attached native backend labels its captures by directory
+name, and whether its summary counts for its harness was not checked.
