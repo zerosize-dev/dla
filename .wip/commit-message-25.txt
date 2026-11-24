@@ -1,0 +1,54 @@
+A Node library that is built before it runs is loaded, read and measured at its sources
+
+The fourth miss of the unattended test on unseen projects: a Node library
+written in TypeScript. Its `package.json` points at a bundled build output
+that git ignores, and each bundle has a source map. The run confirmed
+nothing. Read from its kept records and reproduced by hand:
+
+- `dla harness gen` copies the project from the git file list, so the
+  build output and `node_modules` were missing from the harness copy and a
+  driver could not load the package. The model worked around it in each of
+  86 drivers.
+- Every site the agent reported and every coverage answer was a position
+  in the bundle, while the candidates are lines of the `.ts` sources: 124
+  of 172 targets read "not reached", and listener counts that grew with
+  every request were tied to nothing.
+- The census listed declaration files and bundles as holders: 251
+  candidates, most of them not source.
+- The heap residual was above its threshold on 178 of 370 rows and was
+  left as unresolved with the remedy "capture, then summarize"; no capture
+  of a harness that showed the growth had been summarized.
+
+The change:
+
+- A Node harness copy also takes the git-ignored directories that the
+  package's manifest names (`main`, `module`, `bin`, the strings of
+  `exports`, the directories of `files`), and gets a link to the project's
+  `node_modules` beside each manifest it holds. The output of `harness gen`
+  says how many files and links that was. Thinning leaves the link alone.
+- The census skips declaration files and any script whose source map
+  names a file of the project: the sources are read instead.
+- A site in a script that has a source map is reported at the original
+  position when that source is a file of the project; the built position
+  is kept beside it. The agent maps listeners, timers, resources and
+  detector sites; coverage is mapped where `dla trend` reads it, so a
+  target at a `.ts` line is "executed" when its function ran in the
+  bundle; allocation-profile frames find their map through the script's
+  own comment. A project of plain JavaScript gives the records it gave
+  before.
+- A heap residual above its threshold is a gate item with the capture
+  command, and resolving its open item as unresolved is refused, until a
+  capture of the harness that shows it has been summarized. This holds for
+  the runtimes that have a capture.
+
+On the library, with a unit that sends one mocked request and no manual
+step: the census lists 87 candidates, all in the sources; the driver loads
+the built package; seven listener columns grow at lines of the TypeScript
+sources, two of them at lines of census candidates, and the heap by about
+28 KB per unit.
+
+Not covered. The holders of a heap snapshot summary carry a script name
+and no position, so they still name the bundle. A bundle whose map is
+inlined is still read by the census. The link to `node_modules` on Windows
+was compiled and not run. The mapping of allocation-profile frames through
+the script's comment was tested on a parser, not on a real capture.
