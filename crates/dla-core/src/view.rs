@@ -57,9 +57,18 @@ pub struct RunView {
     /// True when the run has no `integrity/` directory (written before schema 6): nothing
     /// is sealed, which is not tampering.
     pub unsealed_run: bool,
+    /// What the Python retention records say about whose each holder is; read on first use (see
+    /// [`RunView::measured_holders`]).
+    measured: std::cell::OnceCell<crate::measured_holders::Scan>,
 }
 
 impl RunView {
+    /// Whose each holder of the Python retention records is, read once per view.
+    pub fn measured_holders(&self) -> &crate::measured_holders::Scan {
+        self.measured
+            .get_or_init(|| crate::measured_holders::scan(self))
+    }
+
     /// Assembles a view; the checklist is derived from the ledger.
     pub fn new(state: RunState, ledger: Ledger, coverage: Option<CoverageManifest>) -> Self {
         let checklist = ledger.checklist();
@@ -79,6 +88,7 @@ impl RunView {
             tamper: Vec::new(),
             report_modified: false,
             unsealed_run: false,
+            measured: std::cell::OnceCell::new(),
         }
     }
 

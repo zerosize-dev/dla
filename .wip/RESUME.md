@@ -2325,3 +2325,20 @@ flat test-loop readings get only 9 second looks.
 - Remaining ideas, not started: C (show the guard of a writer that did not run; fastrace needs
   more units than a capacity constant), E (heap growth held by runtime internals in Node: look
   at what the two captures of the Node run showed).
+
+## 12:23 UTC 2026-11-24 (clock checked): both replays on the frozen build done
+
+(Earlier headings of today carry estimated times; this one is from `date -u`.)
+- u109/walk_otel.py <dla> <plugin root> <out dir> [line]; project copy u107/otel-try/project,
+  venv u107/otel-try/venv. Frozen build u107/dla-P7 with /root/dla-real/plugin:
+  - holder mode (out u109/before): following the commands the tool prints (summary `next` add at
+    the holder with --owner ..._PROXY_METER_PROVIDER, sibling, test, alloc-test H1, refute the
+    sibling, confirm) the documented leak is CONFIRMED in 25 commands. `harness gen --next` is
+    not refused; the classify gate has no holder item. Driver B there is inconclusive only
+    because the finding sits at :555, whose function B does not call.
+  - line mode (out u109/before-line): finding at :173 from the per-line gate item with holder
+    container-field; driver B calls the same method on its early-return branch;
+    `alloc-test H3 --finding F1` says favors non-leak and prints
+    `next: dla ledger refute F1 --evidence E19`; the refute is ACCEPTED. The loss reproduced.
+- After builder H: line mode must end with inconclusive and a refused refute; holder mode must
+  show the holder item first in the classify gate and refuse `harness gen --next` until the add.

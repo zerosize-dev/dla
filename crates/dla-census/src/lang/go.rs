@@ -59,9 +59,8 @@ pub fn collect(src: &str, info: &mut ProjectInfo) {
             else {
                 return;
             };
-            info.go_types.insert(text(name, src).to_owned());
             if ty.kind() == "struct_type" {
-                note_go_fields(text(name, src), ty, src, info);
+                info.note_fields(text(name, src), text(ty, src));
             }
             if ty.kind() == "interface_type" {
                 info.go_interfaces.insert(text(name, src).to_owned());
@@ -81,22 +80,9 @@ pub fn collect(src: &str, info: &mut ProjectInfo) {
             }) =>
         {
             info.longlived.extend(super::caps_idents(text(n, src)));
-            info.longlived.extend(built_types(n, src));
-            info.go_startup_calls.extend(plain_calls(n, src));
         }
         "function_declaration" => {
             let name = n.child_by_field_name("name").map_or("", |c| text(c, src));
-            let built = built_types(n, src);
-            if name == "init" {
-                info.go_startup_calls.extend(plain_calls(n, src));
-            }
-            if super::entry_fn_name(name) {
-                info.longlived.extend(built.iter().cloned());
-            }
-            info.go_fn_built
-                .entry(name.to_owned())
-                .or_default()
-                .extend(built);
             if super::entry_fn_name(name) {
                 let body = text(n, src);
                 for t in super::caps_idents(body) {
@@ -109,84 +95,6 @@ pub fn collect(src: &str, info: &mut ProjectInfo) {
         }
         _ => {}
     });
-}
-
-/// Records the types the fields of struct `owner` mention. A name through a package
-/// qualifier counts when it is exported; any other name is kept, of any case, until
-/// `ProjectInfo::finish` knows the declared types. Field names are not type names.
-fn note_go_fields(owner: &str, ty: Node<'_>, src: &str, info: &mut ProjectInfo) {
-    visit(ty, &mut |f| {
-        if f.kind() != "field_declaration" {
-            return;
-        }
-        let Some(t) = f.child_by_field_name("type") else {
-            return;
-        };
-        visit(t, &mut |id| {
-            if id.kind() != "type_identifier" {
-                return;
-            }
-            let name = text(id, src);
-            if id.parent().is_some_and(|p| p.kind() == "qualified_type") {
-                if name.starts_with(char::is_uppercase) && name != owner {
-                    info.holds
-                        .entry(owner.to_owned())
-                        .or_default()
-                        .push(name.to_owned());
-                }
-            } else {
-                info.go_field_types
-                    .entry(owner.to_owned())
-                    .or_default()
-                    .push(name.to_owned());
-            }
-        });
-    });
-}
-
-/// Names of the types built under `n` by a composite literal (`T{..}`, `&T{..}`) or
-/// `new(T)`, of any case.
-fn built_types(n: Node<'_>, src: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let plain = |t: Node<'_>| {
-        let t = if t.kind() == "generic_type" {
-            t.child_by_field_name("type")?
-        } else {
-            t
-        };
-        (t.kind() == "type_identifier").then(|| text(t, src).to_owned())
-    };
-    visit(n, &mut |c| match c.kind() {
-        "composite_literal" => {
-            out.extend(c.child_by_field_name("type").and_then(plain));
-        }
-        "call_expression" => {
-            let is_new = c
-                .child_by_field_name("function")
-                .is_some_and(|f| f.kind() == "identifier" && text(f, src) == "new");
-            if is_new
-                && let Some(args) = c.child_by_field_name("arguments")
-            {
-                out.extend(named_kids(args).first().copied().and_then(plain));
-            }
-        }
-        _ => {}
-    });
-    out
-}
-
-/// Names of the package-level functions called as `name(..)` under `n`.
-fn plain_calls(n: Node<'_>, src: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    visit(n, &mut |c| {
-        if c.kind() == "call_expression"
-            && let Some(f) = c.child_by_field_name("function")
-            && f.kind() == "identifier"
-        {
-            out.push(text(f, src).to_owned());
-        }
-    });
-    out
 }
 
 fn named_kids<'t>(n: Node<'t>) -> Vec<Node<'t>> {

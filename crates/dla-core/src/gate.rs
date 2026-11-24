@@ -170,14 +170,16 @@ pub fn actions(all: &[Missing]) -> Actions {
         }
     }
     let rank = |m: &Missing| match m.kind.as_str() {
-        "queue" => 0,
-        "growth" => 1,
-        "finding" if m.fix.contains("alloc-test") => 1,
-        "trigger" => 2,
-        "open_item" => 3,
+        // What a measurement showed and nothing yet acts on leads everything, the queue included.
+        HOLDER_KIND | CAPTURE_KIND => 0,
+        "queue" => 1,
+        "growth" => 2,
+        "finding" if m.fix.contains("alloc-test") => 2,
+        "trigger" => 3,
+        "open_item" => 4,
         // Findings still to close come before the checklist and the other bookkeeping.
-        "finding" => 4,
-        _ => 5,
+        "finding" => 5,
+        _ => 6,
     };
     list.sort_by_key(|(m, _)| rank(m));
     let dependents = list.iter().map(|(_, d)| d.len()).sum();
@@ -281,6 +283,10 @@ pub fn missing(view: &RunView, target: GateTarget, worker: Option<&str>) -> Vec<
 fn core_missing(view: &RunView, target: GateTarget) -> Vec<Missing> {
     let mut out = Out(Vec::new());
     let is_final = target == GateTarget::Final;
+    // What a measurement showed and no finding covers leads the list.
+    if target.includes(Stage::Classify) && probes_and_sweeps(view) {
+        out.0.extend(measured_lead(view));
+    }
     // A contradictory coverage comes first: the step it names is what the open findings'
     // closes wait for, and a list cut short (the Stop hook shows three items) must show it.
     let base = status(view).blocking;
@@ -837,6 +843,20 @@ fn held_by_findings<'a>(view: &'a RunView, site: &str) -> Vec<&'a Finding> {
             findings_of_entry(view, entry, &mut out);
         }
     }
+    // The record keeps only the first lines of a holder (its size is bounded); the raw file has
+    // them all: a finding at a holder of the project covers every line the holder keeps.
+    let site = site.trim();
+    for h in &view.measured_holders().project {
+        if h.lines.iter().any(|l| l == site) {
+            for f in view.ledger.findings() {
+                if crate::measured_holders::finding_covers(f, &h.owner)
+                    && !out.iter().any(|o| o.id == f.id)
+                {
+                    out.push(f);
+                }
+            }
+        }
+    }
     out
 }
 
@@ -1196,6 +1216,113 @@ fn site_columns_largest_first(mut cols: Vec<&ColumnTrend>) -> Vec<&ColumnTrend> 
     cols
 }
 
+/// Kind of the item for a holder of the project that no finding covers.
+pub const HOLDER_KIND: &str = "measured_holder";
+/// Kind of the item for a series of growing lines whose harness has no retention record.
+pub const CAPTURE_KIND: &str = "measured_capture";
+
+/// Why a growing allocation-site line that is tied to no finding is not an item of its own.
+enum Deferred {
+    /// A holder of the project that no finding covers keeps it: the holder has the item.
+    Holder,
+    /// Only holders in test code keep it: it is no finding of the project.
+    Tests,
+    /// Its harness has no retention record: the capture of the series has the item.
+    Capture(String),
+}
+
+/// Whether the untied allocation-site column `c` of trend `t` waits for the item of a holder or
+/// of a capture, or belongs to the tests.
+fn deferred(view: &RunView, t: &TrendReport, c: &ColumnTrend) -> Option<Deferred> {
+    let site = crate::grown::column_site(c)?;
+    let scan = view.measured_holders();
+    if scan
+        .uncovered(&view.ledger)
+        .iter()
+        .any(|h| h.lines.iter().any(|l| l == site))
+    {
+        return Some(Deferred::Holder);
+    }
+    if scan.tests_only.contains(site) {
+        return Some(Deferred::Tests);
+    }
+    let harness = view.series_harness.get(&t.series)?;
+    (!scan.harnesses.contains(harness)).then(|| Deferred::Capture(harness.clone()))
+}
+
+/// The mode a series was measured in, as `dla harness run --mode` spells it.
+fn series_mode(view: &RunView, series: &str) -> Option<String> {
+    let run_dir = view.run_dir.as_deref()?;
+    let s = crate::series::SeriesFile::load(run_dir, series).ok()?;
+    Some(s.source.mode?.as_str().to_owned())
+}
+
+/// The items that lead a gate: a holder of the project that keeps growing lines and that no
+/// finding covers (one `dla ledger add` at it accounts for every line it keeps), and, for a
+/// series with growing `py.blocks` lines that no finding covers and whose harness has no
+/// retention record, one capture. Only the holder items refuse `dla harness gen --next`.
+pub fn measured_lead(view: &RunView) -> Vec<Missing> {
+    let mut out = measured_holder_items(view);
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for t in &view.trends {
+        if view.gap_series.contains(&t.series) || view.summary_series.contains(&t.series) {
+            continue;
+        }
+        let mut lines = 0usize;
+        let mut harness = None;
+        for c in t
+            .columns
+            .iter()
+            .filter(|c| non_flat(c) && crate::grown::is_alloc_site_column(&c.name))
+        {
+            if !tied_findings(view, t, c).is_empty()
+                || superseded(view, t, c)
+                || covered_by_open_item(view, t, c)
+            {
+                continue;
+            }
+            if let Some(Deferred::Capture(h)) = deferred(view, t, c) {
+                lines += 1;
+                harness = Some(h);
+            }
+        }
+        let Some(h) = harness else { continue };
+        if !seen.insert(t.series.as_str()) {
+            continue;
+        }
+        let mode = series_mode(view, &t.series).unwrap_or_else(|| "fresh".to_owned());
+        out.push(Missing {
+            kind: CAPTURE_KIND.to_owned(),
+            id: format!("{}:capture", t.series),
+            description: format!(
+                "series {} of {h} has {lines} growing py.blocks line{} tied to no finding and {h} has no retention record: the capture says who holds the objects, and one finding at the holder covers the lines it keeps",
+                t.series,
+                if lines == 1 { "" } else { "s" }
+            ),
+            fix: format!(
+                "dla harness run {h} --mode {mode} --capture alloc,heap, then the two dla summarize commands that run prints (alloc-stack-diff for the stacks, heap-graph for who holds the objects)"
+            ),
+        });
+    }
+    out
+}
+
+/// The items for the holders of the project that keep growing lines and that no finding covers:
+/// their fix is the `dla ledger add` command. `dla harness gen --next` is refused while there
+/// is one.
+pub fn measured_holder_items(view: &RunView) -> Vec<Missing> {
+    view.measured_holders()
+        .uncovered(&view.ledger)
+        .into_iter()
+        .map(|h| Missing {
+            kind: HOLDER_KIND.to_owned(),
+            id: format!("holder:{}", h.owner),
+            description: crate::measured_holders::item_text(h),
+            fix: crate::measured_holders::add_command(&h.evidence, &h.owner, &h.site),
+        })
+        .collect()
+}
+
 fn classify(view: &RunView, is_final: bool, out: &mut Out) {
     if !probes_and_sweeps(view) {
         return;
@@ -1288,6 +1415,14 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
                 !tied.is_empty()
             };
             if ok || superseded(view, t, c) || covered_by_open_item(view, t, c) {
+                continue;
+            }
+            // A line of a holder that has its own item, of the test code, or of a series whose
+            // capture has one is no item of its own (see [`measured_lead`]).
+            if tied.is_empty()
+                && crate::grown::is_alloc_site_column(&c.name)
+                && deferred(view, t, c).is_some()
+            {
                 continue;
             }
             // A per-type count that ties to no finding is accounted for by the residual rows
