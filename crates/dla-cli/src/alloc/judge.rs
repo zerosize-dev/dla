@@ -578,6 +578,55 @@ pub fn require_non_leak(
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_column_grew_in_the_main_window_by_its_interval_rise_and_counter_net_rise() {
+        let flat = pts(&[80., 80., 80., 80., 80., 80.], 1000.0);
+        let ramp = pts(&[10., 20., 30., 40., 50., 60.], 1000.0);
+        assert!(!grew(&flat, false, 0.0, 0.0));
+        assert!(grew(&ramp, false, 0.0, 0.0));
+        // A rise below the column's smallest rise is none, and one point shows no rise.
+        assert!(!grew(&ramp, false, 0.0, 1000.0));
+        assert!(!grew(&ramp[..1], false, 0.0, 0.0));
+        assert!(!grew(&flat, true, 0.0, 0.0));
+        assert!(grew(&ramp, true, 0.0, 0.0));
+        // The flat-then-flat column is a plateau for the plateau test, and nothing more.
+        let extra = pts(&[80., 80., 80., 80.], 7000.0);
+        assert_eq!(
+            plateau(&flat, &extra, false, 0.0, 0.0).verdict,
+            PlateauVerdict::Plateau
+        );
+    }
+
+    #[test]
+    fn a_column_that_never_grew_is_inconclusive_by_every_route_and_a_plateau_after_growth_is_not() {
+        let released = purge("trim", Some(100.0), Some(40.0), Some(20.0), 0.0);
+        let headroom = Gc {
+            pre_rise: 9.0,
+            post_rise: 0.0,
+            headroom: true,
+        };
+        for (p, g) in [
+            (None, None),
+            (Some(&released), None),
+            (Some(&released), Some(headroom)),
+        ] {
+            assert_eq!(
+                combine(PlateauVerdict::NeverGrew, p, g, None),
+                (Favors::Inconclusive, Vec::new())
+            );
+        }
+        assert_eq!(PlateauVerdict::NeverGrew.as_str(), "never-grew");
+        // A column that grew and then stopped is a non-leak as before.
+        assert_eq!(
+            combine(PlateauVerdict::Plateau, None, None, None).0,
+            Favors::NonLeak
+        );
+        assert_eq!(
+            combine(PlateauVerdict::Plateau, Some(&released), None, None).0,
+            Favors::NonLeak
+        );
+    }
+
     fn pts(ys: &[f64], x0: f64) -> Vec<(f64, f64)> {
         ys.iter()
             .enumerate()

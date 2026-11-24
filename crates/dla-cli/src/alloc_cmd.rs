@@ -4160,6 +4160,81 @@ mod tests {
         );
     }
 
+    /// `node.heap_used` over 2 warm-up, 6 main and 6 extra points (`ys`, 14 values), judged as
+    /// the deciding column of a finding (`bound`) or of an unbound alloc-test, with the purge
+    /// record `purge` (the readings before and after the purge) when given.
+    fn heap_column(ys: [f64; 14], bound: bool, purge: Option<(f64, f64)>) -> ColumnResult {
+        let mut s = series(&[]);
+        s.columns = vec![col("os.rss"), col("node.heap_used")];
+        for (i, p) in s.points.iter_mut().enumerate() {
+            p.values = vec![Some(150e6), Some(ys[i])];
+        }
+        let event = purge.map(|(before, after)| {
+            s.events.push(dla_core::series::SeriesEvent {
+                after_point: 13,
+                kind: "purge:gc".to_owned(),
+                detail: Some(format!(
+                    r#"{{"kind":"gc","before":{{"node.heap_used":{before}}},"after":{{"node.heap_used":{after}}}}}"#
+                )),
+            });
+            purge_event(&s).unwrap()
+        });
+        test_column(
+            &s,
+            "node.heap_used",
+            true,
+            bound,
+            6,
+            event.as_ref(),
+            &mut Vec::new(),
+        )
+        .unwrap()
+    }
+
+    fn ramp(from: f64, step: f64, n: usize, start: f64) -> Vec<f64> {
+        (0..n).map(|i| from + step * (start + i as f64)).collect()
+    }
+
+    fn heap_ys(main_step: f64, extra_step: f64) -> [f64; 14] {
+        let mut v = vec![60e6, 60e6];
+        v.extend(ramp(60e6, main_step, 6, 1.0));
+        let top = 60e6 + main_step * 6.0;
+        v.extend(ramp(top, extra_step, 6, 1.0));
+        v.try_into().unwrap()
+    }
+
+    #[test]
+    fn a_column_that_never_grew_in_the_main_window_cannot_speak_for_a_bound_finding() {
+        let flat = heap_ys(0.0, 0.0);
+        let r = heap_column(flat, true, None);
+        assert_eq!(r.plateau.verdict, PlateauVerdict::NeverGrew, "{r:?}");
+        assert_eq!(r.plateau.verdict.as_str(), "never-grew");
+        assert_eq!(
+            (r.favors, r.supports.len()),
+            (Favors::Inconclusive, 0),
+            "{r:?}"
+        );
+        // An alloc-test with no finding is unchanged: the flat column is a plateau.
+        let r = heap_column(flat, false, None);
+        assert_eq!(r.plateau.verdict, PlateauVerdict::Plateau, "{r:?}");
+        assert_eq!(r.favors, Favors::NonLeak, "{r:?}");
+        // A purge that "released" 28 MB of a column that did not grow is no way to non-leak.
+        let r = heap_column(flat, true, Some((88e6, 60e6)));
+        assert_eq!(r.favors, Favors::Inconclusive, "{r:?}");
+        assert!(r.supports.is_empty(), "{r:?}");
+    }
+
+    #[test]
+    fn growth_in_the_main_window_then_a_flat_extra_window_is_still_a_plateau_and_non_leak() {
+        let r = heap_column(heap_ys(1e6, 0.0), true, None);
+        assert_eq!(r.plateau.verdict, PlateauVerdict::Plateau, "{r:?}");
+        assert_eq!(r.favors, Favors::NonLeak, "{r:?}");
+        assert!(r.supports.iter().any(|x| x == "N-WARM"), "{r:?}");
+        let r = heap_column(heap_ys(1e6, 1e6), true, None);
+        assert_eq!(r.plateau.verdict, PlateauVerdict::Continues, "{r:?}");
+        assert_eq!(r.favors, Favors::Leak, "{r:?}");
+    }
+
     #[test]
     fn a_purge_record_without_the_columns_key_abstains() {
         let rec = purged(
