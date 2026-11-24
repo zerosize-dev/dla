@@ -74,7 +74,7 @@ use super::{
     dumps::{self, DumpFile, Rec},
     harness_dir,
     pace::{self, Pace},
-    pymemray,
+    pymemray, scratch,
     symbolize::{Sites, symbolize},
 };
 
@@ -835,6 +835,9 @@ struct Paths {
     source: Option<String>,
     /// The run's consent allows raw values in captures (`DLA_RAW_VALUES` for a Python agent).
     raw_values: bool,
+    /// The shared lock on `work/`, held for as long as the run reads or runs in it; `None` in
+    /// tests that build a `Paths` by hand.
+    _work_lock: Option<scratch::WorkGuard>,
 }
 
 impl Paths {
@@ -847,6 +850,9 @@ impl Paths {
         // Plain, not verbatim, on Windows: these paths reach the measured process
         // (`{out}` in the JFR file name, DLA_PROJECT, DLA_HARNESS_OUT) and Java rejects `\\?\`.
         let hdir = dla_core::paths::plain(hdir.canonicalize().map_err(|e| io_refusal(&hdir, e))?);
+        // A copy that was thinned gets its files back first; the lock keeps the thinner away
+        // until this run is done with `work/`.
+        let work_lock = scratch::use_work(&hdir, &ctx.project, manifest.runtime.as_str())?;
         let work = ctx.run_dir.join(&manifest.scratch);
         let work = work.canonicalize().map_err(|_| {
             failed(
@@ -882,6 +888,7 @@ impl Paths {
             probes: probes.is_file().then_some(probes),
             hdir,
             work,
+            _work_lock: Some(work_lock),
         })
     }
 
@@ -4472,6 +4479,7 @@ mod tests {
             packages: None,
             source: None,
             raw_values: false,
+            _work_lock: None,
         }
     }
 

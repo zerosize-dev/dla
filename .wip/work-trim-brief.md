@@ -1,7 +1,10 @@
 # Brief W: a run does not keep one full copy of the project per harness
 
-Repository: /home/user/dla (Rust workspace, branch `main`). Scratch directory:
-/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/u100.
+Repository: /home/user/dla (Rust workspace, branch `main`, clean working tree at the start).
+Scratch directory: /tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/u100
+(exists, empty). `target/` holds a debug build of the current tree, so the first cargo command
+is incremental. A Python harness process runs with `PYTHONDONTWRITEBYTECODE=1` since the last
+commit, so a Python run leaves no `__pycache__` in `work/`.
 
 ## Why
 
@@ -110,7 +113,10 @@ Mutations by a small script that asserts the old text occurs exactly once. Befor
   library or its APIs in the repository. No model names, no attribution lines.
 - If a golden file or a schema file changes, say which and why (`./target/debug/dla schema --check`
   must stay clean; regenerate with `dla schema --out schemas` only if a schema really changes).
-- Do not run the whole workspace suite. The machine's `python3` is 3.13.
+- Do not run the whole workspace suite. The machine's `python3` is 3.13; use no other interpreter.
+- Do not touch or run anything under scratch `u72`, `u101` or `u104`, and nothing under
+  /root/dla-real. No script or command that deletes a directory tree outside your own test
+  temp directories (tests use `tempfile`).
 
 ## Checks before you report
 

@@ -332,6 +332,56 @@ fn python_stubbing_the_real_writer_removes_the_growth_and_strong_accepts_it() {
 }
 
 #[test]
+fn python_an_intervention_on_a_thinned_harness_fills_it_and_clones_a_whole_copy() {
+    let Some(c) = python() else { return };
+    // `dla report` thins every harness: H1 keeps only what differs from the project.
+    let report = Command::cargo_bin("dla")
+        .unwrap()
+        .arg("--project")
+        .arg(&c.project)
+        .env_remove("DLA_RUN")
+        .env_remove("DLA_KEEP_WORK")
+        .arg("report")
+        .output()
+        .unwrap();
+    assert!(report.status.success(), "{report:?}");
+    let (h1, list) = (
+        c.run_dir.join("harness/H1"),
+        c.run_dir.join("harness/H1/work-thinned.json"),
+    );
+    assert!(list.is_file(), "the report thins the harness");
+    assert!(!h1.join("work/app/audit.py").exists());
+
+    let i = ok(
+        &c.project,
+        &[
+            "intervene",
+            "H1",
+            "--finding",
+            c.finding.as_str(),
+            "--stub-writer",
+            "app/audit.py:8",
+        ],
+    );
+    assert_eq!(i["effect"], "growth-removed", "{i}");
+    // The plan and the clone read the harness's copy: it was filled first.
+    assert!(!list.exists());
+    assert!(h1.join("work/app/audit.py").is_file());
+    // The clone is a whole copy of its own and has no list.
+    let h2 = c.run_dir.join("harness/H2");
+    assert!(!h2.join("work-thinned.json").exists());
+    for f in ["app/__init__.py", "app/service.py", "main.py"] {
+        assert!(h2.join("work").join(f).is_file(), "{f}");
+    }
+    let edited = fs::read_to_string(h2.join("work/app/audit.py")).unwrap();
+    assert!(edited.contains("    pass\n") && !edited.contains("TRAIL.append"));
+    assert_eq!(
+        fs::read_to_string(h1.join("work/app/audit.py")).unwrap(),
+        fs::read_to_string(c.project.join("app/audit.py")).unwrap()
+    );
+}
+
+#[test]
 fn python_rerun_control_reproduces_and_is_recorded() {
     let Some(c) = python() else { return };
     let i = ok(

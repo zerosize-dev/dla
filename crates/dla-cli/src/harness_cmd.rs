@@ -8,6 +8,7 @@ use dla_workload::harness::{
     capture::{CaptureSet, NativeTool},
     r#gen::{GenOptions, generate},
     run::{RunOptions, run as run_harness},
+    scratch::{self, KEEP_RECENT},
 };
 use serde_json::{Value, json};
 
@@ -209,6 +210,35 @@ pub struct RunArgs {
     tool: Option<NativeTool>,
 }
 
+/// Thins the harnesses of the run (see [`scratch::thin_run`]) unless `DLA_KEEP_WORK` is set.
+/// Never fails: the result holds `thinned` and `thinned_bytes` when something was thinned and
+/// `thin_skipped` (`[{"harness", "reason"}]`) for each harness that could not be.
+pub fn thin_old(
+    run_dir: &Path,
+    project: &Path,
+    keep_recent: usize,
+    except: Option<&str>,
+) -> serde_json::Map<String, Value> {
+    let mut m = serde_json::Map::new();
+    if scratch::thinning_off() {
+        return m;
+    }
+    let r = scratch::thin_run(run_dir, project, keep_recent, except);
+    if !r.thinned.is_empty() {
+        m.insert("thinned".into(), json!(r.thinned));
+        m.insert("thinned_bytes".into(), json!(r.bytes));
+    }
+    if !r.skipped.is_empty() {
+        let skipped: Vec<Value> = r
+            .skipped
+            .iter()
+            .map(|(h, why)| json!({"harness": h, "reason": why}))
+            .collect();
+        m.insert("thin_skipped".into(), Value::Array(skipped));
+    }
+    m
+}
+
 /// Runs `dla harness`.
 pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: HarnessCmd) -> Res<Value> {
     let tc = stage::tool_ctx(project, ctx, data);
@@ -244,11 +274,19 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: HarnessCmd) -> 
                 features: g.features,
                 no_default_features: g.no_default_features,
             };
-            stage::finish(
-                "harness gen",
-                json!({"lang": lang.as_str()}),
-                generate(&tc, &opts),
-            )
+            let result = generate(&tc, &opts);
+            let new_id = result
+                .as_ref()
+                .ok()
+                .and_then(|o| o.summary.get("harness"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let mut out = stage::finish("harness gen", json!({"lang": lang.as_str()}), result)?;
+            // Older harnesses keep only the files that differ from the project.
+            if let (Some(id), Value::Object(m)) = (new_id, &mut out) {
+                m.extend(thin_old(&tc.run_dir, project, KEEP_RECENT, Some(&id)));
+            }
+            Ok(out)
         }
         HarnessCmd::Run(r) => {
             if !r.harness.starts_with('H') {

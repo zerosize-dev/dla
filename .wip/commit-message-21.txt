@@ -67,7 +67,7 @@ of a file in a project installed in editable mode was resolved again for
 every block; it is remembered now.
 
 Checked on the real library with a driver whose unit makes both leaks: the
-capture takes 19 s, the module global is named as the holder of five
+capture takes under 20 s, the module global is named as the holder of five
 growing lines, the line of the native leak has the native entry, both
 findings are confirmed without a second capture, each bundle excerpts its
 own lines, and the final gate asks for no finding.

@@ -213,8 +213,9 @@ pub fn settle(run_dir: &Path) -> Result<Vec<String>, Error> {
     Ok(sealed)
 }
 
-/// Length and SHA-256 of a file, read in one pass.
-fn measure(path: &Path) -> std::io::Result<(u64, String)> {
+/// Length and SHA-256 (lowercase hex) of a file, read in one pass. The digest the run's seals
+/// use; the thinned-copy list of a harness uses it too.
+pub fn measure(path: &Path) -> std::io::Result<(u64, String)> {
     let mut f = fs::File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];

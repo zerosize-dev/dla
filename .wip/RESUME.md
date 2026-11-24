@@ -1915,3 +1915,36 @@ flat test-loop readings get only 9 second looks.
   baseline 63/64 pass + 1 xfail), non-skip snapshot for CI, commit message 21, commit, push main
   and dev. Then builder W (work-trim-brief.md), then pillow-11, then 0.9.0-preview.7.
 - Disk 7.4 GB free with target/ built (debug). `cargo clean` before a real plugin run.
+
+## 04:15 UTC 2026-11-24
+
+- R6 done (names_finding strict again; `labels::about_finding` for bundle, stacks_check, alloc-test
+  offer; label refusal names the literal summarize command). Builder rounds R2..R6 are closed.
+- Frozen tree = snapshot 93ac3b5 on wip/progress (NON-skip: CI is running on it; do NOT push
+  another non-skip snapshot before it ends). CI waiter logs: scratch u104/ci-21.
+- Frozen binaries: scratch u104/frozen/dla and dla-bench (also u101/dla-R6). Real-library walk
+  with it is clean (u101/w6.out; heap capture 17.8 s).
+- Running locally (task bzp1m0nid): u104/suite.sh -> u104/suite2.out (whole suite 3.13, Python
+  test files under 3.12, static bench), then the full dynamic bench -> u104/dynamic.log and
+  dynamic.json (expect 63/64 pass + 1 xfail rust-tree-parent-links).
+- When both are green: commit with wip-notes/commit-message-21.txt
+  (`bash wip-notes/commit-snapshot-tree.sh 93ac3b5a7060995ade2ad813b9be2a6d8e874961 wip-notes/commit-message-21.txt`,
+  then `git push -q -u origin main` and `git push -q origin main:dev/wonderful-mccarthy-algc5s`).
+  The working tree must equal the snapshot tree (no edits since).
+- Next: builder W (work-trim-brief.md; fresh Sonnet agent), pillow-11, 0.9.0-preview.7.
+
+## 04:50 UTC 2026-11-24
+
+- COMMITTED: main = 49bccfe "A Python run names who holds the objects of a growing line" (tree of
+  snapshot 93ac3b5; CI run 45320918413 on the snapshot all green; whole suite 3427 passed, 0
+  failed; 3.12: only the 2 known gc.freeze failures; static 64 pass). Pushed to main and dev.
+  CI on main: waiter logs scratch u104/ci-main-21 (task bh2fo8jl9).
+- Local full dynamic bench with frozen binaries still running (u104/dynamic.log; 36 of 64 at
+  04:41, no FAIL so far); it is a duplicate of the CI job that passed. The W builder runs cargo at
+  the same time, so a late local failure may be load: rerun that fixture alone before judging.
+- Builder W started 04:48 (fresh Sonnet agent ae577710f60833b67, brief work-trim-brief.md,
+  scratch u100): thin the work copy of older harnesses, fill on use. Verify: read every reader of
+  work/ it lists, own mutations, whole suite, dynamic bench, a walk on the real library with six
+  or more harnesses (disk before/after), CI snapshot, commit 22.
+- Then pillow-11 (unattended; refresh plugin from the commit; `cargo clean` first for disk), then
+  version 0.9.0-preview.7.
