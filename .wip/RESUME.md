@@ -2368,3 +2368,36 @@ flat test-loop readings get only 9 second looks.
 - Still to do for G: static acceptance by me on the combined tree; VERIFY row; commit message.
 - Builder H still working (tree has its edits: measured_holders.rs, holder_first.rs,
   test_agent_lines.py, gate, alloc, py_retain, harness agent).
+
+## 13:20 UTC 2026-11-24 (clock checked): builder H reported; replays pass; follow-up H2 sent
+
+- H's report (brief H): per-line execution counts in the Python agent (DLA_LINES env, sidecar
+  harness/<H>/lines-<S>.json, sys.monitoring with a settrace fallback forced by
+  DLA_LINES_MODE=settrace); alloc-test: column absent is non-leak only when the line's count
+  rose; holders get `of: project | tests`; new core module measured_holders.rs; classify gate
+  item kind `measured_holder` first, status lead, `_attention` in summarize, refusal
+  `measured-holder-first` on `harness gen --next`; one capture item per series instead of
+  per-line adds; texts, VERIFY rows, schema harness-dump (line_counts); tests holder_first.rs
+  (8), test_agent_lines.py (7), unit tests; three py_site_columns tests and one queue test
+  adapted. 27 files, +1541/-43 with G's two files.
+- Frozen binary of that tree: u112/dla-H1 (sha 47798cc76c63).
+- MY REPLAYS WITH dla-H1 (u109/after-line, u109/after), both as wanted:
+  line mode: alloc-test on the other-branch driver = inconclusive, next names H1 "(the growth
+  was measured there)", refute REFUSED; alloc-test on H1 = leak; confirmed.
+  holder mode: first classify item = measured_holder with the literal add command; status lead
+  is the holder; `harness gen --next` REFUSED measured-holder-first; after the add the item is
+  gone; confirmed in 25 commands.
+- H also reported a second route to the same wrong verdict: a finding with an owner gets a probe
+  from `harness gen --probe F`; a driver that never feeds the holder reads it flat; alloc-test
+  says non-leak; refute accepted. Cause read by me: crates/dla-cli/src/alloc/judge.rs
+  `plateau()` judges only the extra window and `combine()` maps Plateau to NonLeak (N-WARM)
+  even when the column never grew in the series. Every runtime.
+- Follow-up brief wip-notes/holder-first-brief-2.md SENT to the same builder (resumed): a
+  deciding column flat from the start = inconclusive with its own verdict word, next names the
+  harness of the growth; "line ran and nothing stayed" is non-leak only when no retention
+  record names a project holder of that line; an existing test that relied on a flat column as
+  a plateau is to be left failing and reported.
+- Pillow walk with dla-H1 running (task biexlrwq2, out u112/pillow-walk-H1).
+- After H2: build, freeze, both replays again, Pillow walk again, whole suite, own mutations,
+  static + dynamic acceptance (the flat-column rule can change fixture outcomes), VERIFY rows
+  for G, commit messages, snapshot with CI, main.
