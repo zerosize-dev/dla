@@ -2523,3 +2523,22 @@ flat test-loop readings get only 9 second looks.
   alloc_test_jvm, texts say "the harness the finding was raised on".
 - After H4: fmt, build, freeze, replays again (they must not change), suite, snapshot with CI.
   Builder N (Node) still waits; brief R (Rust features) not written.
+
+## 15:35 UTC 2026-11-24 (approx.): H4 done, H5 in progress; builder R started
+
+- H4 built: exemption() returns EntryPath, Growth (an earlier trend of a series of this harness
+  has a grown, not whole-process column tied to the root) or Raised (a finding of the family
+  cites, in supports or contradicts, a record that a run of this harness produced: a Workload
+  record with result.harness == H, a GrowthSeries or UnitCountSeries record of a series of H, a
+  RetentionPath or AllocStack record whose source lies under harness/<H>/). Texts: "did not come
+  back on the harness that measured it" / "no growth of F showed on the harness it was raised
+  on". Five alloc_test_jvm runs ok.
+- The builder pointed out that `dla ledger test F --evidence <workload of a probe driver>` then
+  makes that driver exempt. H5 SENT: a Workload record counts only for a harness that runs the
+  project's own workload (command mode with a workload, or a test loop: the OwnWorkload test);
+  a hand-written driver needs a cited series record, a tied grown column or a capture. Its own
+  new test is changed to say so; a Python own-workload case is added.
+- CI run 45412730283 on a37fcfb: dynamic acceptance still in progress at 15:25 (66 min).
+- Builder R (Sonnet, background) started in the same tree: brief
+  wip-notes/rust-features-brief.md, scratch u116 (task 109).
+- Builder N (Node/TypeScript) still waits (brief wip-notes/node-ts-brief.md, task 108).

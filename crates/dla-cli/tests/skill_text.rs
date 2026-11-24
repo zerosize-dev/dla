@@ -684,7 +684,8 @@ fn the_references_teach_a_measured_holder_first_and_that_a_line_the_unit_does_no
     }
     assert!(
         stages.contains("A series of another driver that never showed the growth is not evidence against it: when the deciding column of a finding is flat from its first measured point of the alloc-test's series, the result is `inconclusive`")
-            && stages.contains("The harness that measured the growth and an entry-path harness of the finding are the exceptions: growth that does not come back on the harness that measured it was not a growth of every unit (the result says so), and an entry-path harness asks whether a caller can feed the holder, so a flat reading there keeps its meaning."),
+            && stages.contains("The harness the finding was raised on and an entry-path harness of the finding are the exceptions: a harness the finding cites evidence from")
+            && stages.contains("A harness that only declares the finding a target or has a probe for it, and that the finding cites nothing from, is another driver."),
         "stages.md lacks the sentence on a series that never showed the growth"
     );
     assert!(

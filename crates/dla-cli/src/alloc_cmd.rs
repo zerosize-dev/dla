@@ -1306,25 +1306,72 @@ fn absent_site_reading(
 /// Why a flat series is a fair reading for a finding (see [`exemption`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Exemption {
-    /// The harness measured the growth of the finding in an earlier series: a leak grows with
-    /// every unit, so growth that does not come back there was not a per-unit leak.
+    /// An earlier series of this harness grew the finding: a leak grows with every unit, so growth
+    /// that does not come back there was not a per-unit leak.
     Growth,
+    /// The finding was raised on this harness (it cites evidence a run of it produced) and no
+    /// growth showed there.
+    Raised,
     /// An entry-path harness declared for the finding: it asks whether a caller can feed the
     /// holder, so a flat reading there keeps its meaning.
     EntryPath,
 }
 
-/// The two cases in which an alloc-test series that did not show the growth of `root` is still a
-/// fair reading. "The harness of the growth" is `harness` when the series of some earlier trend of
-/// the run was measured by `harness` (its `source.harness`), is not the series under test, and
-/// has a column tied to `root` ([`dla_core::grown::column_tied_to`]) that counts as growth
-/// ([`dla_core::grown::counts_as_growth`]), or when [`dla_core::grown::harness_about`] says that
-/// the finding cites growth evidence of a series of `harness` or that a capture of it names the
-/// finding. A declared target, a probe, a column that is tied but did not grow and a workload
-/// harness do not make a harness the harness of the growth. An entry-path harness declared for
-/// the finding has the purpose `entry-path` and `root` (or the finding itself) among its targets.
+/// True when the evidence `e` was produced by a run of harness `manifest`: a `workload` record
+/// naming it (`result.harness`) when the harness runs the project's own workload (a command-mode
+/// harness with a workload, or a test loop: the test `HarnessAbout::OwnWorkload` uses; the record
+/// of a run of a hand-written hook driver does not count), a growth or unit-count record of one of
+/// its series (`result.series` whose `source.harness` is it), or a capture summary (retention or
+/// allocation stacks) read from a file under `harness/<H>/` (the artifact path of its source).
+fn produced_by(
+    run_dir: &Path,
+    e: &dla_core::evidence::EvidenceRecord,
+    manifest: &HarnessManifest,
+) -> bool {
+    use dla_core::evidence::{EvidenceKind, Source};
+    let harness = manifest.id.as_str();
+    match e.kind {
+        EvidenceKind::Workload => {
+            (manifest.is_test_loop()
+                || (manifest.mode == dla_core::harness::HarnessMode::Command
+                    && manifest.workload.is_some()))
+                && dla_core::harness::harness_id_of(&e.result) == Some(harness)
+        }
+        EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries => e
+            .result
+            .get("series")
+            .and_then(Value::as_str)
+            .and_then(|s| SeriesFile::load(run_dir, s).ok())
+            .and_then(|s| s.source.harness)
+            .is_some_and(|h| h == harness),
+        EvidenceKind::RetentionPath | EvidenceKind::AllocStack => match &e.source {
+            Source::Artifact { path, .. } => {
+                dla_core::measured_holders::harness_of_path(path) == Some(harness)
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// The two cases in which an alloc-test series that did not show the growth of the finding is
+/// still a fair reading; anywhere else the series belongs to "another driver" and says nothing
+/// against a growth another series measured.
+///
+/// * An entry-path harness declared for the finding: the purpose `entry-path` and the root (or
+///   the finding itself) among its targets.
+/// * The harness the finding was raised on: some evidence that the finding or a finding of its
+///   family cites (`supports` or `contradicts`) was produced by a run of this harness
+///   ([`produced_by`]; a discriminator is not counted: it is the result of a test, not what the
+///   finding was raised on), or an earlier trend of the run, other than the series under test,
+///   belongs to a series of this harness and has a column tied to the root
+///   ([`dla_core::grown::column_tied_to`]) that counts as growth
+///   ([`dla_core::grown::counts_as_growth`]). That the harness declares the finding a target or
+///   has a probe for it makes it none of these.
+///
+/// [`Exemption::Growth`] is the case that an earlier series of the harness grew the finding;
+/// [`Exemption::Raised`] the case that it only produced evidence the finding cites.
 fn exemption(
-    view: &dla_core::RunView,
     run_dir: &Path,
     ledger: &Ledger,
     manifest: &HarnessManifest,
@@ -1341,17 +1388,7 @@ fn exemption(
     {
         return Some(Exemption::EntryPath);
     }
-    // The finding cites the growth evidence of a series of this harness, or a capture of it names
-    // the finding: the harness measured the growth ([`dla_core::grown::harness_about`]).
-    if matches!(
-        dla_core::grown::harness_about(view, manifest, &root),
-        Some(
-            dla_core::grown::HarnessAbout::Evidence(_) | dla_core::grown::HarnessAbout::Capture(_)
-        )
-    ) {
-        return Some(Exemption::Growth);
-    }
-    trends
+    let grew = trends
         .iter()
         .filter(|t| t.series != this_series)
         .filter(|t| {
@@ -1366,8 +1403,17 @@ fn exemption(
                 .ok()
                 .and_then(|s| s.source.harness)
                 .is_some_and(|h| h == manifest.id)
-        })
-        .then_some(Exemption::Growth)
+        });
+    if grew {
+        return Some(Exemption::Growth);
+    }
+    let cited = ledger
+        .findings()
+        .filter(|f| f.id == root || f.parent.as_ref() == Some(&root))
+        .flat_map(|f| f.supports.iter().chain(&f.contradicts))
+        .filter_map(|id| ledger.evidence().find(|e| &e.evidence_id == id))
+        .any(|e| produced_by(run_dir, e, manifest));
+    cited.then_some(Exemption::Raised)
 }
 
 /// The harness and series of the newest trend of the run, other than the one of `this`, that
@@ -1584,19 +1630,10 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     }
     let iterations = manifest.iterations as usize;
     // A series that did not show the growth counts against it only on a harness that is neither the
-    // one that measured the growth nor an entry-path harness of the finding.
-    let exemption = bound.as_ref().and_then(|f| {
-        let view = dla_core::RunView::load_for(&tc.run_dir, tc.worker.as_deref()).ok()?;
-        exemption(
-            &view,
-            &tc.run_dir,
-            &ledger,
-            &manifest,
-            f,
-            &all_refs,
-            &series.id,
-        )
-    });
+    // one the finding was raised on nor an entry-path harness of the finding.
+    let exemption = bound
+        .as_ref()
+        .and_then(|f| exemption(&tc.run_dir, &ledger, &manifest, f, &all_refs, &series.id));
     let mut results: Vec<ColumnResult> = picked
         .tested
         .iter()
@@ -1697,7 +1734,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     };
     // On the harness that measured the growth a flat series keeps its old reading, and says that the
     // growth did not come back there.
-    if exemption == Some(Exemption::Growth)
+    if matches!(exemption, Some(Exemption::Growth | Exemption::Raised))
         && let Some(f) = bound.as_ref()
         && let deciding = results
             .iter()
@@ -1709,12 +1746,21 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         && !deciding.is_empty()
         && deciding.iter().all(|r| r.flat)
     {
-        let text = format!(
-            "the growth of {} did not come back on the harness that measured it: {} is flat from its first measured point in this series of {}, so it was not a growth of every unit",
-            f.root_id(),
-            deciding[0].name,
-            a.harness
-        );
+        let text = if exemption == Some(Exemption::Growth) {
+            format!(
+                "the growth of {} did not come back on the harness that measured it: {} is flat from its first measured point in this series of {}, so it was not a growth of every unit",
+                f.root_id(),
+                deciding[0].name,
+                a.harness
+            )
+        } else {
+            format!(
+                "no growth of {} showed on the harness it was raised on: {} is flat from its first measured point in this series of {}, so it was not a growth of every unit",
+                f.root_id(),
+                deciding[0].name,
+                a.harness
+            )
+        };
         picked.basis = text.clone();
         limitations.push(text);
     }

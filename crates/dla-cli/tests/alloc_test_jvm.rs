@@ -900,3 +900,22 @@ fn an_idle_driver_without_a_trend_is_never_a_leak_verdict_and_names_no_thread_co
         );
     }
 }
+
+#[test]
+fn a_finding_that_cites_only_the_workload_of_its_harness_is_judged_as_before_there_whatever_the_warm_up()
+ {
+    if skip() {
+        return;
+    }
+    // The finding cites the workload evidence of `dla harness run H1` and no growth evidence (the
+    // case of a first trend that wrote none): H1 is the harness it was raised on, so the flat or
+    // plateaued non-heap bytes read as before and never as another driver's series.
+    let (_dir, project, f, _) = prepared_citing(Some(5000), false);
+    let a = ok(&project, &["alloc-test", "H1", "--finding", &f]);
+    assert_eq!(a["favors"], "non-leak", "{a}");
+    assert_ne!(
+        column(&a, "jvm.nonheap_used")["plateau"],
+        "never-grew",
+        "{a}"
+    );
+}

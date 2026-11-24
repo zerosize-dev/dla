@@ -1043,3 +1043,138 @@ fn a_flat_series_on_an_entry_path_harness_of_the_finding_is_non_leak_as_before()
     let a = r.ok(&["alloc-test", &h, "--finding", "F1"]);
     assert_eq!(a["favors"], "non-leak", "{a}");
 }
+
+#[test]
+fn a_hook_driver_the_finding_cites_only_a_run_record_of_is_still_another_driver() {
+    if !have_python() {
+        return;
+    }
+    // H1 declares the table (F1) as its target, but its unit never feeds it: the probe is flat from
+    // the first measured point and nothing grew anywhere. No timing is involved.
+    let r = prepared("    _state[\"providers\"].make(i, True)");
+    // F1 cites the census record only: a harness that declares it a target and cites nothing it
+    // produced is another driver, and a flat series there says nothing against a growth.
+    let a = r.ok(&["alloc-test", "H1", "--finding", "F1"]);
+    assert_eq!(a["favors"], "inconclusive", "{a}");
+    assert!(
+        a["basis"]
+            .as_str()
+            .unwrap()
+            .starts_with("this series does not show the growth of F1: "),
+        "{a}"
+    );
+    // The finding is then tested on H1 and cites the workload record of `dla harness run H1`. H1
+    // is a hand-written hook driver: the record of its run does not make it the harness the finding
+    // was raised on, so the alloc-test there is still inconclusive.
+    let workload = fs::read_to_string(r.run_dir.join("ledger.jsonl"))
+        .unwrap()
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|v| v["kind"] == "workload")
+        .filter_map(|v| v["evidence_id"].as_str().map(str::to_owned))
+        .next_back()
+        .unwrap();
+    r.ok(&[
+        "ledger",
+        "add",
+        "--sibling-of",
+        "F1",
+        "--origin",
+        "hypothesis",
+        "--hypothesis",
+        "N-WARM",
+        "--refute-if",
+        "growth continues over the extra cycles",
+        "--evidence",
+        &workload,
+    ]);
+    r.ok(&["ledger", "test", "F1", "--evidence", &workload]);
+    let a = r.ok(&["alloc-test", "H1", "--finding", "F1"]);
+    assert_eq!(a["favors"], "inconclusive", "{a}");
+    assert!(
+        a["basis"]
+            .as_str()
+            .unwrap()
+            .starts_with("this series does not show the growth of F1: "),
+        "{a}"
+    );
+    let o = dla(
+        &r.project,
+        &[
+            "ledger",
+            "refute",
+            "F1",
+            "--evidence",
+            a["evidence"].as_str().unwrap(),
+        ],
+    );
+    assert_ne!(o.code, 0, "{}", o.text);
+}
+
+#[test]
+fn a_script_workload_harness_the_finding_cites_the_run_of_is_its_own_and_reads_a_flat_series_as_before()
+ {
+    if !have_python() {
+        return;
+    }
+    // A command-mode harness over a script that does nothing that grows: it runs the project's own
+    // workload, so the record of its run is what the finding was raised on.
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    write(&project, "app/__init__.py", "");
+    write(
+        &project,
+        "app/load.py",
+        "\"\"\"Replays traffic.\n\n    python3 -m app.load --iterations 100\n\"\"\"\n\nimport argparse\n\n\ndef run(n):\n    total = 0\n    for i in range(n):\n        total ^= i\n    return total\n\n\nif __name__ == \"__main__\":\n    p = argparse.ArgumentParser()\n    p.add_argument(\"--iterations\", type=int, default=10)\n    print(run(p.parse_args().iterations))\n",
+    );
+    let init = ok(&project, &["run", "init", "--session-id", "t"]);
+    let run_dir = project.join(".dla").join(init["run_id"].as_str().unwrap());
+    ok(&project, &["census", "--lang", "python"]);
+    ok(&project, &["workload", "discover", "--lang", "python"]);
+    ok(&project, &["harness", "gen", "--lang", "python"]);
+    let run = ok(&project, &["harness", "run", "H1"]);
+    let workload = run["evidence"][0].as_str().unwrap().to_owned();
+    // A hypothesis that cites only the workload record of H1, with its sibling, under test.
+    let f = ok(
+        &project,
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "hypothesis",
+            "--region",
+            "heap",
+            "--evidence",
+            &workload,
+        ],
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &project,
+        &[
+            "ledger",
+            "add",
+            "--sibling-of",
+            &f,
+            "--origin",
+            "hypothesis",
+            "--hypothesis",
+            "N-WARM",
+            "--refute-if",
+            "growth continues over the extra cycles",
+            "--evidence",
+            &workload,
+        ],
+    );
+    ok(&project, &["ledger", "test", &f, "--evidence", &workload]);
+    let a = ok(&project, &["alloc-test", "H1", "--finding", &f]);
+    assert_eq!(a["favors"], "non-leak", "{a} ({})", run_dir.display());
+    assert!(
+        a["basis"].as_str().unwrap().starts_with(&format!(
+            "no growth of {f} showed on the harness it was raised on: "
+        )),
+        "{a}"
+    );
+}
