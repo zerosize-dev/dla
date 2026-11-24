@@ -2201,3 +2201,67 @@ flat test-loop readings get only 9 second looks.
   may measure then), run Jetty alone, then open answer-key.md and score.
 - 11:05 UTC: v0.9.0-preview.7 PUBLISHED (release run 45380080893 on b896d8c; prerelease; five
   platform archives, each with .sha256, and SHA256SUMS).
+
+## 11:27 UTC 2026-11-24: Python blind run still going; a hypothesis from the four finished runs
+
+- blind-otel-python at 11:23: alive, 23 harnesses, 63 series, 4 "confirmed" transitions in the
+  ledger, last ledger entry 11:20. New waiter bgcodtt2p (6000 s). It can run until 12:55.
+- HYPOTHESIS (to test, not a conclusion; n is tiny): the loop over the project's own tests is
+  what makes a run exercise the code. It exists only for JVM (JUnit 5 through Maven or Gradle)
+  and Python (pytest): crates/dla-core/src/testloop.rs. The three blind runs that confirmed
+  nothing are Go, Node and Rust, which have no such loop and depend on hand-written drivers per
+  batch (Go: the model gave up after 10; Rust: 3 drivers, 16 of 146 entry points; Node: 86
+  drivers, 124 of 172 targets not reached). The JVM run exercised 844 of 1137 entry points
+  through the loop and confirmed a leak in 21 minutes. In the Pillow runs the pytest loop is what
+  measured the leak line. If the key agrees, the general fix is a test loop for Go (`go test`),
+  Rust (`cargo test`) and Node (the project's test runner), plus: measured growth is worked
+  first (task 102), and a run may not end COMPLETE far below its budget with most entry points
+  unexercised.
+
+## 12:20 UTC 2026-11-24: BLIND TEST SCORED (five projects, frozen 0.9.0-preview.7): 0 of 5 documented leaks
+
+- blind-otel-python: exit 0, 9330 s, 144 turns, cost 2.90. INCOMPLETE (311 open), 2h34m of 3h,
+  27 harness runs, 71 series, 7 captures, 312 of 1040 entry points. Confirmed: F206 SDK
+  MeterProvider._meters (sdk/metrics/_internal/__init__.py:443; verifier disputes the site) and
+  F197 BatchProcessor.__init__ os.register_at_fork lambda per instance
+  (sdk/_shared_internal/__init__.py:127; real, small; verifier L-REGISTER). Disputed: F229, F215.
+  Kept: /root/dla-real/blind-otel-python-keep (transcript redacted). Run directory deleted.
+- I read answer-key.md sections 1, 3, 6, 7, 9 ONLY (set A). Sections 2, 4, 8, 10 (set B) and 5
+  stay unread. Read before Jetty ran: Jetty is not blind and nothing is changed before it.
+- SCORE against the key (documented leak found: 0 of 5):
+  1 otel-python: documented = api `_ProxyMeterProvider._meters` (metrics/_internal/__init__.py
+    :157, adder :174) fed by TracerProvider.get_tracer. MEASURED AND LOST: the pytest loop showed
+    py.blocks@...:173 (the _ProxyMeter made there) growing; finding F259 added 10:03 (38 min in),
+    put under test only at 11:38, REFUTED 11:43 on E246, the alloc-test of a driver in whose
+    series the line did not grow. Late siblings F270..F273 (lines 211, 511, 541, 555) left as
+    candidates. Two other growth findings confirmed instead (see above).
+  3 otel-go: documented = internal/global/meter.go:95 `instruments` slice. NOT A CANDIDATE (census
+    has meter.go:97 registry, :334, :351 only), and the run gave up after 9 minutes.
+  6 interceptors: documented = per-request HTTP parsers not released (Node internals hold them;
+    about 20 KB per request by hand). GROWTH MEASURED, NOT ATTRIBUTED: heap residual above
+    threshold on 178 of 370 rows, left as open items; nothing confirmed.
+  7 fastrace: documented = fastrace/src/util/spsc.rs:21 Sender.pending_messages, which grows only
+    after the 10240-slot ring is full with no reporter set. CANDIDATE LISTED (F41), NEVER
+    TRIGGERED: targeted by H1 and H3, writer not executed (runs have 3520 iterations), closed
+    static-only; the run ended COMPLETE after 2 minutes.
+  9 logstash: documented = util/ThreadLocalHolder.java:63 threadValues (grows on JDK 16+ when
+    ForkJoinPool common-pool workers encode). CANDIDATE LISTED (F81), executed by H3, NOT
+    TRIGGERED, closed inconclusive with a wrong generic remedy. A DIFFERENT REAL LEAK was
+    confirmed: static map ObjectFieldsAppendingMarker.serializerHelper keyed by ObjectMapper
+    (read by me at the tag: never cleared, the code comment admits it).
+- Failure families, by projects hit:
+  A loop growth measured and then lost (late, refuted or closed by a driver that does not
+    reproduce it): Pillow (runs 7, 8, 9, 11), otel-python. Fix idea: the loop is the reproducer;
+    narrow it by test file mechanically; such a finding is first in the order of work and a
+    driver that does not show the line cannot refute it.
+  B no test loop for the runtime, little code exercised, early end: Go, Rust, Node (3 of 3).
+    Fix idea: test loop for `go test`, `cargo test`, the Node test runner; no COMPLETE far below
+    budget with most entry points unexercised.
+  C candidate listed, trigger condition never met: fastrace (capacity threshold), logstash
+    (thread kind). Fix idea: when a target's writer did not run, show its guarding condition;
+    run long enough for a capacity constant.
+  D census gap: otel-go slice field appended in 14 methods is no candidate.
+  E unattributed heap growth left open: interceptors. Fix idea: the gate asks for a heap capture
+    and its summary before a residual can be left.
+- Jetty: Maven build to fill a home started 12:02 (task bepsru3j5, 45 min limit, log
+  u107/jetty-try/build.log). If it works: run Jetty alone with --warm-m2 u107/jetty-try/m2.
