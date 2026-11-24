@@ -92,7 +92,20 @@ In the heap snapshot reader (`crates/dla-parsers/src/node/snapshot.rs`, `graph.r
   the snapshot before that reading is a small change in `harness/node/dla-preload.cjs`, do
   that as well, and say which of the two changes the test below needs.
 
-### 4. Texts
+### 4. `dla ledger close-rest` leaves what still waits for its second look
+
+In another unattended run (a Rust library) one harness read seven targets `executed` and
+missed one. The model ran `dla ledger close-rest` while the missed one was still pending: it
+closed the seven as not exercised. The queue asks for a second look (a different driver for
+candidates that one flat run settled, `SecondLook::Awaiting` in `crates/dla-core/src/queue.rs`)
+only when the first pass is over, and by then the seven were no candidates any more, so the
+second look never came and the run ended after one harness and 1 minute of 167.
+`close-rest` (`crates/dla-cli/src/ledger_queue.rs`) must leave a candidate that would get a
+second look once the first pass is over (budget left, room under `SECOND_LOOK_MAX`), and say
+so in its `left` list with the reason. Test: one flat harness, one missed target, close-rest:
+the flat ones stay; after the missed one is settled the queue offers the second look.
+
+### 5. Texts
 
 - The sentence on per-site count columns in
   `skills/detect-leak-anywhere/references/evidence-and-report.md` and `references/stages.md`
