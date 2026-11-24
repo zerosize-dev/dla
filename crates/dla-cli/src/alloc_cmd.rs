@@ -1820,7 +1820,7 @@ fn stacks_offer(
     let root = f.root_id();
     let root_f = ledger.finding(&root).unwrap_or(f);
     if ledger.evidence().any(|e| {
-        e.kind == EvidenceKind::AllocStack && dla_core::labels::names_finding(e, &[root_f])
+        e.kind == EvidenceKind::AllocStack && dla_core::labels::about_finding(e, &[root_f])
     }) {
         return None;
     }

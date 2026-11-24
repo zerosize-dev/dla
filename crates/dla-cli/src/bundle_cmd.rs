@@ -18,8 +18,9 @@
 //! frames only: the verifier has to find the site from the stacks and paths.
 //!
 //! The records a transition cites are not the only ones: the newest two allocation-stack and
-//! two retention-path records that name the finding by the rule `dla ledger label` applies
-//! (`labels::names_finding`) are bundled too. A confirmed or strong finding whose growth is a
+//! two retention-path records that are about the finding (`labels::about_finding`: the rule
+//! `dla ledger label` applies, `names_finding`, or an allocation stack with an untied growing row
+//! at the finding's line) are bundled too. A confirmed or strong finding whose growth is a
 //! count of blocks allocated at one line (`py.blocks@<file:line>`) would otherwise reach the
 //! verifier with no stack and no excerpt, so the bundle is refused with `stacks-not-captured`
 //! when the runtime can capture the stacks and no capture run of the harness that grew the
@@ -651,7 +652,7 @@ fn naming_records(ledger: &dla_core::Ledger, f: &dla_core::Finding) -> Vec<Evide
     for kind in [EvidenceKind::AllocStack, EvidenceKind::RetentionPath] {
         let mut named: Vec<EvidenceId> = ledger
             .evidence()
-            .filter(|e| e.kind == kind && dla_core::labels::names_finding(e, &subjects))
+            .filter(|e| e.kind == kind && dla_core::labels::about_finding(e, &subjects))
             .map(|e| e.evidence_id.clone())
             .collect();
         named.reverse();
@@ -725,6 +726,80 @@ fn unrun_commands(
         })
         .collect();
     (unrun, total)
+}
+
+/// The literal `dla summarize alloc-stack-diff --finding <F> <files>` command of the capture that
+/// an allocation-stack record about `finding` was made from, when the record states no tie to it
+/// (the summary was written before the finding existed): the record's raw file lists the sha256
+/// of each input, and the command is rebuilt from `harness/<H>/captures.json` by those digests.
+pub(crate) fn literal_summarize(
+    run_dir: &Path,
+    pointer: &dyn Fn(&str) -> String,
+    ledger: &dla_core::Ledger,
+    finding: &FindingId,
+) -> Option<String> {
+    let f = ledger.finding(finding)?;
+    let subjects = subjects_of(ledger, f);
+    let base = pointer("");
+    let heads = fs::read_dir(run_dir.join("harness")).ok()?;
+    let mut harness_files: Vec<Vec<dla_core::harness::CaptureFile>> = Vec::new();
+    for h in heads.flatten() {
+        let text = fs::read_to_string(h.path().join("captures.json")).ok();
+        let files = text
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .and_then(|v| v.get("files").cloned())
+            .and_then(|v| serde_json::from_value(v).ok());
+        harness_files.extend(files);
+    }
+    for rec in ledger
+        .evidence()
+        .filter(|e| {
+            e.kind == EvidenceKind::AllocStack
+                && !dla_core::labels::names_finding(e, &subjects)
+                && dla_core::labels::about_finding(e, &subjects)
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
+        let Some(raw) = e_raw(run_dir, rec) else {
+            continue;
+        };
+        let used: Vec<&str> = raw
+            .get("captures")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|c| c.get("sha256").and_then(Value::as_str))
+            .collect();
+        for files in &harness_files {
+            for cmd in dla_workload::harness::capture::summarize_commands(files, pointer, false)
+                .into_iter()
+                .filter(|c| c.starts_with("dla summarize alloc-stack-diff "))
+            {
+                let hit = cmd
+                    .split_whitespace()
+                    .skip(3)
+                    .filter_map(|p| p.strip_prefix(&base))
+                    .filter_map(|rel| fs::read(run_dir.join(rel)).ok())
+                    .any(|b| used.contains(&sha(&b).as_str()));
+                if hit {
+                    return Some(cmd.replacen(
+                        "dla summarize alloc-stack-diff ",
+                        &format!("dla summarize alloc-stack-diff --finding {finding} "),
+                        1,
+                    ));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The parsed raw file of a record, when it lies inside the run directory.
+fn e_raw(run_dir: &Path, rec: &dla_core::evidence::EvidenceRecord) -> Option<Value> {
+    let p = contained(run_dir, rec.raw.as_deref()?)?;
+    serde_json::from_slice(&fs::read(p).ok()?).ok()
 }
 
 /// True when a record of `kind` was made from a file with one of `digests`.

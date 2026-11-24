@@ -2578,3 +2578,147 @@ fn a_module_object_that_re_raises_a_stored_exception_is_found_as_the_holder_of_t
 fn args_of(cmd: &str) -> Vec<&str> {
     cmd.split_whitespace().skip(1).collect()
 }
+
+#[test]
+fn a_label_refused_for_a_stack_summary_made_before_the_finding_says_the_literal_command() {
+    if !have_python() {
+        return;
+    }
+    let r = prepared();
+    let t = r.trend();
+    let growth = evidence_of(&Run::next_of(&t, ADD_PREFIX).unwrap());
+    let cap = ok(
+        &r.project,
+        &[
+            "harness",
+            "run",
+            "H1",
+            "--mode",
+            "fresh",
+            "--capture",
+            "alloc,heap",
+        ],
+    );
+    let printed: Vec<&str> = cap["summary"]["summarize"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{cap}"))
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    // Both summaries before any finding exists: the stack record states no tie.
+    let mut stack = String::new();
+    let mut heap = Value::Null;
+    for c in &printed {
+        let v = ok(&r.project, &args_of(c));
+        if c.starts_with("dla summarize alloc-stack-diff ") {
+            stack = v["evidence"][0].as_str().unwrap().to_owned();
+        } else {
+            heap = v;
+        }
+    }
+    let f = ok(&r.project, &args_of(heap["next"][0].as_str().unwrap()))["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &r.project,
+        &[
+            "ledger",
+            "add",
+            "--sibling-of",
+            &f,
+            "--origin",
+            "hypothesis",
+            "--hypothesis",
+            "N-WARM",
+            "--refute-if",
+            "growth continues over the extra cycles",
+            "--evidence",
+            &growth,
+        ],
+    );
+    let workload = r
+        .ledger()
+        .iter()
+        .filter(|v| v["kind"] == "workload")
+        .filter_map(|v| v["evidence_id"].as_str().map(str::to_owned))
+        .next_back()
+        .unwrap();
+    ok(&r.project, &["ledger", "test", &f, "--evidence", &workload]);
+    let a = ok(&r.project, &["alloc-test", "H1", "--finding", &f]);
+    ok(
+        &r.project,
+        &[
+            "ledger",
+            "refute",
+            &format!("{f}.n1"),
+            "--evidence",
+            a["evidence"].as_str().unwrap(),
+        ],
+    );
+    ok(
+        &r.project,
+        &["ledger", "confirm", &f, "--evidence", &growth],
+    );
+    // The label does not count a stack that states no tie to the finding: refused, and the fix is
+    // the command of the capture that was summarized, with the finding named.
+    let label = |ev: &str| {
+        dla(
+            &r.project,
+            &[
+                "ledger",
+                "label",
+                &f,
+                "--as",
+                "L-HANDLE",
+                "--note",
+                "a reference an extension never releases",
+                "--evidence",
+                ev,
+            ],
+        )
+    };
+    let ev = format!("{growth},{stack}");
+    let refused = label(&ev);
+    assert_eq!(
+        refused.json["error"]["code"], "label-evidence-missing",
+        "{}",
+        refused.text
+    );
+    let fix = refused.json["error"]["fix"].as_str().unwrap();
+    let cmd = fix.split("   then   ").next().unwrap();
+    let literal = printed
+        .iter()
+        .find(|c| c.starts_with("dla summarize alloc-stack-diff "))
+        .unwrap()
+        .replacen(
+            "dla summarize alloc-stack-diff ",
+            &format!("dla summarize alloc-stack-diff --finding {f} "),
+            1,
+        );
+    assert_eq!(cmd, literal, "{fix}");
+    assert!(!fix.contains("<profiles>"), "{fix}");
+    assert!(
+        fix.contains(&format!("dla ledger label {f} --as L-HANDLE")),
+        "{fix}"
+    );
+    // Run it, and the label gets past the evidence check (it may be refused for another reason).
+    let again = ok(&r.project, &args_of(cmd));
+    let tied = again["evidence"][0].as_str().unwrap().to_owned();
+    // The new record states the tie: it is the finding's, and the label counts it.
+    let rec = r
+        .ledger()
+        .into_iter()
+        .find(|v| v["evidence_id"] == tied.as_str())
+        .unwrap();
+    assert_eq!(rec["result"]["finding"], f.as_str(), "{rec}");
+    // (This fixture's growth is a count, so the alternative with a retention record is the one
+    // that can be met: it is cited too.)
+    let retention = heap["evidence"][0].as_str().unwrap();
+    let second = label(&format!("{growth},{tied},{retention}"));
+    assert_ne!(
+        second.json["error"]["code"], "label-evidence-missing",
+        "{}",
+        second.text
+    );
+}

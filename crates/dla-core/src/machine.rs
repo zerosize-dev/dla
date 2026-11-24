@@ -1511,11 +1511,12 @@ mod stack_tests {
     #[test]
     fn a_stack_that_starts_at_the_findings_line_is_still_not_a_second_class() {
         // A Python stack, a stack of another tool, a finding with an owner and one without: the
-        // stack is about the finding (`labels::names_finding`), and it is still not retention.
+        // stack is about the finding (`labels::about_finding`), and it is still not retention.
         for tool in ["py-tracemalloc", "jfr"] {
             for owner in [Some("m.g"), None] {
                 let (f, s) = (finding(owner), stack(tool));
-                assert!(crate::labels::names_finding(&s, &[&f]), "{tool} {owner:?}");
+                assert!(crate::labels::about_finding(&s, &[&f]), "{tool} {owner:?}");
+                assert!(!crate::labels::names_finding(&s, &[&f]), "{tool} {owner:?}");
                 let gap =
                     second_class_gap(&f, &[], &s).unwrap_or_else(|| panic!("{tool} {owner:?}"));
                 assert!(

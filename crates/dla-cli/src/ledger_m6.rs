@@ -124,13 +124,35 @@ pub fn label(ctx: &Ctx, data: Option<&PathBuf>, a: LabelArgs) -> Res<Value> {
     if let Some(r) = runtime_refusal(ctx, data, &ledger, &a.finding, as_, a.note.as_deref()) {
         return Err(r);
     }
-    let line = ledger.label(
+    let line = match ledger.label(
         &a.finding,
         as_,
         &a.evidence,
         a.note.as_deref(),
         Archetypes::from_table(table.as_ref()),
-    )?;
+    ) {
+        Ok(line) => line,
+        Err(e) => {
+            let mut failure = Failure::from(e);
+            // A stack summary made before the finding existed is about it but states no tie: the
+            // label counts it once it is summarized again with the finding named. The fix is that
+            // command, not a placeholder.
+            if failure.refusal.code == dla_core::m6::codes::LABEL_EVIDENCE_MISSING
+                && let Some(cmd) = crate::bundle_cmd::literal_summarize(
+                    &ctx.run_dir,
+                    &|p| ctx.pointer(p),
+                    &ledger,
+                    &a.finding,
+                )
+            {
+                failure.refusal.fix = format!(
+                    "{cmd}   then   dla ledger label {} --as {as_} (the stack summary at the finding's line was written before the finding existed and ties no finding, so the label does not count it)",
+                    a.finding
+                );
+            }
+            return Err(failure);
+        }
+    };
     let Record::FindingLabeled(rec) = &line.record else {
         unreachable!("label appends a finding_labeled record");
     };

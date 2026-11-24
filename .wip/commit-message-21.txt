@@ -1,0 +1,78 @@
+A Python run names who holds the objects of a growing line
+
+A Python driver run counts live blocks per project line. A line that grows
+says where the surviving objects were made, not who keeps them. Two real
+unattended runs on a Python library with C extension modules showed what
+that costs.
+
+In the first, twelve lines grew in the loop over the project's tests.
+Eleven were objects of ordinary callers, all kept by one holder that no
+line pointed at: a module-level object that stores an exception and raises
+that same object again, so its traceback grows and keeps the raising frames
+and their locals. The run added a finding at each line and ended with
+eleven growing lines unexplained.
+
+In the second, the leak in the C extension was confirmed with the right
+explanation, and the independent verifier still answered that the blocks
+were most likely held by the test runner or the tracer. Its bundle held the
+stack and the excerpt of the line. Nothing in it said that no Python object
+holds the blocks of that line, or that a driver made for the finding grew
+it one block per unit.
+
+`dla harness run <H> --capture heap` now works for Python. At the last dump
+point the agent follows the live objects of the lines that grew to a root
+and writes the chains: a module global, a class attribute, a frame, or
+nothing that refers to them. A walk that reaches an object whose way to a
+root is known stops there, so a chain through thousands of tracebacks is
+walked once; a run of tracebacks is one step that lists the lines it names.
+Values are not written unless the run's consent allows raw values.
+
+`dla summarize heap-graph` reads the file into one retention record with
+one holder per root. Each holder lists the lines it keeps, the types of the
+objects it keeps and its longest chain. A holder keeps a line only when its
+chains carry a quarter of the objects sampled there; a line whose blocks
+mostly belong to no object gets a native entry that says no Python
+container refers to them. `next` proposes one finding at the holder, at a
+project line the holder keeps.
+
+One finding at the holder then accounts for every line and every type count
+its holder keeps: the gate ties those columns to it and names the finding,
+not an add command. `dla trend` says, once and in a key the output bound
+never cuts, that a growing line names no holder and gives the capture
+command; one capture run with `alloc,heap` serves the stacks and the
+holders.
+
+The bundle of a finding now carries what the verifier lacked. A retention
+record and a stack record are cut to the holder and the stacks of that
+finding, so the excerpt shows its own line and call path and not those of
+another leak in the same run. The index lists the harnesses behind the
+evidence in plain words. A retention record stands in for the stack only
+when the holder of the line has a chain; for blocks that no object holds
+the stack is still required. A stack summary written before the finding was
+added is found for the bundle without a second capture. The verifier's
+instructions say what a holder with no referrer means.
+
+The label rule is unchanged: a stack record counts for a label through the
+ties it states. When the summary was written before the finding existed,
+the refusal gives the literal summarize command to run again.
+
+Two defects of the Python agent came out on the way. In command mode the
+first process of a harness compiled the agent and wrote the bytecode cache,
+and later processes loaded it; a module compiled from source leaves more
+objects alive, so the first point of every heap column read high, about
+1500 frozen objects in the fixture that showed it. Every process of a
+Python harness now runs without writing bytecode, which also keeps
+`__pycache__` out of a project that runs from its source tree. And the name
+of a file in a project installed in editable mode was resolved again for
+every block; it is remembered now.
+
+Checked on the real library with a driver whose unit makes both leaks: the
+capture takes 19 s, the module global is named as the holder of five
+growing lines, the line of the native leak has the native entry, both
+findings are confirmed without a second capture, each bundle excerpts its
+own lines, and the final gate asks for no finding.
+
+Not seen yet: an unattended run with this change, and the verifier's answer
+to the new bundle. Not covered: a holder finding added at a line its holder
+does not keep has no column of its own; `dla ledger add` warns and names
+the lines.

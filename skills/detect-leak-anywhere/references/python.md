@@ -74,7 +74,7 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   holds it, then one finding at the holder. Run `dla harness run H --mode <m> --capture alloc,heap` as soon as a trend
   lists growing lines that no finding is at (the trend says so in `holders_hint`) and the two `dla summarize`
   commands that run prints (`alloc-stack-diff` for the stacks, `heap-graph` for the holders): one capture serves
-  both, and a stack summary made before the finding was added counts for the finding once it exists. Its record lists the holders: `static:<module>.<name>` is a module
+  both, and a stack summary made before the finding was added counts for the finding once it exists in the bundle and for the capture offer; `dla ledger label` counts a stack only by its stated ties, so when it refuses for that, its fix is the summarize command of that capture with `--finding F`. Its record lists the holders: `static:<module>.<name>` is a module
   global or a class attribute (static/global), `stack:<function>@<file:line>` a function frame
   (blocked-stack), and a holder keyed by a bare `file:line` with `unreferenced` is held from native code or
   by a reference lost there. Each holder lists the lines it keeps (`sites`: it keeps at least a quarter of the
