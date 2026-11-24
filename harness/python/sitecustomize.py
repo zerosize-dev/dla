@@ -186,6 +186,138 @@ def _start_coverage():
         return
 
 
+# ---------------------------------------------------------------------------------------------
+# line counts: how often a target line was executed (DLA_LINES)
+# ---------------------------------------------------------------------------------------------
+#
+# Function coverage says that a function ran, not that one of its lines did: a line on a branch
+# the unit does not take allocates nothing, so no block of it stays, and that is no evidence
+# against a leak at the line. `dla harness run` names the lines it needs in DLA_LINES (a comma
+# list of project-relative `file:line`: the sites of the findings the harness targets, and the
+# site of the finding an alloc-test is about). The agent counts how often each one was executed
+# and every checkpoint and exit record carries `line_counts`: `{"file:line": count}` since the
+# process started, a line never executed with 0. With no DLA_LINES nothing is installed and no
+# record has the key.
+#
+# 3.12 and newer: `sys.monitoring`. A PY_START callback looks at each code object once; only a
+# code object that holds a target line gets LINE events (`set_local_events`), and the lines of it
+# that are not targets disable themselves at their first event. The cost of a target is one Python
+# call per execution of its line; a function with no target line costs one PY_START call per code
+# object, once. Older interpreters (and DLA_LINES_MODE=settrace, which forces it for a test) use a
+# `sys.settrace` function that is asked once per frame (a function call) and returns a line tracer
+# only for a frame whose code holds a target line: every call of any function costs one Python
+# call, and the lines of a target function cost one each.
+
+_LINES_CAP = 200
+_lines = {"on": False, "counts": {}, "mode": None, "note": None}
+
+
+def _line_targets():
+    """`{project-relative file: {line numbers}}` from DLA_LINES, at most `_LINES_CAP` lines."""
+    raw = _env("DLA_LINES")
+    targets = {}
+    if raw is None:
+        return targets
+    taken = 0
+    for item in raw.split(","):
+        item = item.strip()
+        file, _, line = item.rpartition(":")
+        if not file or not line.isdigit() or taken >= _LINES_CAP:
+            continue
+        targets.setdefault(file.replace("\\", "/"), set()).add(int(line))
+        taken += 1
+    return targets
+
+
+def _start_lines():
+    """Installs the counting for the lines of DLA_LINES. Never raises."""
+    targets = _line_targets()
+    if not targets:
+        return
+    _lines["counts"] = {f"{rel}:{n}": 0 for rel, wanted in targets.items() for n in wanted}
+    counts = _lines["counts"]
+    by_code = {}  # code object -> {line: "file:line"} of its target lines, or None
+
+    def held(code):
+        """`{line: site}` of the target lines the code object holds, else None."""
+        try:
+            rel = _project_rel(code.co_filename) or _source_rel(code.co_filename)
+            wanted = targets.get(rel) if rel else None
+            if not wanted:
+                return None
+            lines = {ln for _start, _end, ln in code.co_lines() if ln in wanted}
+            return {ln: f"{rel}:{ln}" for ln in lines} or None
+        except BaseException:
+            return None
+
+    mon = getattr(sys, "monitoring", None)
+    if mon is not None and _env("DLA_LINES_MODE") != "settrace":
+        tool = None
+        for tool_id in (3, 4, 5, 2):
+            try:
+                mon.use_tool_id(tool_id, "dla-lines")
+                tool = tool_id
+                break
+            except BaseException:
+                continue
+        if tool is not None:
+            def on_start(code, offset):
+                try:
+                    got = held(code)
+                    if got is not None:
+                        by_code[code] = got
+                        mon.set_local_events(tool, code, mon.events.LINE)
+                except BaseException:
+                    pass
+                return mon.DISABLE
+
+            def on_line(code, line):
+                site = by_code.get(code, {}).get(line)
+                if site is None:
+                    return mon.DISABLE
+                counts[site] += 1
+                return None
+
+            try:
+                mon.register_callback(tool, mon.events.PY_START, on_start)
+                mon.register_callback(tool, mon.events.LINE, on_line)
+                mon.set_events(tool, mon.events.PY_START)
+                _lines.update(on=True, mode="monitoring")
+                return
+            except BaseException:
+                try:
+                    mon.free_tool_id(tool)
+                except BaseException:
+                    pass
+    if sys.gettrace() is not None:
+        _lines["note"] = "line counts unavailable: another tool already traces this process (sys.settrace)"
+        return
+    unset = object()
+
+    def line_tracer(frame, event, arg):
+        if event == "line":
+            site = by_code[frame.f_code].get(frame.f_lineno)
+            if site is not None:
+                counts[site] += 1
+        return line_tracer
+
+    def call_tracer(frame, event, arg):
+        code = frame.f_code
+        got = by_code.get(code, unset)
+        if got is unset:
+            got = by_code[code] = held(code)
+        if got is None:
+            return None
+        return line_tracer
+
+    try:
+        sys.settrace(call_tracer)
+        threading.settrace(call_tracer)
+        _lines.update(on=True, mode="settrace")
+    except BaseException:
+        _lines["note"] = "line counts unavailable: sys.settrace could not be installed"
+
+
 def _chain_sitecustomize():
     """Import the next sitecustomize on sys.path (the project's or the system's), if any."""
     global _chain_error
@@ -1961,6 +2093,47 @@ def _heap_gen_live(gen):
         return False
 
 
+_TEST_RUNNER_TOPS = frozenset(("pytest", "_pytest", "unittest", "pluggy", "nose", "nose2", "doctest"))
+
+
+def _is_test_code_rel(rel):
+    """True for a project-relative path that is test code: a directory named `test` or `tests`, a
+    file `test_*.py`, `*_test.py` or `conftest.py`."""
+    parts = rel.split("/")
+    name = parts[-1]
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    return (
+        any(d in ("test", "tests") for d in parts[:-1])
+        or stem.startswith("test_")
+        or stem.endswith("_test")
+        or name == "conftest.py"
+    )
+
+
+def _holder_of(modname):
+    """Whose a root is, by the module that holds it: "project" (a module of a project source file
+    that is not test code), "tests" (the driver module `__main__` or the harness's own, a module of
+    a test runner, a file of test code), None when it is neither (a library, the standard library).
+    Never raises."""
+    try:
+        name = str(modname)
+        top = name.split(".")[0]
+        if name == "__main__" or top in _TEST_RUNNER_TOPS or top in ("dla_harness", "dla_pytest_loop", "sitecustomize"):
+            return "tests"
+        mod = sys.modules.get(name)
+        filename = getattr(mod, "__file__", None) if mod is not None else None
+        if not filename:
+            return None
+        if _harness_file(filename):
+            return "tests"
+        rel = _project_rel(filename) or _source_rel(filename)
+        if rel is None:
+            return None
+        return "tests" if _is_test_code_rel(rel) else "project"
+    except BaseException:
+        return None
+
+
 def _heap_chain(items, root, raw):
     """`(root dict, steps)` for one path (items of `_heap_items`, the object first), as written."""
     kind, thing = root
@@ -1971,10 +2144,16 @@ def _heap_chain(items, root, raw):
         name, holder = thing
         named = True
         rootd["module"] = _heap_cut(name)
+        of = _holder_of(name)
+        if of is not None:
+            rootd["of"] = of
     elif kind == "class-attribute":
         cls, holder = thing
         named = True
         rootd["class"] = _heap_cut(_type_name(cls))
+        of = _holder_of(getattr(cls, "__module__", None))
+        if of is not None:
+            rootd["of"] = of
     elif kind == "frame":
         holder = thing
         code = getattr(thing, "f_code", None) or getattr(thing, "gi_code", None) or getattr(thing, "cr_code", None)
@@ -2294,6 +2473,10 @@ def _build(phase, x, last):
         del objs, types_full
         mark_phase(f"{phase} record at x={x}: probes")
         rec["probes"] = _probes(limitations)
+        if _lines["on"]:
+            rec["line_counts"] = dict(_lines["counts"])
+        elif _lines["note"]:
+            limitations.append(_lines["note"])
         # A driver writes no `exit` record, so its last checkpoint carries the section, and so do
         # the first, second, fourth, eighth... (a driver cut off by its timeout never writes the
         # last one). The harness takes the union of all of them.
@@ -2389,6 +2572,7 @@ def _init():
         _install_resource_warnings()
     _start_memray()
     _start_coverage()
+    _start_lines()
     _install_gc_freeze()
     atexit.register(_exit_dump)
     tick = _env("DLA_TICK_MS")

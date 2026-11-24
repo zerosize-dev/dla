@@ -124,6 +124,9 @@ pub struct RunOptions {
     /// that fed it, and the finding it belongs to. The loop writes its per-class figures to
     /// `harness/<H>/attribution-<F>.json` ([`dla_core::testloop::attribution_path`]).
     pub attribute: Option<Attribution>,
+    /// Python: lines (`file:line`) whose executions the agent counts besides the sites of the
+    /// harness's targets (`DLA_LINES`): the site of the finding an alloc-test is about.
+    pub lines: Vec<String>,
 }
 
 /// The holder a test loop attributes to its test classes (`dla alloc-test <H> --finding <F>`).
@@ -152,6 +155,7 @@ impl Default for RunOptions {
             tool: None,
             pace_seed: Vec::new(),
             attribute: None,
+            lines: Vec::new(),
         }
     }
 }
@@ -835,6 +839,9 @@ struct Paths {
     source: Option<String>,
     /// The run's consent allows raw values in captures (`DLA_RAW_VALUES` for a Python agent).
     raw_values: bool,
+    /// Python: the lines whose executions the agent counts (`DLA_LINES`): the sites of the
+    /// harness's targets, and what the run adds.
+    lines: Vec<String>,
     /// The shared lock on `work/`, held for as long as the run reads or runs in it; `None` in
     /// tests that build a `Paths` by hand.
     _work_lock: Option<scratch::WorkGuard>,
@@ -878,10 +885,16 @@ impl Paths {
             .ok()
             .and_then(|s| s.consent)
             .is_some_and(|c| c.raw_values);
+        let lines = if manifest.runtime == dla_core::runtime::Runtime::Python {
+            target_lines(ctx, manifest)
+        } else {
+            Vec::new()
+        };
         Ok(Self {
             packages,
             source,
             raw_values,
+            lines,
             out: hdir.join(OUT),
             logs: hdir.join(LOGS),
             cov: hdir.join(COV),
@@ -903,6 +916,79 @@ impl Paths {
             .to_string_lossy()
             .replace('\\', "/")
     }
+}
+
+/// Writes `harness/<H>/lines-<S>.json` when the records of the points carry line counts: per
+/// line, one count per point of the series. Never fails the run (the file is a reading aid).
+fn write_line_runs(ctx: &ToolCtx, manifest: &HarnessManifest, series: &str, points: &[PointInput]) {
+    let mut sites: std::collections::BTreeMap<String, Vec<Option<f64>>> = Default::default();
+    for p in points {
+        for site in p
+            .rec
+            .iter()
+            .filter_map(|r| r.dump.line_counts.as_ref())
+            .flat_map(|c| c.keys())
+        {
+            sites.entry(site.clone()).or_default();
+        }
+    }
+    if sites.is_empty() {
+        return;
+    }
+    for (site, counts) in &mut sites {
+        *counts = points
+            .iter()
+            .map(|p| {
+                p.rec
+                    .as_ref()
+                    .and_then(|r| r.dump.line_counts.as_ref())
+                    .and_then(|c| c.get(site).copied())
+            })
+            .collect();
+    }
+    let _ = dla_core::harness::LineRuns {
+        dla_line_runs: 1,
+        series: series.to_owned(),
+        sites,
+    }
+    .save(&ctx.run_dir, &manifest.id);
+}
+
+/// The most lines the agent is asked to count.
+const MAX_LINES: usize = 200;
+
+/// The sites (`file:line`) of the findings a Python harness targets: the lines whose executions
+/// the agent counts (`DLA_LINES`).
+fn target_lines(ctx: &ToolCtx, manifest: &HarnessManifest) -> Vec<String> {
+    let Ok(ledger) = ctx.ledger() else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    for id in &manifest.targets {
+        let site = ledger.finding(id).and_then(|f| {
+            f.site
+                .clone()
+                .or_else(|| ledger.finding(&f.root_id()).and_then(|r| r.site.clone()))
+        });
+        if let Some(site) = site
+            && !out.contains(&site)
+        {
+            out.push(site);
+        }
+    }
+    out
+}
+
+/// `DLA_LINES`: the lines the agent counts, at most [`MAX_LINES`], without a repeat.
+fn lines_env(lines: &[String]) -> Option<String> {
+    let mut all: Vec<&str> = Vec::new();
+    for l in lines {
+        if !all.contains(&l.as_str()) && !l.contains(',') {
+            all.push(l);
+        }
+    }
+    all.truncate(MAX_LINES);
+    (!all.is_empty()).then(|| all.join(","))
 }
 
 fn cwd_of(paths: &Paths, spec: &CommandSpec) -> PathBuf {
@@ -1202,6 +1288,9 @@ impl PointEnv<'_> {
             && std::env::var_os("PYTHONDONTWRITEBYTECODE").is_none()
         {
             set("PYTHONDONTWRITEBYTECODE", "1".to_owned());
+        }
+        if let Some(v) = lines_env(&self.paths.lines) {
+            set("DLA_LINES", v);
         }
         set("DLA_ITER", self.n.to_string());
         set("DLA_TICK_MS", "100".to_owned());
@@ -2760,7 +2849,11 @@ pub fn run_points(
         ..opts.clone()
     };
     let (asked, opts) = (opts.capture, &masked);
-    let paths = Paths::new(ctx, manifest)?;
+    let mut paths = Paths::new(ctx, manifest)?;
+    if manifest.runtime == dla_core::runtime::Runtime::Python {
+        paths.lines.extend(opts.lines.iter().cloned());
+    }
+    let paths = paths;
     let reuse = dla_core::harness::dependency_env_to_reuse(&ctx.run_dir, &manifest.id);
     let mut dependency_env = dla_core::harness::current_dependency_env();
     dependency_env.extend(reuse.iter().cloned());
@@ -3012,6 +3105,7 @@ pub fn run_points(
         };
         let series = build_series(ctx, manifest, &params, &run.points);
         series.save(&ctx.run_dir).map_err(|e| e.to_refusal())?;
+        write_line_runs(ctx, manifest, &series.id, &run.points);
         out.points = out
             .points
             .max(u32::try_from(series.points.len()).unwrap_or(u32::MAX));
@@ -4479,6 +4573,7 @@ mod tests {
             packages: None,
             source: None,
             raw_values: false,
+            lines: Vec::new(),
             _work_lock: None,
         }
     }

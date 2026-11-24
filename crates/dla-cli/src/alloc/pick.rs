@@ -94,6 +94,8 @@ pub struct AbsentSite {
     pub column: String,
     /// The line it counts (`file:line`).
     pub site: String,
+    /// The series whose trend showed the column grow (`S3`): the growth was measured there.
+    pub series: String,
 }
 
 /// The newest trend report of a series of harness `harness` (a harness series first, then
@@ -304,6 +306,7 @@ fn vanished_site_column(
                 Some(AbsentSite {
                     column: c.name.clone(),
                     site: dla_core::grown::column_site(c)?.to_owned(),
+                    series: t.series.clone(),
                 })
             })
     })

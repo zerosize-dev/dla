@@ -1141,13 +1141,31 @@ pub(crate) fn harness_not_about(
     )
 }
 
+/// How the run reads the line whose allocation-site count column is missing from the series.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LineRan {
+    /// The line's own execution count rose over the measured points.
+    Line,
+    /// The function of the line ran and the count of the line did not rise: the unit takes
+    /// another branch.
+    FunctionOnly,
+    /// The series has no count of the line, and the function of it ran.
+    NoCountFunctionRan,
+    /// The series has no count of the line, and nothing says that the function ran.
+    NoCount,
+    /// The line did not run and neither did its function (or coverage cannot tell).
+    NotReached,
+}
+
 /// What the run says of a finding whose allocation-site count column (`gone`) grew in a trend of
-/// the run and is not in the new series: the verdict, the basis and the limitation that carries
-/// the reading. The agent writes only the sites that grew, so the absence means that none of the
-/// blocks of the line stayed, or that the line did not run. The coverage of this run (its
-/// `executed.json`, read as `dla trend` reads it) tells which: a function of the line that ran
-/// (`executed`, `constant`, `grew`, `changed`) makes it a measurement, non-leak; one that did not
-/// run, was not loaded, or that coverage cannot tell, leaves it inconclusive.
+/// the run and is not in the new series: the verdict, the basis, the limitation that carries the
+/// reading and how far the unit got. The agent writes only the sites that grew, so the absence
+/// means that none of the blocks of the line stayed, or that the line did not run. The agent's
+/// count of the executions of the line itself (`harness/<H>/lines-<S>.json`) tells which: a count
+/// that rose makes it a measurement, non-leak. The function of the line having run is not enough:
+/// a line on a branch the unit does not take allocates nothing, so nothing stays. A function that
+/// ran with a line count that did not rise, and a series with no line count at all (an old agent,
+/// another runtime, a point that lost its sections), leave it inconclusive.
 #[allow(clippy::too_many_arguments)]
 fn absent_site_reading(
     run_dir: &Path,
@@ -1158,7 +1176,7 @@ fn absent_site_reading(
     trend: &TrendReport,
     root: &FindingId,
     gone: &pick::AbsentSite,
-) -> (Favors, String, String) {
+) -> (Favors, String, String, LineRan) {
     use dla_core::trend::Verdict;
     let executed = HarnessManifest::dir_in(run_dir, &manifest.id)
         .join(dla_workload::harness::cover::EXECUTED_FILE);
@@ -1180,18 +1198,48 @@ fn absent_site_reading(
             verdict = by_coverage;
         }
     }
+    let function_ran = matches!(
+        verdict.verdict,
+        Verdict::Executed | Verdict::Constant | Verdict::Grew | Verdict::Changed
+    );
     let (col, site, h) = (&gone.column, &gone.site, &manifest.id);
-    match verdict.verdict {
-        Verdict::Executed | Verdict::Constant | Verdict::Grew | Verdict::Changed => (
-            Favors::NonLeak,
+    let span = dla_core::harness::LineRuns::load(run_dir, h, &series.id)
+        .and_then(|r| r.span(site, series.warmup as usize));
+    match span {
+        Some((first, last)) if last > first => {
+            let n = (last - first) as u64;
+            (
+                Favors::NonLeak,
+                format!(
+                    "the line ran {n} times in this series and none of its blocks stayed ({site} of {root}; {col}, which counted growth at that line in another series, is not in this one)"
+                ),
+                format!(
+                    "{col} is not in this series, and the agent writes only the sites that grew: the agent counted {n} executions of the line {site} over the measured points, so the line ran and none of its blocks stayed"
+                ),
+                LineRan::Line,
+            )
+        }
+        Some(_) if function_ran => (
+            Favors::Inconclusive,
             format!(
-                "the function of the line {site} of {root} ran in this series and none of its blocks stayed: {col}, which counted growth at that line in another series, is not in this one ({})",
-                verdict.detail
+                "the function of {site} ran but the line itself did not (a branch the unit does not take)"
             ),
             format!(
-                "{col} is not in this series, and the agent writes only the sites that grew: the function of {site} ran ({}), so the line ran and none of its blocks stayed",
+                "{col} is not in this series and the agent's count of the executions of {site} did not rise over the measured points: the function ran ({}) but the line did not, so nothing was measured at the line",
                 verdict.detail
             ),
+            LineRan::FunctionOnly,
+        ),
+        None if function_ran => (
+            Favors::Inconclusive,
+            format!(
+                "this series has no count of how often the line {site} ran, so the absence of {col} proves nothing about it"
+            ),
+            format!(
+                "{col} is not in this series and the series has no count of the executions of {site} (an old agent, another runtime, or a point that lost its sections): the function ran ({}), which does not say that the line did, so the result is inconclusive",
+                verdict.detail
+            ),
+            LineRan::NoCountFunctionRan,
         ),
         _ => (
             Favors::Inconclusive,
@@ -1200,8 +1248,42 @@ fn absent_site_reading(
                 "{col} is not in this series and the run does not show that the function of {site} ran ({}): the unit of {h} does not reach {site}, so nothing was measured at the line",
                 verdict.detail
             ),
+            if span.is_some() {
+                LineRan::NotReached
+            } else {
+                LineRan::NoCount
+            },
         ),
     }
+}
+
+/// The lines whose executions the agent counts in an alloc-test of `finding`: its site, and the
+/// line of every allocation-site count column that grew in a trend of the run and is tied to it.
+fn lines_of_finding(ledger: &Ledger, finding: &Finding, trends: &[&TrendReport]) -> Vec<String> {
+    let root = finding.root_id();
+    let mut out: Vec<String> = Vec::new();
+    let mut add = |site: &str| {
+        let site = site.trim();
+        if !site.is_empty() && !out.iter().any(|s| s == site) {
+            out.push(site.to_owned());
+        }
+    };
+    let root_f = ledger.finding(&root).unwrap_or(finding);
+    for f in [root_f, finding] {
+        if let Some(site) = &f.site {
+            add(site);
+        }
+    }
+    for c in trends.iter().flat_map(|t| t.columns.iter()) {
+        if dla_core::grown::is_alloc_site_column(&c.name)
+            && dla_core::grown::counts_as_growth(c)
+            && dla_core::grown::column_tied_to(ledger, c, &root)
+            && let Some(site) = dla_core::grown::column_site(c)
+        {
+            add(site);
+        }
+    }
+    out
 }
 
 /// Runs `dla alloc-test`.
@@ -1277,6 +1359,16 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
             .as_ref()
             .map_or(1, |_| manifest.warmup + manifest.iterations + 1),
         attribute: attribution_target(&manifest, bound.as_ref()),
+        // Python: the agent counts how often the lines of the finding run, so that a line on a
+        // branch the unit does not take is told from a line that ran and kept nothing.
+        lines: match (&bound, manifest.runtime) {
+            (Some(f), Runtime::Python) => {
+                let earlier = TrendReport::load_all(&tc.run_dir);
+                let refs: Vec<&TrendReport> = earlier.iter().collect();
+                lines_of_finding(&ledger, f, &refs)
+            }
+            _ => Vec::new(),
+        },
         ..RunOptions::default()
     };
     let out = run_points(&tc, &manifest, &opts)?;
@@ -1376,11 +1468,12 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     // The verdict: the bound column's, or the voting columns together, with the required
     // columns able to hold a non-leak verdict back.
     let (favors, supports, held_back) = decide(&results, &picked);
-    // The count column of the finding's line is missing from this series: the coverage of the
-    // run says whether the line ran, and that decides.
+    // The count column of the finding's line is missing from this series: the agent's count of
+    // the executions of the line says whether the line ran, and that decides.
+    let mut line_ran: Option<LineRan> = None;
     let (favors, supports) = match (&picked.absent_site.clone(), bound.as_ref()) {
         (Some(gone), Some(f)) => {
-            let (favors, basis, note) = absent_site_reading(
+            let (favors, basis, note, ran) = absent_site_reading(
                 &tc.run_dir,
                 project,
                 &ledger,
@@ -1400,6 +1493,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
                 None => limitations.push(note.clone()),
             }
             picked.note = Some(note);
+            line_ran = Some(ran);
             (favors, Vec::new())
         }
         _ => (favors, supports),
@@ -1646,13 +1740,35 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     };
     // The unit does not reach the line: a longer run decides nothing, the unit has to call it.
     let next = match (&picked.absent_site, favors, bound.as_ref()) {
-        (Some(gone), Favors::Inconclusive, Some(f)) => vec![format!(
-            "make the unit of {h} call the function of the line {site} (edit the hooks of its driver), then dla harness run {h} --mode {mode}, dla trend <S>, dla alloc-test {h} --finding {root}",
-            h = a.harness,
-            site = gone.site,
-            mode = key_mode(&manifest).as_str(),
-            root = f.root_id()
-        )],
+        (Some(gone), Favors::Inconclusive, Some(f)) => {
+            let root = f.root_id();
+            let how = match line_ran {
+                Some(LineRan::FunctionOnly | LineRan::NoCountFunctionRan) => {
+                    "make the unit of {h} execute the line {site} itself: call the function with what takes the branch of the line (edit the hooks of its driver)"
+                }
+                _ => {
+                    "make the unit of {h} call the function of the line {site} (edit the hooks of its driver)"
+                }
+            };
+            let mut v: Vec<String> = Vec::new();
+            // The harness of the series that showed the growth has the unit that reaches the line.
+            if let Some(measured) = SeriesFile::load(&tc.run_dir, &gone.series)
+                .ok()
+                .and_then(|s| s.source.harness)
+                .filter(|m| m != &a.harness)
+            {
+                v.push(format!(
+                    "dla alloc-test {measured} --finding {root}   (the growth was measured there)"
+                ));
+            }
+            v.push(format!(
+                "{}, then dla harness run {h} --mode {mode}, dla trend <S>, dla alloc-test {h} --finding {root}",
+                how.replace("{h}", &a.harness).replace("{site}", &gone.site),
+                h = a.harness,
+                mode = key_mode(&manifest).as_str(),
+            ));
+            v
+        }
         _ => next,
     };
     let next = say_how_long_a_held_plateau_needs(next, favors, &results, &picked);

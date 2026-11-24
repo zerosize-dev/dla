@@ -1380,6 +1380,10 @@ pub struct HarnessDump {
     /// from such a record may exist with a smaller count, so its absence is not a zero.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_capped: Option<Vec<String>>,
+    /// How often each line the run asked about (`DLA_LINES`) was executed since the process
+    /// started: `file:line` to count, a line never executed 0 (the Python agent's `line_counts`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_counts: Option<BTreeMap<String, f64>>,
     /// Unsymbolized allocation stacks from the allocator shim: stack key to
     /// `{live_bytes, live_blocks, allocs, frames: [{a, m, o}]}` (hex strings), kept as
     /// JSON because its shape belongs to the shim.
@@ -1409,6 +1413,57 @@ pub struct HarnessDump {
     /// Files the agent wrote for `DLA_CAPTURE` at this record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub captures: Option<Vec<DumpCapture>>,
+}
+
+/// The file of a series that holds how often the lines the harness run asked about were
+/// executed at each of its points: `harness/<H>/lines-<S>.json`.
+pub fn line_runs_path(run_dir: &Path, harness: &str, series: &str) -> PathBuf {
+    HarnessManifest::dir_in(run_dir, harness).join(format!("lines-{series}.json"))
+}
+
+/// How often a line was executed, at each point of a series (the Python agent's `line_counts`,
+/// per point): written by `dla harness run` beside the series, read by `dla alloc-test`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct LineRuns {
+    /// Version of this file (1).
+    #[serde(default)]
+    pub dla_line_runs: u32,
+    /// The series the points belong to.
+    #[serde(default)]
+    pub series: String,
+    /// `file:line` to one count per point of the series, `null` where the point's record had no
+    /// count for the line (a point that lost its sections, an agent that does not count).
+    #[serde(default)]
+    pub sites: BTreeMap<String, Vec<Option<f64>>>,
+}
+
+impl LineRuns {
+    /// Reads the file of `series`; `None` when there is none or it cannot be read.
+    pub fn load(run_dir: &Path, harness: &str, series: &str) -> Option<Self> {
+        let text = fs::read_to_string(line_runs_path(run_dir, harness, series)).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    /// Writes the file atomically.
+    pub fn save(&self, run_dir: &Path, harness: &str) -> Result<(), Error> {
+        let path = line_runs_path(run_dir, harness, &self.series);
+        write_atomic(&path, to_pretty_json(self).as_bytes())
+    }
+
+    /// What the counts of `site` say over the points after the `warmup` ones: `Some((first,
+    /// last))`, the count at the first and at the last of them that has one, when two points have
+    /// one; `None` when the series has no count of the line (or only one point has).
+    pub fn span(&self, site: &str, warmup: usize) -> Option<(f64, f64)> {
+        let counts: Vec<f64> = self
+            .sites
+            .get(site)?
+            .iter()
+            .skip(warmup)
+            .flatten()
+            .copied()
+            .collect();
+        (counts.len() >= 2).then(|| (counts[0], counts[counts.len() - 1]))
+    }
 }
 
 /// How the in-run readings of a record were taken (Go command mode).

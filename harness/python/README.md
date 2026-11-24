@@ -144,6 +144,19 @@ command that measures again) instead of `not_loaded`. The agent also says `reduc
   last point), so the load does not show as memory the purge failed to return; `gc` records the
   `os.*` values before the forced collection and after it.
 - `coverage`: `{"kind":"functions","items":[...]}` on 3.12+, else a limitation.
+- `line_counts`, in every checkpoint and exit record of a process that was given `DLA_LINES` (a comma list of
+  project-relative `file:line`: `dla harness run` names the sites of the findings the harness targets, and
+  `dla alloc-test` adds the site of the finding it is about): `{"file:line": n}`, how often that LINE was executed since
+  the process started (a line never executed is 0). Function coverage says only that a function ran; a line on a branch
+  the unit does not take allocates nothing, so a count column that is absent from a series says nothing about that line
+  unless the line ran. On 3.12 and newer the count comes from `sys.monitoring` LINE events set only on the code
+  objects that hold a target line (one PY_START call per code object, once; the other lines of such a function disable
+  themselves at their first event): about 0.6 microsecond for each execution of a target line and nothing for any other
+  line or function (measured: a function with one target line, 11 ns more per call when the branch is not taken, 575 ns
+  more when it is). Older interpreters use `sys.settrace`, asked once per frame and following only a frame whose code
+  holds a target line (about 1.1 microsecond for every function call of the process and 0.8 microsecond for each line
+  of a target function); `DLA_LINES_MODE=settrace` forces it on any version. A process that another tool already
+  traces gets no counts and a limitation says so. With no `DLA_LINES` nothing is installed and no record has the key.
 
 ## Raw captures (`dla harness run --capture histogram,alloc,nonheap`)
 
@@ -188,7 +201,7 @@ step with `repeat`. Chains with the same types, links and root are one group wit
 and for which no object was found says so in `note` (native code holds the blocks, or a reference was lost there).
 Values are not written: a dict key is shown as its type unless `DLA_RAW_VALUES` is a true value (`1`, `true`, `yes`,
 `on`); `dla harness run --capture heap` sets it to `1` when the run's consent allows raw values and leaves it unset
-otherwise. `dla summarize heap-graph` reads the file (`py-retain`): one holder per distinct root, with the lines it
+otherwise. A `module-global` or `class-attribute` root also says whose it is, `"of"`: `"project"` for a module of a project source file that is not test code, `"tests"` for the driver module (`__main__`, the harness's own), a module of a test runner (`pytest`, `unittest`...) and a file under a directory named `test` or `tests`, named `test_*.py` or `*_test.py` or `conftest.py`; a library or the standard library has no `of`. `dla summarize heap-graph` reads the file (`py-retain`): one holder per distinct root, with the lines it
 keeps and the chain with the most objects. Bounds, all constants in the agent: 12 sites, 40 kept objects per site, 40 steps from the object to the root, and a time bound for the whole
 capture of 60 s (`DLA_HEAP_SECS` changes it; checked between objects; what was not done is said in `limitations`).
 A step with `repeat` also lists the distinct places the run names (`ats`, at most 6, in the order met; `at` is the first). A walk that reaches an object whose way to a root is known already (every chain of a stored exception raised again and again runs through the same traceback list) stops there and takes the rest of that way, so the list is walked once; a run of tracebacks is kept as one item and rendered as one step. `at` names a file like the growing lines (relative to the project, in the copy and in the source tree of an editable install alike); a file outside the project is `<outside>/<file name>`. Everything the capture builds is freed before it returns.

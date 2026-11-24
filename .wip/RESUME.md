@@ -2299,3 +2299,29 @@ flat test-loop readings get only 9 second looks.
   early-return driver gives inconclusive; refute refused; finding at the holder confirmed);
   static and dynamic bench; CI on a snapshot; then main.
 - While H builds: do not edit the tree. Next brief to write: family B, the Go test loop.
+
+## 13:00 UTC 2026-11-24 (approx.): priorities re-ranked by two checks; builder G started
+
+- Check 1 (by hand, u110): `go test -count=3` against `-count=23` with `-memprofilerate=1` on
+  the Go project's own packages shows NO growth at the documented site (the tests use a fresh
+  meter each). A test loop for Go would not have found that leak. Family B is no longer second.
+- Check 2: why the Go holder was no candidate (frozen P7 census on u110/otel-go: 439 candidates,
+  three in meter.go, none for `instruments`). Cause in the code: crates/dla-census/src/lang/go.rs
+  takes a container field only of a long-lived owner; model.rs `note_fields` records held types
+  with `caps_idents` (upper-case identifiers only), so unexported Go types never join the
+  long-lived closure; and a type built inside a function called from a package-level `var`
+  initializer is not long-lived either. General for Go.
+- Builder G (Sonnet, background) started: brief wip-notes/go-census-brief.md, scratch u111,
+  edits only under crates/dla-census/, runs beside builder H in the same tree (told to retry
+  builds that fail elsewhere). I add its VERIFY row and re-run static acceptance myself on the
+  combined tree.
+- Replay script u109/walk_otel.py (frozen build first: output dir u109/before, task bclsmzgt0):
+  driver A reproduces the growth (lines 173, 212, 510, 540 at 2.0 per iteration); the frozen
+  build's summary `next` does propose the finding at the holder
+  (`--owner opentelemetry.metrics._internal._PROXY_METER_PROVIDER`), so the tool had the answer
+  and the workflow dropped it.
+- Also seen: logstash's confirmed leak came from a census candidate and a model-written driver
+  (H7), not from the test loop.
+- Remaining ideas, not started: C (show the guard of a writer that did not run; fastrace needs
+  more units than a capacity constant), E (heap growth held by runtime internals in Node: look
+  at what the two captures of the Node run showed).

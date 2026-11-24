@@ -109,6 +109,9 @@ pub fn parse_record(line: &str) -> Option<Rec> {
             }
         }
     }
+    if let Some(Value::Object(l)) = obj.get_mut("line_counts") {
+        l.retain(|_, x| x.is_number());
+    }
     for key in ["groups", "group_counts"] {
         if let Some(Value::Object(g)) = obj.get_mut(key) {
             g.retain(|_, v| v.is_object());
@@ -149,6 +152,7 @@ pub fn parse_record(line: &str) -> Option<Rec> {
                 "detectors",
                 "limitations",
                 "purge",
+                "line_counts",
                 "group_counts",
                 "group_capped",
                 "groups",
