@@ -725,13 +725,13 @@ fn source_regexes(v: &toml::Value, out: &mut Vec<String>) {
     }
 }
 
-/// Runs one printed command and checks it; returns what it tied.
 /// Runs one printed summarize command and checks it, for the policy's captures taken at the
 /// final gate (nothing is tied or confirmed from them).
 pub(super) fn run_summarize(fx: &mut Fx, cmd: &str) {
     summarize(fx, cmd);
 }
 
+/// Runs one printed command and checks it; returns what it tied.
 fn summarize(fx: &mut Fx, cmd: &str) -> Option<Tied> {
     let words = split_command(cmd);
     if words.first().map(String::as_str) != Some("dla")

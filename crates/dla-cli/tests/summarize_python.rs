@@ -1057,6 +1057,35 @@ fn a_file_of_one_dump_point_is_read_and_the_record_says_growth_was_not_computed(
             .contains("--owner pkg.a._reg"),
         "{v}"
     );
+    // But no line of it grew, so it is not the first thing to act on: no lead in `_attention`,
+    // and the gate has no item for it.
+    let one_project = one.replace(r#""key":"_reg"}"#, r#""key":"_reg","of":"project"}"#);
+    assert_ne!(one_project, one);
+    let p = Project::new();
+    let f = p.put("in/py-1.retain.json", one_project.as_bytes());
+    let v = summarize(&p, "heap-graph", "py-retain", &[f], &[]);
+    let rec = retention(&p).pop().unwrap();
+    assert_eq!(holder(&rec, "static:pkg.a._reg")["of"], "project", "{rec}");
+    assert!(
+        !v.to_string()
+            .contains("A HOLDER OF THE PROJECT HAS NO FINDING"),
+        "{v}"
+    );
+    let (_, gate, _) = run(p.path(), &["gate", "check", "--final"]);
+    assert!(!gate.contains("measured_holder"), "{gate}");
+    // The same holder with a first count below the last leads.
+    let p = Project::new();
+    let grew = one_project.replace(r#""blocks_first":null"#, r#""blocks_first":10"#);
+    let f = p.put("in/py-1.retain.json", grew.as_bytes());
+    let v = summarize(&p, "heap-graph", "py-retain", &[f], &[]);
+    assert!(
+        v.to_string().contains(
+            "A HOLDER OF THE PROJECT HAS NO FINDING: static:pkg.a._reg keeps 1 growing line"
+        ),
+        "{v}"
+    );
+    let (_, gate, _) = run(p.path(), &["gate", "check", "--final"]);
+    assert!(gate.contains("measured_holder"), "{gate}");
 }
 
 #[test]

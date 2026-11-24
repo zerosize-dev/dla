@@ -27,7 +27,6 @@ use crate::{
     attribution::owners_match,
     evidence::{Authority, EvidenceKind, EvidenceRecord, Source},
     finding::{Finding, Polarity},
-    holders,
     ledger::Ledger,
     view::RunView,
 };
@@ -117,10 +116,26 @@ fn holders_of(run_dir: Option<&Path>, rec: &EvidenceRecord) -> Vec<Value> {
     })
 }
 
+/// The growing lines of a `holders` entry. A site whose counts say it did not grow is not one:
+/// `first` null (a file of one dump point, where growth was not computed and the sites are only
+/// the largest at that point) or `last` not above `first`. A site that records no counts is
+/// counted, as an older record lists only growing sites.
 fn lines_of(entry: &Value) -> Vec<String> {
-    holders::entry_sites(entry)
+    let grew = |s: &Value| match s.get("first") {
+        None => true,
+        Some(first) => first
+            .as_u64()
+            .zip(s.get("last").and_then(Value::as_u64))
+            .is_some_and(|(first, last)| last > first),
+    };
+    entry
+        .get("sites")
+        .and_then(Value::as_array)
         .into_iter()
-        .map(str::to_owned)
+        .flatten()
+        .filter(|s| grew(s))
+        .filter_map(|s| s.get("site").and_then(Value::as_str))
+        .map(|s| s.trim().to_owned())
         .collect()
 }
 
@@ -352,5 +367,33 @@ mod tests {
         assert_eq!(Scan::note_for(0), None);
         assert!(Scan::note_for(1).unwrap().contains("1 growing line "));
         assert!(Scan::note_for(3).unwrap().contains("3 growing lines "));
+    }
+
+    #[test]
+    fn a_line_whose_counts_show_no_growth_is_not_a_growing_line() {
+        let entry = |key: &str, of: &str, sites: Value| json!({"key": key, "owner": key.trim_start_matches("static:"), "of": of, "sites": sites});
+        let (dir, l) = ledger_with(
+            json!({"holders": [
+                // One dump point: growth was not computed, the site is only the largest.
+                entry("static:pkg.m.Kind", "project", json!([{"site": "a.py:6", "first": null, "last": 11}])),
+                // Two dump points, no growth.
+                entry("static:pkg.m._flat", "project", json!([{"site": "a.py:8", "first": 30, "last": 30}])),
+                // Two dump points, growth: the one holder that leads.
+                entry("static:pkg.m._reg", "project", json!([
+                    {"site": "a.py:1", "first": 0, "last": 9},
+                    {"site": "a.py:2", "first": null, "last": 40}])),
+                entry("static:tests.t._seen", "tests", json!([{"site": "t.py:3", "first": null, "last": 5}]))
+            ]}),
+            None,
+        );
+        let s = scan_in(&l, Some(dir.path()));
+        assert_eq!(
+            s.project
+                .iter()
+                .map(|p| (p.owner.as_str(), p.lines.clone()))
+                .collect::<Vec<_>>(),
+            [("pkg.m._reg", vec!["a.py:1".to_owned()])]
+        );
+        assert!(s.tests_only.is_empty(), "{:?}", s.tests_only);
     }
 }

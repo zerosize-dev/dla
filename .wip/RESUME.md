@@ -3088,3 +3088,25 @@ unattended run at a time and no builder beside it.
   987170a, so either the tree's changes (N, W, N2, queue fix) broke it or it is a flake. Wait for
   N2's report; then run it alone on main's build and on the tree's build to tell which.
 - Next: N2 report -> verify -> full-tree CI -> one commit (N + N2 + W + queue fix) -> preview.8.
+
+## 22:55 UTC 2026-11-24: N2 done and verified; one more defect fixed by me; full tree to CI
+
+- N2 report: capture rule repaired (A: alloc-stack summary counts for the harness its capture
+  files lie under, via captures[].label of the raw file; B: MIN_CAPTURE_GROWTH_BYTES 64 KiB floor
+  over the series span). Whole dynamic run: 62/64 pass, 1 xfail, 1 FAIL python-zstd-options-3145.
+  I checked one of its mutations (floor 0 -> a_row_under_the_growth_floor... fails).
+- The FAIL, diagnosed by me: the policy's residual capture on that decoy is command mode, one
+  dump per process; py-retain file has one dump point (blocks_first null: "growth was not
+  computed"), yet the summary led with "A HOLDER OF THE PROJECT HAS NO FINDING: static:...Tenant
+  keeps 1 growing line" (a class object created after the first snapshot) and the final gate
+  listed measured_holder. General defect of the holder-first rule (546b74c) exposed by captures.
+- Fixed by me: measured_holders.rs `lines_of` counts a site only when first is known and last >
+  first (no counts at all = older record, counted); py_retain.rs `needs_a_finding` and the
+  attention count use `Held::grew`; next still lists the add command. Tests: dla-core unit
+  `a_line_whose_counts_show_no_growth_is_not_a_growing_line`; summarize_python test extended
+  (no lead, no gate item for one point; lead and item with first 10). Both mutations caught.
+  VERIFY row added. Fixture passes again. ops.rs doc comment order fixed.
+- Checks: fmt, clippy, dla-core lib 303, holder_first 16, summarize_python 23, gate_flow 13,
+  residual_capture 5, skill_text 28, queue 16.
+- Next: full-tree CI (this snapshot), Python fixtures locally; then one commit to main
+  (N + N2 + W + queue fix + this), messages 25 + 28 + N2 section + this; then preview.8.
