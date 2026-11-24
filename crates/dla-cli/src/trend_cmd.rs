@@ -496,6 +496,9 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
             ),
         );
     }
+    if let Some(hint) = holders_hint(ctx, &main.series, &next) {
+        out.insert("holders_hint".into(), json!(hint));
+    }
     out.insert("next".into(), json!(next));
     if let Some(line) = dla_core::series::choices_line(&main.series) {
         out.insert("choices".into(), json!(line));
@@ -514,6 +517,28 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         }
     }
     Ok(Value::Object(out))
+}
+
+/// The sentence that rides with the add command of a growing `py.blocks@<file:line>` line that no
+/// finding is at, while the harness has no holder-chains capture: the line says where the objects
+/// were made, a `--capture heap` run says who keeps them. Once per trend, in a key the output
+/// bound never cuts.
+fn holders_hint(ctx: &Ctx, series: &dla_core::SeriesFile, next: &[String]) -> Option<String> {
+    next.iter().find(|n| {
+        n.starts_with("dla ledger add --origin growth-series ")
+            && n.contains("# no finding there; py.blocks@")
+    })?;
+    let h = series.source.harness.as_deref()?;
+    let m = dla_core::HarnessManifest::load(&ctx.run_dir, h).ok()?;
+    if !dla_workload::harness::capture::heap_is_holder_chains(m.runtime)
+        || m.captures.iter().any(|f| f.path.ends_with(".retain.json"))
+    {
+        return None;
+    }
+    Some(format!(
+        "a py.blocks@ line says where the objects were made, not who keeps them: run `dla harness run {h} --mode {} --capture heap` and the `dla summarize heap-graph` command it prints; add the finding at the holder, not one per line",
+        mode_name(series)
+    ))
 }
 
 /// The registration site of the first detector hit with one, in the run that wrote `series`.

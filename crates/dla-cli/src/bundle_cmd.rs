@@ -661,40 +661,82 @@ fn naming_records(ledger: &dla_core::Ledger, f: &dla_core::Finding) -> Vec<Evide
     out
 }
 
-/// The allocation capture files `harness/<H>/captures.json` lists (kind `alloc`), with the
-/// time the list was written; `None` when there is no such list or it names none.
+/// The files `harness/<H>/captures.json` lists that lead to the growing line (kind `alloc`, and,
+/// for a runtime whose heap capture is the holder chains of the objects, the chains file), with
+/// the time the list was written; `None` when there is no such list or it names no allocation
+/// capture.
 fn alloc_captures(
     run_dir: &Path,
     harness: &str,
 ) -> Option<(Vec<dla_core::harness::CaptureFile>, std::time::SystemTime)> {
+    use dla_core::harness::CaptureKind;
     let path = dla_core::HarnessManifest::dir_in(run_dir, harness).join("captures.json");
     let v: Value = serde_json::from_str(&fs::read_to_string(&path).ok()?).ok()?;
     let files: Vec<dla_core::harness::CaptureFile> =
         serde_json::from_value(v.get("files")?.clone()).ok()?;
+    let chains = |f: &dla_core::harness::CaptureFile| {
+        f.kind == CaptureKind::Heap && f.path.ends_with(".retain.json")
+    };
+    let has_alloc = files.iter().any(|f| f.kind == CaptureKind::Alloc);
     let files: Vec<_> = files
         .into_iter()
-        .filter(|f| f.kind == dla_core::harness::CaptureKind::Alloc)
+        .filter(|f| f.kind == CaptureKind::Alloc || chains(f))
         .collect();
     let at = fs::metadata(&path).and_then(|m| m.modified()).ok()?;
-    (!files.is_empty()).then_some((files, at))
+    (has_alloc && !files.is_empty()).then_some((files, at))
 }
 
-/// True when an allocation-stack record was made from files of `files`: the raw file of the
-/// summary (`alloc/A<n>.json`) lists the sha256 of each input in its `captures` array, and the
-/// file of the capture has that digest.
-fn summarized(
-    run_dir: &Path,
+/// The summarize commands of the capture `files` that were not run: an `alloc-stack-diff`
+/// command is run when an allocation-stack record was made from one of its files, a `heap-graph`
+/// command when a retention-path record was. The raw file of a summary lists the sha256 of each
+/// input in its `captures` array (`alloc/A<n>.json`, `retain/R<n>.json`), and the file of the
+/// capture has that digest.
+fn unrun_commands(
+    tc: &ToolCtx,
     ledger: &dla_core::Ledger,
     files: &[dla_core::harness::CaptureFile],
-) -> bool {
-    let digests: Vec<String> = files
-        .iter()
-        .filter_map(|f| fs::read(run_dir.join(&f.path)).ok())
-        .map(|b| sha(&b))
+) -> (Vec<String>, usize) {
+    let base = tc.pointer("");
+    let all: Vec<String> =
+        dla_workload::harness::capture::summarize_commands(files, &|p| tc.pointer(p), false)
+            .into_iter()
+            .filter(|c| {
+                c.starts_with("dla summarize alloc-stack-diff ")
+                    || c.starts_with("dla summarize heap-graph ")
+            })
+            .collect();
+    let total = all.len();
+    let unrun = all
+        .into_iter()
+        .filter(|c| {
+            let kind = if c.starts_with("dla summarize alloc-stack-diff ") {
+                EvidenceKind::AllocStack
+            } else {
+                EvidenceKind::RetentionPath
+            };
+            let digests: Vec<String> = c
+                .split_whitespace()
+                .skip(3)
+                .filter_map(|p| p.strip_prefix(&base))
+                .filter_map(|rel| fs::read(tc.run_dir.join(rel)).ok())
+                .map(|b| sha(&b))
+                .collect();
+            !made_from(&tc.run_dir, ledger, kind, &digests)
+        })
         .collect();
+    (unrun, total)
+}
+
+/// True when a record of `kind` was made from a file with one of `digests`.
+fn made_from(
+    run_dir: &Path,
+    ledger: &dla_core::Ledger,
+    kind: EvidenceKind,
+    digests: &[String],
+) -> bool {
     ledger
         .evidence()
-        .filter(|e| e.kind == EvidenceKind::AllocStack)
+        .filter(|e| e.kind == kind)
         .filter_map(|e| contained(run_dir, e.raw.as_deref()?))
         .filter_map(|p| serde_json::from_slice::<Value>(&fs::read(p).ok()?).ok())
         .any(|raw| {
@@ -755,30 +797,46 @@ fn stacks_check(
         .iter()
         .filter_map(|(h, _)| alloc_captures(&tc.run_dir, h).map(|(files, at)| (h, files, at)))
         .collect();
-    if let Some((h, _, _)) = captured
+    // Per capture: the summarize commands of it that were not run, and how many it has.
+    let pending: Vec<_> = captured
         .iter()
-        .find(|(_, files, _)| summarized(&tc.run_dir, &view.ledger, files))
+        .map(|(h, files, at)| (h, unrun_commands(tc, &view.ledger, files), *at))
+        .collect();
+    if let Some((h, _, _)) = pending
+        .iter()
+        .find(|(_, (unrun, total), _)| unrun.is_empty() && *total > 0)
     {
         return Ok(Some(format!(
             "an allocation capture of {h} was summarized and no growing stack ends at the finding's line, so the bundle holds no stack and no excerpt"
         )));
     }
-    // Captured and never summarized: the summarize command of the newest capture is the fix.
-    if let Some((h, files, _)) = captured.iter().max_by_key(|(_, _, at)| *at) {
-        let cmd =
-            dla_workload::harness::capture::summarize_commands(files, &|p| tc.pointer(p), false)
-                .into_iter()
-                .find(|c| c.starts_with("dla summarize alloc-stack-diff "));
-        if let Some(cmd) = cmd {
-            return Err(Failure::refuse(
-                core_codes::STACKS_NOT_CAPTURED,
-                format!(
-                    "an allocation capture of {h} exists and was not summarized, so no stack is tied to {id}; the bundle would give the verifier no stack and no source excerpt"
-                ),
-                format!("an alloc-stack record made from the capture of {h}"),
-                format!("{cmd} ; then dla bundle {id} again"),
-            ));
-        }
+    // Captured and not summarized: every command of the newest capture that was not run is the
+    // fix.
+    if let Some((h, (cmds, total), _)) = pending
+        .iter()
+        .filter(|(_, (unrun, _), _)| !unrun.is_empty())
+        .max_by_key(|(_, _, at)| *at)
+    {
+        let what = if cmds.len() == *total {
+            "was not summarized"
+        } else {
+            "was only partly summarized"
+        };
+        return Err(Failure::refuse(
+            core_codes::STACKS_NOT_CAPTURED,
+            format!(
+                "an allocation capture of {h} exists and {what}, so no stack is tied to {id}; the bundle would give the verifier no stack and no source excerpt"
+            ),
+            format!(
+                "{} made from the capture of {h}",
+                if *total > 1 {
+                    "an alloc-stack record and a retention record"
+                } else {
+                    "an alloc-stack record"
+                }
+            ),
+            format!("{} ; then dla bundle {id} again", cmds.join(" ; ")),
+        ));
     }
     // A hook driver (entry-path, probe or batch) first, else the test loop, else the first.
     let (h, m) = harnesses
@@ -787,7 +845,8 @@ fn stacks_check(
         .or_else(|| harnesses.iter().find(|(_, m)| m.is_test_loop()))
         .unwrap_or(&harnesses[0]);
     let mode = crate::alloc_cmd::key_mode(m).as_str();
-    let commands = crate::alloc_cmd::stacks_commands(h, mode, &id.to_string(), "the line");
+    let commands =
+        crate::alloc_cmd::stacks_commands(m.runtime, h, mode, &id.to_string(), "the line");
     let loop_note = if m.is_test_loop() {
         format!(
             " A capture slows a test loop; a probe driver is the cheaper route: dla harness gen --lang {} --driver --probe {id}, then run it the same way.",
@@ -796,6 +855,15 @@ fn stacks_check(
     } else {
         String::new()
     };
+    let then = if dla_workload::harness::capture::heap_is_holder_chains(m.runtime) {
+        format!(
+            "the two dla summarize commands that run prints (alloc-stack-diff ties the stacks at the line to {id}, heap-graph names who holds the objects of the line)"
+        )
+    } else {
+        format!(
+            "the dla summarize alloc-stack-diff command that run prints (it ties the stacks at the line to {id})"
+        )
+    };
     Err(Failure::refuse(
         core_codes::STACKS_NOT_CAPTURED,
         format!(
@@ -803,7 +871,7 @@ fn stacks_check(
         ),
         format!("an allocation capture of {h} (harness/{h}/captures.json)"),
         format!(
-            "{} ; then the dla summarize alloc-stack-diff command that run prints (it ties the stacks at the line to {id}) ; then dla bundle {id} again.{loop_note}",
+            "{} ; then {then} ; then dla bundle {id} again.{loop_note}",
             commands[0]
         ),
     ))
@@ -915,6 +983,50 @@ fn entry_path_files(
         out.push(entry);
     }
     Ok(out)
+}
+
+/// What a harness is, in plain words: the project's own tests in a loop, a driver made for the
+/// finding or for other targets, or a command of the project.
+fn harness_words(
+    m: &dla_core::HarnessManifest,
+    about: &dla_core::grown::HarnessAbout,
+) -> &'static str {
+    use dla_core::grown::HarnessAbout;
+    if m.is_test_loop() {
+        "the project's own tests in a loop"
+    } else if m.mode == dla_core::harness::HarnessMode::Driver {
+        if matches!(
+            about,
+            HarnessAbout::Target | HarnessAbout::EntryPath | HarnessAbout::Probe
+        ) {
+            "a driver made for this finding"
+        } else {
+            "a driver for other targets"
+        }
+    } else {
+        "a command of the project"
+    }
+}
+
+/// The `harnesses` of `index.json`: the harnesses the evidence of the bundle comes from, each
+/// with its id, what it is in plain words, the units it runs per round and its key modes. It
+/// names no finding and no site: the verifier learns from it whether the growth was reproduced
+/// by a driver made for the line or only by a loop over the project's tests.
+fn harness_list(tc: &ToolCtx, id: &FindingId) -> Vec<Value> {
+    let Ok(view) = dla_core::RunView::load_for(&tc.run_dir, tc.worker.as_deref()) else {
+        return Vec::new();
+    };
+    dla_core::grown::harnesses_about(&view, id)
+        .into_iter()
+        .map(|(m, about)| {
+            json!({
+                "id": m.id,
+                "is": harness_words(&m, &about),
+                "units_per_round": m.step,
+                "key_modes": m.key_modes.iter().map(|k| k.as_str()).collect::<Vec<_>>(),
+            })
+        })
+        .collect()
 }
 
 /// At most this many test-loop harnesses go into a bundle.
@@ -1139,6 +1251,10 @@ fn build(
     if !tests.is_empty() {
         index["test_loop"] = Value::Array(tests);
     }
+    let behind = harness_list(tc, id);
+    if !behind.is_empty() {
+        index["harnesses"] = Value::Array(behind);
+    }
     if let Some(o) = owner {
         index["owner"] = json!(o);
     }
@@ -1172,6 +1288,42 @@ fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_harness_is_told_in_plain_words_without_a_finding_or_a_site() {
+        use dla_core::grown::HarnessAbout;
+        let m = |mode: &str, tools: &[&str]| -> dla_core::HarnessManifest {
+            serde_json::from_value(json!({
+                "id": "H3", "runtime": "python", "mode": mode, "scratch": "x",
+                "run": {"argv": ["x"], "cwd": "."}, "warmup": 1, "iterations": 8, "step": 50,
+                "key_modes": ["fresh", "repeated"], "agent": "driver-python", "timeout_secs": 60,
+                "tools": tools,
+            }))
+            .unwrap()
+        };
+        let probe = HarnessAbout::Probe;
+        let column = HarnessAbout::Column("py.blocks@a.py:1".into());
+        assert_eq!(
+            harness_words(&m("driver", &[]), &probe),
+            "a driver made for this finding"
+        );
+        assert_eq!(
+            harness_words(&m("driver", &[]), &HarnessAbout::Target),
+            "a driver made for this finding"
+        );
+        assert_eq!(
+            harness_words(&m("driver", &[]), &column),
+            "a driver for other targets"
+        );
+        assert_eq!(
+            harness_words(&m("driver", &["pytest-loop"]), &column),
+            "the project's own tests in a loop"
+        );
+        assert_eq!(
+            harness_words(&m("command", &[]), &HarnessAbout::OwnWorkload),
+            "a command of the project"
+        );
+    }
 
     #[test]
     fn the_newest_two_records_of_each_kind_that_name_the_finding_are_taken() {

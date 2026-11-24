@@ -217,10 +217,65 @@ fn file_names_classify_and_each_format_gets_its_own_command() {
 }
 
 #[test]
-fn python_keeps_histogram_alloc_and_nonheap() {
+fn python_keeps_heap_histogram_alloc_and_nonheap() {
     let all: capture::CaptureSet = "all".parse().unwrap();
     let py = all.intersect(&capture::supported(dla_core::runtime::Runtime::Python));
-    assert_eq!(py.names(), ["histogram", "nonheap", "alloc"]);
+    assert_eq!(py.names(), ["heap", "histogram", "nonheap", "alloc"]);
+    let heap: capture::CaptureSet = "heap".parse().unwrap();
+    assert_eq!(
+        heap.intersect(&capture::supported(dla_core::runtime::Runtime::Python))
+            .names(),
+        ["heap"]
+    );
+}
+
+#[test]
+fn the_holder_chains_file_is_a_heap_capture_with_a_heap_graph_command_of_its_own() {
+    let c = capture::classify("py-1.retain.json").unwrap();
+    assert_eq!((c.0, c.1), (CaptureKind::Heap, 1));
+    assert!(capture::classify("py-x.retain.json").is_none());
+    let file = |kind, label: &str, seq: u32, x: f64, tail: &str| CaptureFile {
+        kind,
+        path: format!("p/capture/7/py-{seq}.{tail}.json"),
+        label: label.to_owned(),
+        seq,
+        x: Some(x),
+        role: None,
+        bytes: 10,
+        ms: None,
+        captured_at: String::new(),
+    };
+    let files = vec![
+        file(CaptureKind::Alloc, "p1-fresh", 1, 100.0, "alloc"),
+        file(CaptureKind::Heap, "p1-fresh", 1, 400.0, "retain"),
+    ];
+    let cmds = capture::summarize_commands(&files, &|p| p.to_owned(), false);
+    assert_eq!(
+        cmds,
+        [
+            "dla summarize heap-graph p/capture/7/py-1.retain.json",
+            "dla summarize alloc-stack-diff p/capture/7/py-1.alloc.json"
+        ]
+    );
+    // Command mode, one process per point: only the newest file is read.
+    let points: Vec<CaptureFile> = (1..=3u32)
+        .map(|k| {
+            let mut f = file(
+                CaptureKind::Heap,
+                &format!("p{k}-native"),
+                1,
+                f64::from(k) * 100.0,
+                "retain",
+            );
+            f.path = format!("p{k}/capture/{k}/py-1.retain.json");
+            f
+        })
+        .collect();
+    let cmds = capture::summarize_commands(&points, &|p| p.to_owned(), false);
+    assert_eq!(
+        cmds,
+        ["dla summarize heap-graph p3/capture/3/py-1.retain.json"]
+    );
 }
 
 #[test]
@@ -1072,5 +1127,267 @@ fn a_probe_never_imports_and_says_so_for_shapes_a_project_really_has() {
             .contains("were not loaded by the workload and were not imported")
             && l.as_str().unwrap().contains("pkg.sub")),
         "{limits:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// `dla harness run --capture heap`: the file, its listing and the raw-values switch
+
+/// A run directory with consent for tier 1 (raw values as given), the agent files in
+/// `harness/H1/agent` and a scratch project with one module that keeps an object per call under
+/// one dictionary key.
+struct Driven {
+    _dir: tempfile::TempDir,
+    ctx: dla_core::toolctx::ToolCtx,
+    hdir: PathBuf,
+}
+
+fn driven(raw_values: bool) -> Driven {
+    use dla_core::{
+        Ledger,
+        state::{Consent, ConsentGiver, RunState, now_utc},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    let run_dir = project.join(".dla/r1");
+    fs::create_dir_all(&run_dir).unwrap();
+    let mut st =
+        RunState::init(project.to_str().unwrap(), Some("s"), 3600, None, now_utc()).unwrap();
+    st.run_id = "r1".into();
+    st.consent = Some(Consent {
+        tiers: vec![1],
+        raw_values,
+        given_by: ConsentGiver::Runner,
+        recorded_at: now_utc(),
+    });
+    st.save(&run_dir).unwrap();
+    Ledger::create(&run_dir).unwrap();
+    let ctx = dla_core::toolctx::ToolCtx {
+        project,
+        run_dir: run_dir.clone(),
+        run_id: "r1".into(),
+        source_commit: "abc".into(),
+        data_flag: None,
+        worker: None,
+    };
+    let hdir = run_dir.join("harness/H1");
+    let (work, agent) = (hdir.join("work"), hdir.join("agent"));
+    fs::create_dir_all(&agent).unwrap();
+    fs::create_dir_all(&work).unwrap();
+    for e in fs::read_dir(repo().join("harness/python"))
+        .unwrap()
+        .flatten()
+    {
+        if e.path().is_file() {
+            fs::copy(e.path(), agent.join(e.file_name())).unwrap();
+        }
+    }
+    fs::write(
+        work.join("held.py"),
+        "KEPT = {}\n\n\ndef keep(i):\n    KEPT.setdefault('zz_marker_key', []).append(object())\n",
+    )
+    .unwrap();
+    Driven {
+        _dir: dir,
+        ctx,
+        hdir,
+    }
+}
+
+/// Runs the driver of `d` with `capture` and returns the outcome's run directory listing.
+fn run_driven(d: &Driven, capture: &str) {
+    use dla_core::{
+        harness::{AgentKind, CommandSpec, HarnessManifest, HarnessMode},
+        runtime::Runtime,
+        series::KeyMode,
+    };
+    let (work, agent) = (d.hdir.join("work"), d.hdir.join("agent"));
+    let setup = format!(
+        "import os, held\n    _state['held'] = held\n    open({:?}, 'w').write(os.environ.get('DLA_RAW_VALUES', 'unset'))",
+        d.hdir.join("raw-env.txt").to_string_lossy()
+    );
+    let tmpl = fs::read_to_string(agent.join("dla_harness.py")).unwrap();
+    let driver = tmpl
+        .replace("@@DLA_STEP@@", "40")
+        .replace("@@DLA_WARMUP@@", "1")
+        .replace("@@DLA_ROUNDS@@", "3")
+        .replace("@@DLA_REPEAT@@", "50")
+        .replace(
+            "raise NotImplementedError(\"DLA-HOOK setup has not been filled in\")",
+            &setup,
+        )
+        .replace(
+            "raise NotImplementedError(\"DLA-HOOK unit has not been filled in\")",
+            "_state['held'].keep(i)",
+        );
+    fs::create_dir_all(d.hdir.join("driver")).unwrap();
+    fs::write(d.hdir.join("driver/dla_harness.py"), &driver).unwrap();
+    fs::write(work.join("dla_harness.py"), &driver).unwrap();
+    let m = HarnessManifest {
+        sibling_of: Default::default(),
+        purpose: None,
+        targets: Vec::new(),
+        schema_version: 1,
+        id: "H1".into(),
+        runtime: Runtime::Python,
+        mode: HarnessMode::Driver,
+        workload: Some("test".into()),
+        scratch: "harness/H1/work".into(),
+        build: None,
+        run: CommandSpec {
+            argv: vec![
+                "python3".into(),
+                work.join("dla_harness.py").to_string_lossy().into_owned(),
+            ],
+            cwd: ".".into(),
+            env: vec![(
+                "PYTHONPATH".to_owned(),
+                format!("{}:{}", agent.display(), work.display()),
+            )],
+        },
+        iter_arg: Some("{n}".into()),
+        warmup: 1,
+        iterations: 3,
+        step: 40,
+        key_modes: vec![KeyMode::Fresh],
+        probes: vec![],
+        agent: AgentKind::DriverPython,
+        detectors: vec![],
+        tools: vec![],
+        gaps: vec![],
+        timeout_secs: 120,
+        ffi: None,
+        captures: vec![],
+    };
+    m.save(&d.ctx.run_dir).unwrap();
+    fs::write(d.hdir.join("probes.json"), r#"{"probes":[]}"#).unwrap();
+    let opts = dla_workload::harness::run::RunOptions {
+        capture: capture.parse().unwrap(),
+        ..Default::default()
+    };
+    dla_workload::harness::run::run(&d.ctx, "H1", &opts).unwrap();
+}
+
+fn retain_file(d: &Driven) -> PathBuf {
+    let mut found = Vec::new();
+    let out = d.hdir.join("out");
+    for e in walk(&out) {
+        if e.file_name().is_some_and(|n| n == "py-1.retain.json") {
+            found.push(e);
+        }
+    }
+    assert_eq!(found.len(), 1, "{found:?}");
+    found.pop().unwrap()
+}
+
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let mut v = Vec::new();
+    for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            v.extend(walk(&p));
+        } else {
+            v.push(p);
+        }
+    }
+    v
+}
+
+#[test]
+fn a_heap_capture_run_writes_the_chains_file_lists_it_and_prints_its_summarize_command() {
+    if !have_python() {
+        return;
+    }
+    let d = driven(false);
+    run_driven(&d, "heap");
+    let file = retain_file(&d);
+    let doc = json(&file);
+    assert_eq!(doc["dla_pyretain"], 1, "{doc}");
+    let sites = doc["sites"].as_array().unwrap();
+    assert!(
+        sites.iter().any(|s| s["site"]
+            .as_str()
+            .is_some_and(|x| x.starts_with("held.py:"))
+            && s["chains"][0]["root"]["kind"] == "module-global"
+            && s["chains"][0]["root"]["key"] == "KEPT"),
+        "{doc}"
+    );
+    // captures.json lists it as a heap capture and prints the heap-graph command for it.
+    let list = json(&d.hdir.join("captures.json"));
+    let files = list["files"].as_array().unwrap();
+    let entry = files
+        .iter()
+        .find(|f| {
+            f["path"]
+                .as_str()
+                .is_some_and(|p| p.ends_with("py-1.retain.json"))
+        })
+        .unwrap_or_else(|| panic!("{list}"));
+    assert_eq!(entry["kind"], "heap", "{entry}");
+    assert_eq!(entry["seq"], 1);
+    let cmds: Vec<&str> = list["summarize"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(
+        cmds.iter()
+            .any(|c| c.starts_with("dla summarize heap-graph ") && c.ends_with("py-1.retain.json")),
+        "{cmds:?}"
+    );
+    // The agent's own record lists the file too (the run lists only what the agent confirms).
+    let out_records: Vec<Value> = walk(&d.hdir.join("out"))
+        .iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        .flat_map(|p| {
+            fs::read_to_string(p)
+                .unwrap()
+                .lines()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        })
+        .filter_map(|l| serde_json::from_str(&l).ok())
+        .collect();
+    assert!(
+        out_records
+            .iter()
+            .flat_map(captures)
+            .any(|c| c["kind"] == "heap" && c["file"] == "py-1.retain.json"),
+        "{out_records:?}"
+    );
+    // `all` includes it for a Python harness.
+    let d = driven(false);
+    run_driven(&d, "all");
+    retain_file(&d);
+}
+
+#[test]
+fn the_agent_gets_raw_values_only_when_the_runs_consent_allows_them() {
+    if !have_python() {
+        return;
+    }
+    let without = driven(false);
+    run_driven(&without, "heap");
+    assert_eq!(
+        fs::read_to_string(without.hdir.join("raw-env.txt")).unwrap(),
+        "unset"
+    );
+    let text = fs::read_to_string(retain_file(&without)).unwrap();
+    assert!(!text.contains("zz_marker_key"), "{text}");
+    let with = driven(true);
+    run_driven(&with, "heap");
+    assert_eq!(
+        fs::read_to_string(with.hdir.join("raw-env.txt")).unwrap(),
+        "1"
+    );
+    let text = fs::read_to_string(retain_file(&with)).unwrap();
+    assert!(text.contains("zz_marker_key"), "{text}");
+    // A run that asks for no heap capture never passes the switch, whatever the consent.
+    let none = driven(true);
+    run_driven(&none, "histogram");
+    assert_eq!(
+        fs::read_to_string(none.hdir.join("raw-env.txt")).unwrap(),
+        "unset"
     );
 }

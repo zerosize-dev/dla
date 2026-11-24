@@ -802,6 +802,17 @@ fn five_sites() -> (tempfile::TempDir, PathBuf) {
         .map(|e| e.path())
         .find(|p| p.join("series/S1.json").exists())
         .unwrap();
+    // The harness already has a holder-chains capture: the trend adds no `holders_hint`, so the
+    // 2 KB output bound these tests read the lists through is the one they were written for.
+    let mut m = dla_core::HarnessManifest::load(&run_dir, "H1").unwrap();
+    m.captures = vec![
+        serde_json::from_value(serde_json::json!({
+            "kind": "heap", "path": "harness/H1/out/p1-fresh/capture/1/py-1.retain.json",
+            "label": "p1-fresh", "seq": 1, "bytes": 10, "captured_at": ""
+        }))
+        .unwrap(),
+    ];
+    m.save(&run_dir).unwrap();
     let columns: Vec<Value> = (1..=5)
         .map(|k| {
             serde_json::json!({"name": format!("py.blocks@s{k}.py:1"), "unit": "count",
@@ -1040,7 +1051,7 @@ fn leak_at_the_line(r: &Run) -> (String, String, Value) {
     (f, e, a)
 }
 
-const CAPTURE: &str = "dla harness run H1 --mode fresh --capture alloc";
+const CAPTURE: &str = "dla harness run H1 --mode fresh --capture alloc,heap";
 
 fn next_lines(v: &Value) -> Vec<&str> {
     v["next"]
@@ -1057,13 +1068,18 @@ fn a_finding_at_a_growing_line_reaches_the_verifier_with_its_stack() {
         return;
     }
     let r = prepared();
+    // The untied line gets the add command and the sentence about who holds its objects.
+    assert!(r.trend()["holders_hint"].as_str().is_some());
     let (f, e, a) = leak_at_the_line(&r);
+    // With the finding at the line no add command is left, and the sentence goes with it.
+    assert!(r.trend().get("holders_hint").is_none());
     // The alloc-test leads with the capture and the line that says what to do with its output,
     // and carries the sentence in a key the output bound does not cut.
     let next = next_lines(&a);
     assert_eq!(next[0], CAPTURE, "{next:?}");
     assert!(
-        next[1].starts_with("# run the dla summarize alloc-stack-diff command that run prints")
+        next[1].starts_with("# run the two dla summarize commands that run prints")
+            && next[1].contains("heap-graph")
             && next[1].contains(&f)
             && next[1].contains(SITE),
         "{next:?}"
@@ -1102,7 +1118,7 @@ fn a_finding_at_a_growing_line_reaches_the_verifier_with_its_stack() {
             "--mode",
             "fresh",
             "--capture",
-            "alloc",
+            "alloc,heap",
         ],
     );
     // The capture alone is not enough: no stack is tied yet, and the refusal says so and names
@@ -1122,24 +1138,39 @@ fn a_finding_at_a_growing_line_reaches_the_verifier_with_its_stack() {
         again.text
     );
     let fix = again.json["error"]["fix"].as_str().unwrap();
-    let from_fix = fix.split(" ; ").next().unwrap();
-    assert!(
-        from_fix.starts_with("dla summarize alloc-stack-diff "),
-        "{fix}"
-    );
-    let cmd = cap["summary"]["summarize"]
+    // Every summarize command of the capture that was not run, as the capture run printed them.
+    let from_fix: Vec<&str> = fix
+        .split(" ; ")
+        .take_while(|c| c.starts_with("dla summarize "))
+        .collect();
+    let printed: Vec<&str> = cap["summary"]["summarize"]
         .as_array()
         .unwrap_or_else(|| panic!("{cap}"))
         .iter()
         .filter_map(Value::as_str)
-        .find(|c| c.starts_with("dla summarize alloc-stack-diff "))
-        .unwrap_or_else(|| panic!("{cap}"));
-    assert_eq!(
-        cmd, from_fix,
-        "the fix is the command the capture run prints"
+        .collect();
+    assert_eq!(from_fix, printed, "{fix}");
+    assert!(
+        printed
+            .iter()
+            .any(|c| c.starts_with("dla summarize heap-graph "))
+            && printed
+                .iter()
+                .any(|c| c.starts_with("dla summarize alloc-stack-diff ")),
+        "{printed:?}"
     );
-    let args: Vec<&str> = from_fix.split_whitespace().skip(1).collect();
+    let cmd = printed
+        .iter()
+        .find(|c| c.starts_with("dla summarize alloc-stack-diff "))
+        .unwrap();
+    let args: Vec<&str> = cmd.split_whitespace().skip(1).collect();
     let s = ok(&r.project, &args);
+    let heap_cmd = printed
+        .iter()
+        .find(|c| c.starts_with("dla summarize heap-graph "))
+        .unwrap();
+    let h = ok(&r.project, &args_of(heap_cmd));
+    let retention = h["evidence"][0].as_str().unwrap().to_owned();
     // The stack ends at the line of the finding: the evidence names it at once.
     assert_eq!(s["tied"], serde_json::json!([f]), "{s}");
     let record = r
@@ -1160,13 +1191,28 @@ fn a_finding_at_a_growing_line_reaches_the_verifier_with_its_stack() {
             .any(|x| x == SITE),
         "{b}"
     );
+    let bundled = b["evidence"].as_array().unwrap();
+    assert!(bundled.iter().any(|x| *x == stack), "{b}");
+    // The retention record of the holder chains names the finding too (its holder is the site, held
+    // from native code) and rides in the bundle with the sentence that no Python object holds it.
+    assert!(bundled.iter().any(|x| *x == retention.as_str()), "{b}");
+    let dir = r.project.join(b["dir"].as_str().unwrap());
+    let index: Value = serde_json::from_slice(&fs::read(dir.join("index.json")).unwrap()).unwrap();
+    let rec = index["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == retention.as_str())
+        .unwrap_or_else(|| panic!("{index}"));
     assert!(
-        b["evidence"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|x| *x == stack),
-        "{b}"
+        rec["result"]["holders"][0]["unreferenced"]
+            .as_str()
+            .is_some_and(|t| t.contains("native code holds them")),
+        "{rec}"
+    );
+    assert!(
+        index["harnesses"][0]["id"] == "H1" && index["harnesses"][0]["is"].is_string(),
+        "{index}"
     );
     let dir = r.project.join(b["dir"].as_str().unwrap());
     let text = fs::read_to_string(dir.join("excerpt.txt")).unwrap();
@@ -1980,4 +2026,328 @@ fn an_alloc_test_of_a_loop_that_targets_nothing_does_not_hold_the_close() {
     assert!(!out.to_string().contains("leak-favored"), "{out}");
     let closed = resolve_unmeasured(&r, &f, "inconclusive");
     assert_eq!(closed.code, 0, "{}", closed.text);
+}
+
+// ---------------------------------------------------------------------------------------
+// who holds the objects of a growing line
+
+/// A module-level object that stores an exception and raises that same object again: its
+/// traceback grows with every call and keeps the raising frames and their locals, so the lines
+/// that made those locals grow, and nothing at those lines holds them.
+const RERAISE: &str = "\
+class Deferred:
+    def __init__(self, ex):
+        self.ex = ex
+
+    def __getattr__(self, name):
+        raise self.ex
+
+
+_deferred = Deferred(ImportError(\"optional extension missing\"))
+
+
+def touch(i):
+    local = [i]
+    try:
+        _deferred.feature
+    except ImportError:
+        pass
+    return len(local)
+";
+
+/// The line of `local = [i]`, the victim: its objects are the callers' own.
+const VICTIM: &str = "shop/registry.py:13";
+const VICTIM_COLUMN: &str = "py.blocks@shop/registry.py:13";
+const HOLDER_KEY: &str = "static:shop.registry._deferred";
+
+/// Run init, a driver harness whose unit calls `touch`, one run of it (S1) and no census (the
+/// holder is no candidate of the census, as the holder of the real run was not).
+fn prepared_reraise() -> Run {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    write(&project, "shop/__init__.py", "");
+    write(&project, "shop/registry.py", RERAISE);
+    let init = ok(&project, &["run", "init", "--session-id", "t"]);
+    let run_dir = project.join(".dla").join(init["run_id"].as_str().unwrap());
+    ok(&project, &["workload", "discover", "--lang", "python"]);
+    let g = ok(
+        &project,
+        &["harness", "gen", "--lang", "python", "--driver"],
+    );
+    let edit = project.join(g["summary"]["edit"].as_str().unwrap());
+    let text = fs::read_to_string(&edit)
+        .unwrap()
+        .replace(
+            "    raise NotImplementedError(\"DLA-HOOK setup has not been filled in\")",
+            "    from shop import registry\n    _state[\"registry\"] = registry",
+        )
+        .replace(
+            "    raise NotImplementedError(\"DLA-HOOK unit has not been filled in\")",
+            "    _state[\"registry\"].touch(i)",
+        );
+    assert!(!text.contains("has not been filled in"));
+    fs::write(&edit, text).unwrap();
+    ok(&project, &["harness", "run", "H1", "--mode", "fresh"]);
+    Run {
+        _dir: dir,
+        project,
+        run_dir,
+    }
+}
+
+#[test]
+fn a_module_object_that_re_raises_a_stored_exception_is_found_as_the_holder_of_the_lines_it_keeps()
+{
+    if !have_python() {
+        return;
+    }
+    let r = prepared_reraise();
+    // The trend lists the growing lines, says that a line only says where the objects were made,
+    // and names the capture that says who keeps them, in a key the output bound never cuts.
+    let t = r.trend();
+    let growing: Vec<&str> = t["passed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|c| c["column"].as_str())
+        .filter(|c| c.starts_with("py.blocks@"))
+        .collect();
+    assert!(
+        growing.len() >= 2 && growing.contains(&VICTIM_COLUMN),
+        "{t}"
+    );
+    let hint = t["holders_hint"].as_str().unwrap_or_else(|| panic!("{t}"));
+    assert!(
+        hint.contains("not who keeps them")
+            && hint.contains("`dla harness run H1 --mode fresh --capture heap`")
+            && hint.contains("`dla summarize heap-graph`")
+            && hint.contains("not one per line"),
+        "{hint}"
+    );
+    assert!(
+        hint.len() > 160,
+        "the sentence is longer than the cut of a protected value"
+    );
+    // The capture run prints the summarize command of the chains file, and it names the holder.
+    let cap = ok(
+        &r.project,
+        &[
+            "harness",
+            "run",
+            "H1",
+            "--mode",
+            "fresh",
+            "--capture",
+            "heap",
+        ],
+    );
+    let cmd = cap["summary"]["summarize"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{cap}"))
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|c| c.starts_with("dla summarize heap-graph "))
+        .unwrap_or_else(|| panic!("{cap}"));
+    assert!(cmd.ends_with("py-1.retain.json"), "{cmd}");
+    // A harness that has the capture gets no hint for it.
+    assert!(r.trend().get("holders_hint").is_none());
+    let args: Vec<&str> = cmd.split_whitespace().skip(1).collect();
+    let s = ok(&r.project, &args);
+    let record_id = s["evidence"][0].as_str().unwrap().to_owned();
+    let record = r
+        .ledger()
+        .into_iter()
+        .find(|v| v["evidence_id"] == record_id.as_str())
+        .unwrap();
+    assert_eq!(record["kind"], "retention-path");
+    let holder = record["result"]["holders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["key"] == HOLDER_KEY)
+        .unwrap_or_else(|| panic!("{record}"));
+    assert_eq!(holder["holder_kind"], "static/global");
+    let held: Vec<&str> = holder["sites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|s| s["site"].as_str())
+        .collect();
+    assert!(
+        held.contains(&VICTIM) && held.len() >= 2,
+        "the holder keeps the victim line and the others: {held:?}"
+    );
+    // The path runs from a kept object to the holder through the stored exception.
+    let types: Vec<&str> = holder["path"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|s| s["type"].as_str())
+        .collect();
+    assert!(
+        types.contains(&"traceback")
+            && types.contains(&"ImportError")
+            && types.last() == Some(&"shop.registry.Deferred"),
+        "{types:?}"
+    );
+    // `next` prints the command that adds the finding at the holder: its owner is the module
+    // global, its site the place nearest the holder in the chain.
+    let add = s["next"][0].as_str().unwrap();
+    assert!(
+        add.starts_with(&format!("{ADD_PREFIX}{record_id} --site shop/registry.py:"))
+            && add.contains(" --owner shop.registry._deferred ")
+            && add.ends_with(" --region heap --holder static/global"),
+        "{add}"
+    );
+    let args: Vec<&str> = add.split_whitespace().skip(1).collect();
+    let added = ok(&r.project, &args);
+    let f = added["id"].as_str().unwrap().to_owned();
+    // One finding at the holder accounts for every line it keeps: the final gate has no item that
+    // asks for a finding at the victim line, and the item of the column names the finding.
+    let gate = r.final_gate();
+    let items: Vec<&Value> = gate
+        .iter()
+        .filter(|m| {
+            m["kind"] == "trend_column"
+                && m["id"]
+                    .as_str()
+                    .is_some_and(|i| i.contains("py.blocks@shop/registry.py:"))
+        })
+        .collect();
+    assert!(items.len() >= 2, "{gate:?}");
+    for m in &items {
+        let fix = m["fix"].as_str().unwrap();
+        assert!(fix.contains(&f) && !fix.contains("dla ledger add"), "{m}");
+        assert!(
+            m["description"]
+                .as_str()
+                .unwrap()
+                .contains("no disposition"),
+            "{m}"
+        );
+    }
+    assert!(
+        items
+            .iter()
+            .any(|m| m["id"].as_str().unwrap().ends_with(VICTIM_COLUMN)),
+        "{gate:?}"
+    );
+    // A second summary of the same capture states the tie in the record itself.
+    let again = ok(&r.project, &args_of(cmd));
+    let second = r
+        .ledger()
+        .into_iter()
+        .find(|v| v["evidence_id"] == again["evidence"][0])
+        .unwrap();
+    assert_eq!(second["result"]["finding"], f.as_str(), "{second}");
+    assert_eq!(second["result"]["ties"][0]["tie"]["rule"], "holder");
+    // The holder has its finding: no add command for it, the first step of the finding's own
+    // route (the non-leak sibling) instead.
+    let next0 = again["next"][0].as_str().unwrap();
+    assert!(
+        !next0.contains("--origin growth-series") && next0.contains(&format!("--sibling-of {f}")),
+        "{again}"
+    );
+    // The bundle holds the retention record with its path (frames readable) and the harness list.
+    let b = ok(&r.project, &["bundle", &f]);
+    let bundled = b["evidence"].as_array().unwrap();
+    assert!(bundled.iter().any(|x| *x == record_id.as_str()), "{b}");
+    let dir = r.project.join(b["dir"].as_str().unwrap());
+    let index: Value = serde_json::from_slice(&fs::read(dir.join("index.json")).unwrap()).unwrap();
+    let rec = index["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == record_id.as_str())
+        .unwrap();
+    let path = rec["result"]["holders"][0]["path"].as_array().unwrap();
+    assert!(
+        path.iter().any(|s| s["type"] == "ImportError") && path.iter().any(|s| s["at"].is_string()),
+        "{rec}"
+    );
+    let raw_name = rec["file"].as_str().unwrap();
+    let raw = fs::read_to_string(dir.join(raw_name)).unwrap();
+    assert!(
+        raw.contains("\"paths\"") && raw.contains("ImportError"),
+        "{raw}"
+    );
+    assert_eq!(index["excerpt"], "excerpt.txt");
+    let hs = &index["harnesses"];
+    assert_eq!(hs[0]["id"], "H1", "{index}");
+    assert!(hs[0]["is"].as_str().unwrap().contains("driver"), "{hs}");
+    assert!(hs[0]["units_per_round"].as_u64().unwrap() > 0, "{hs}");
+    assert!(
+        hs[0]["key_modes"].as_array().is_some_and(|m| !m.is_empty()),
+        "{hs}"
+    );
+    let text = hs.to_string();
+    assert!(
+        !text.contains(&f) && !text.contains("shop/registry.py"),
+        "{text}"
+    );
+}
+
+fn args_of(cmd: &str) -> Vec<&str> {
+    cmd.split_whitespace().skip(1).collect()
+}
+
+#[test]
+fn a_capture_with_one_of_its_two_summarize_commands_run_lists_the_other_in_the_refusal() {
+    if !have_python() {
+        return;
+    }
+    let r = prepared();
+    let cap = ok(
+        &r.project,
+        &[
+            "harness",
+            "run",
+            "H1",
+            "--mode",
+            "fresh",
+            "--capture",
+            "alloc,heap",
+        ],
+    );
+    let printed: Vec<&str> = cap["summary"]["summarize"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{cap}"))
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    // The stacks are summarized before any finding exists at the line: the record names none.
+    let stacks = printed
+        .iter()
+        .find(|c| c.starts_with("dla summarize alloc-stack-diff "))
+        .unwrap();
+    ok(&r.project, &args_of(stacks));
+    let (f, e, _) = leak_at_the_line(&r);
+    ok(&r.project, &["ledger", "confirm", &f, "--evidence", &e]);
+    let refused = dla(&r.project, &["bundle", &f]);
+    assert_eq!(
+        refused.json["error"]["code"], "stacks-not-captured",
+        "{}",
+        refused.text
+    );
+    assert!(
+        refused.json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("only partly summarized"),
+        "{}",
+        refused.text
+    );
+    let fix = refused.json["error"]["fix"].as_str().unwrap();
+    let heap = printed
+        .iter()
+        .find(|c| c.starts_with("dla summarize heap-graph "))
+        .unwrap();
+    assert!(
+        fix.starts_with(heap) && !fix.contains("dla summarize alloc-stack-diff"),
+        "{fix}"
+    );
+    // Run it: the retention record names the finding by its line, and the bundle is written.
+    ok(&r.project, &args_of(heap));
+    let b = ok(&r.project, &["bundle", &f]);
+    assert_eq!(b["excerpt"], true, "{b}");
 }

@@ -60,8 +60,15 @@ const PROTECTED: [&str; 9] = [
 /// Sentences that name the next step; a cut one reads as a different instruction: never shrunk.
 /// `junit_hint` and `pytest_hint` point at the project's own tests as a hookless harness;
 /// `queue_next` is the queue's next command with the count of what is left; `stacks_hint` is the
-/// alloc-test's sentence about capturing the stacks that lead to a growing allocation line.
-const KEPT_WHOLE: [&str; 4] = ["junit_hint", "pytest_hint", "queue_next", "stacks_hint"];
+/// alloc-test's sentence about capturing the stacks that lead to a growing allocation line;
+/// `holders_hint` is the trend's sentence about capturing who holds the objects of such a line.
+const KEPT_WHOLE: [&str; 5] = [
+    "junit_hint",
+    "pytest_hint",
+    "queue_next",
+    "stacks_hint",
+    "holders_hint",
+];
 
 /// Longest string kept whole in a protected value.
 const PROTECTED_STR: usize = 160;
@@ -271,7 +278,8 @@ mod tests {
 
     #[test]
     fn the_stacks_hint_of_an_alloc_test_is_never_cut() {
-        let hint = crate::alloc_cmd::stacks_hint("H1", "fresh", "F1");
+        let hint =
+            crate::alloc_cmd::stacks_hint(dla_core::runtime::Runtime::Python, "H1", "fresh", "F1");
         assert!(hint.len() > PROTECTED_STR, "{}", hint.len());
         let v = json!({
             "ok": true,
@@ -291,6 +299,24 @@ mod tests {
         let b = bound(Value::Object(o));
         assert!(serde_json::to_string(&b).unwrap().len() < MAX_OUTPUT_BYTES);
         assert_eq!(b["stacks_hint"], hint);
+    }
+
+    #[test]
+    fn the_holders_hint_of_a_trend_is_never_cut() {
+        let hint = format!(
+            "a py.blocks@<file:line> column says where the objects were made, not who keeps them: {} END",
+            "run the capture and read the holder ".repeat(8)
+        );
+        assert!(hint.len() > PROTECTED_STR, "{}", hint.len());
+        let v = json!({
+            "ok": true,
+            "holders_hint": hint,
+            "columns": vec!["a long text ".repeat(20); 40],
+        });
+        let b = bound(v);
+        assert!(serde_json::to_string(&b).unwrap().len() < MAX_OUTPUT_BYTES);
+        assert_eq!(b["truncated"], true);
+        assert_eq!(b["holders_hint"], hint);
     }
 
     #[test]

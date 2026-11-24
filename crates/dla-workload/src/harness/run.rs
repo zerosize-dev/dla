@@ -1189,13 +1189,16 @@ impl PointEnv<'_> {
         if let Some((kinds, full)) = self.capture {
             let v = kinds.env_value(full);
             if !v.is_empty() {
+                let heap = v.split(',').any(|k| k == "heap");
                 set(dla_core::harness::ENV_CAPTURE, v);
                 set(
                     dla_core::harness::ENV_CAPTURE_DIR,
                     self.capture_dir().to_string_lossy().into_owned(),
                 );
                 set(dla_core::harness::ENV_CAPTURE_DUMPS, self.dumps.to_string());
-                if self.paths.raw_values && m.runtime == dla_core::runtime::Runtime::Python {
+                // The Python agent writes dict keys into its holder chains only with this switch.
+                if self.paths.raw_values && m.runtime == dla_core::runtime::Runtime::Python && heap
+                {
                     set(dla_core::harness::ENV_RAW_VALUES, "1".to_owned());
                 }
             }

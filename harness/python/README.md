@@ -156,7 +156,7 @@ and rounds in between); command mode takes one set at exit. Nothing here raises 
 | `alloc` | `py-1.memray.json` | `alloc-stack-diff` (`py-memray`) | allocations still live when the run ended, from memray, when memray imports in the target's interpreter; `DLA_PY_MEMRAY=0` leaves it out |
 | `histogram` | `py-<n>.types.json` | `type-histogram-diff` (`py-types`) | the 300 types with the most instances in `gc.get_objects()`, with shallow `sys.getsizeof` bytes |
 | `nonheap` | `py-<n>.nonheap.json` | `non-heap` (`py-resources`) | threads by name pattern (digit runs as `*`) and by creation site, pending asyncio tasks by coroutine, frame and creation site, ResourceWarnings by allocation site |
-| `heap` | `py-<n>.retain.json` | not read yet | who holds the live objects of the lines that grew (see "Who holds the objects" below); one file, at the last dump point |
+| `heap` | `py-<n>.retain.json` | `heap-graph` (`py-retain`) | who holds the live objects of the lines that grew (see "Who holds the objects" below); one file, at the last dump point |
 
 memray: the tracker starts at interpreter start-up (only when `alloc` is captured and memray imports
 here) and stops at the start of the final record, so the agent's own work is not in the report. The
@@ -185,7 +185,9 @@ refers to this one (`.attr`, `[index]`, `["key"]`, `tb_frame`, `tb_next`, `__tra
 step with `repeat`. Chains with the same types, links and root are one group with a `count`. A site whose blocks grew
 and for which no object was found says so in `note` (native code holds the blocks, or a reference was lost there).
 Values are not written: a dict key is shown as its type unless `DLA_RAW_VALUES` is a true value (`1`, `true`, `yes`,
-`on`). Bounds, all constants in the agent: 12 sites, 40 kept objects per site, 40 steps from the object to the root, and a time bound for the whole
+`on`); `dla harness run --capture heap` sets it to `1` when the run's consent allows raw values and leaves it unset
+otherwise. `dla summarize heap-graph` reads the file (`py-retain`): one holder per distinct root, with the lines it
+keeps and the chain with the most objects. Bounds, all constants in the agent: 12 sites, 40 kept objects per site, 40 steps from the object to the root, and a time bound for the whole
 capture of 60 s (`DLA_HEAP_SECS` changes it; checked between objects; what was not done is said in `limitations`).
 Everything the capture builds is freed before it returns.
 

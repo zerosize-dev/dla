@@ -985,3 +985,50 @@ fn a_finding_whose_holder_is_written_at_a_line_that_grew_in_the_pytest_loop_has_
     site_column_trend(&other, "S1", "pkg/m1.py:9", true);
     assert!(other.triggers().test_loop_harnesses(&f(1)).is_empty());
 }
+
+#[test]
+fn a_driver_made_for_the_finding_that_grew_it_is_named_before_the_loop_over_the_projects_tests() {
+    // The loop of the project's own tests (H1, no target) and a probe driver made for the finding
+    // (H2) both grew F1: the report names the driver and what it varies, not the loop.
+    let run = Run::new(1);
+    run.harness("H1", Kind::PytestLoop, &[]);
+    run.run("S1", "H1", "aa", None, Some(&[(1, Verdict::Grew)]));
+    run.harness("H2", Kind::Hooks, &[1]);
+    run.run(
+        "S2",
+        "H2",
+        "bb",
+        Some("one object per unit, kept by the call"),
+        Some(&[(1, Verdict::Grew)]),
+    );
+    assert_eq!(
+        run.triggers().trigger(&f(1)),
+        Trigger::Reproduced {
+            harness: "H2".into(),
+            varies: "one object per unit, kept by the call".into()
+        }
+    );
+    // Without the driver (or with a driver that did not grow it) the loop is named as before.
+    let run = Run::new(1);
+    run.harness("H1", Kind::PytestLoop, &[]);
+    run.run("S1", "H1", "aa", None, Some(&[(1, Verdict::Grew)]));
+    run.harness("H2", Kind::Hooks, &[1]);
+    run.run("S2", "H2", "bb", Some("x"), Some(&[(1, Verdict::Constant)]));
+    match run.triggers().trigger(&f(1)) {
+        Trigger::Reproduced { harness, varies } => {
+            assert_eq!(harness, "H1");
+            assert!(varies.contains("the project's own tests"), "{varies}");
+        }
+        other => panic!("{other:?}"),
+    }
+    // A driver that is not about the finding (another target) does not take the name.
+    let run = Run::new(2);
+    run.harness("H1", Kind::PytestLoop, &[]);
+    run.run("S1", "H1", "aa", None, Some(&[(1, Verdict::Grew)]));
+    run.harness("H2", Kind::Hooks, &[2]);
+    run.run("S2", "H2", "bb", Some("x"), Some(&[(1, Verdict::Grew)]));
+    match run.triggers().trigger(&f(1)) {
+        Trigger::Reproduced { harness, .. } => assert_eq!(harness, "H1"),
+        other => panic!("{other:?}"),
+    }
+}

@@ -8,7 +8,9 @@
 //! * [`Trigger::Reproduced`]: the finding has the verdict `grew` in the trend of an
 //!   entry-path harness (`dla harness gen --driver --entry`: units call public entry points
 //!   only), or in a harness that runs the project's own workload (a fixed command of the
-//!   project or a JUnit repeat: no hand-written hooks).
+//!   project or a JUnit repeat: no hand-written hooks). When a loop over the project's own tests
+//!   and a driver made for the finding (it targets it) both grew it, the driver and its
+//!   `VARIES.txt` text are named, not the loop.
 //! * [`Trigger::NotFound`]: at least two entry-path harnesses with different driver digests
 //!   targeted it, ran with fresh keys, were read with `dla trend`, and MEASURED the holder
 //!   flat in both (verdict `constant`). Only a measured, flat holder "did not grow".
@@ -643,6 +645,25 @@ impl Triggers {
             };
         }
         if let Some(r) = self.runs.iter().filter(|r| r.own_workload).find(grew) {
+            // A driver made for the finding (it targets it) that grew it too reproduced it
+            // more exactly than a loop over the project's tests, which says nothing about which
+            // call feeds the holder: the report names the driver and what it varies. A unit that
+            // calls the start-up writer itself is the registration, not a reproduction.
+            if let Some(d) = self.runs.iter().filter(|d| d.hook && d.fresh).find(|d| {
+                d.declared.contains(id)
+                    && (d.verdicts.get(id) == Some(&Verdict::Grew) || d.tied.contains(id))
+                    && !self
+                        .hook_direct
+                        .contains_key(&(id.clone(), d.harness.clone()))
+            }) {
+                return Trigger::Reproduced {
+                    harness: d.harness.clone(),
+                    varies: d
+                        .varies
+                        .clone()
+                        .unwrap_or_else(|| "not recorded".to_owned()),
+                };
+            }
             return Trigger::Reproduced {
                 harness: r.harness.clone(),
                 varies: if r.test_loop {

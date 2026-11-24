@@ -181,6 +181,23 @@ pub fn supported(rt: Runtime) -> CaptureSet {
     }
 }
 
+/// True for a runtime whose `heap` capture is the holder chains of the objects made at the lines
+/// that grew (Python), not a dump of the whole heap: it answers who keeps the objects of an
+/// allocation line, so the capture that explains such a line is `alloc,heap`.
+pub fn heap_is_holder_chains(rt: Runtime) -> bool {
+    rt == Runtime::Python && supported(rt).heap
+}
+
+/// The `--capture` value that captures the stacks and, where it exists, the holders of a growing
+/// allocation line.
+pub fn stacks_capture(rt: Runtime) -> &'static str {
+    if heap_is_holder_chains(rt) {
+        "alloc,heap"
+    } else {
+        "alloc"
+    }
+}
+
 /// A native tool a point can run under (`--tool`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeTool {
@@ -572,6 +589,11 @@ pub fn summarize_commands(
         if sel.is_empty() {
             return;
         }
+        // The holder chains are taken once, at the last dump point of a process: a command-mode
+        // series has one file per point, and the newest is the one the lines that grew show in.
+        if tail == [".retain.json"] {
+            sel = vec![sel[sel.len() - 1]];
+        }
         if compact && kind == CaptureKind::Histogram && sel.len() > COMPACT_HISTOGRAMS {
             // First, last and evenly spaced files between.
             let n = sel.len();
@@ -904,7 +926,11 @@ mod tests {
         let go = all.intersect(&supported(Runtime::Go));
         assert_eq!(go.names(), ["nonheap", "alloc"]);
         let py = all.intersect(&supported(Runtime::Python));
-        assert_eq!(py.names(), ["histogram", "nonheap", "alloc"]);
+        assert_eq!(py.names(), ["heap", "histogram", "nonheap", "alloc"]);
+        assert!(heap_is_holder_chains(Runtime::Python));
+        assert!(!heap_is_holder_chains(Runtime::Node) && !heap_is_holder_chains(Runtime::Jvm));
+        assert_eq!(stacks_capture(Runtime::Python), "alloc,heap");
+        assert_eq!(stacks_capture(Runtime::Node), "alloc");
         assert!(all.intersect(&supported(Runtime::Rust)).is_empty());
     }
 

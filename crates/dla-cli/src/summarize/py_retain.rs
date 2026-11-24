@@ -1,0 +1,942 @@
+//! `dla summarize heap-graph` over the Python harness's holder chains (`py-<n>.retain.json`,
+//! `dla harness run --capture heap`).
+//!
+//! A `py.blocks@<file:line>` column says where the surviving objects were made, not who keeps
+//! them. The agent follows the live objects of the lines that grew to a root, and this adapter
+//! turns the chains into one `retention-path` record whose `holders` have the shape the other
+//! heap-graph adapters write (`key`, `holder_kind`), so the label rule, the bundle and the
+//! report need no special case. One holder per distinct root:
+//!
+//! * a module global is `static:<module>.<key>` and a class attribute `static:<class>.<attribute>`,
+//!   both static/global;
+//! * a frame is `stack:<function>@<file:line>`, a blocked stack;
+//! * objects nothing refers to, and a site whose blocks no object belongs to, are held from
+//!   native code (or a reference was lost there): the holder is the site, kind
+//!   native-handle/global-ref.
+//!
+//! Each holder lists the sites it holds with their block counts at the first and last dump
+//! point, the number of kept objects found, and the chain with the most objects as `path` (a
+//! frame key the bundle leaves unscrubbed, so a step with `at` can get a code excerpt). The
+//! full chains of every holder are in the raw file, which also keeps the digest of the input
+//! under `captures` (the place the allocation adapters keep theirs).
+//!
+//! A holder is tied to the findings whose owner names it (tie rule 1) and to the findings at a
+//! site it holds. A holder that no finding names gets the command that adds one; a holder that
+//! one names gets the command its route needs next.
+
+use std::collections::BTreeMap;
+
+use dla_core::{
+    FindingId, Ledger,
+    evidence::{
+        Authority, CoverageStatus, EvidenceCoverage, EvidenceKind, Signal, Source, tool_class,
+    },
+    finding::{Holder as FindingHolder, Polarity, Region},
+    runtime::Runtime,
+    toolctx::EvidenceSpec,
+};
+use serde::Deserialize;
+use serde_json::{Map, Value, json};
+
+use super::{Adapter, AdapterOut, CandidateRow, Ctx, Op, Opts, Recorded, emit, input::Input, tie};
+use crate::fail::{Failure, Res};
+
+/// Tool name in the evidence.
+const TOOL: &str = "dla-py-retain";
+/// Largest file read.
+const MAX_BYTES: u64 = 16 << 20;
+/// Longest a name is shown.
+const CLIP: usize = 100;
+/// Holders the command's output lists.
+const SHOWN_HOLDERS: usize = 4;
+/// Commands the output carries.
+const SHOWN_NEXT: usize = 3;
+/// Sites one holder shows in the evidence record.
+const RECORD_SITES: usize = 6;
+/// Steps of the path one holder shows in the evidence record.
+const RECORD_STEPS: usize = 8;
+/// Ties the evidence record states.
+const STATED_TIES: usize = 3;
+
+/// What the record says about a site no Python object belongs to.
+const UNREFERENCED: &str = "no Python container refers to these blocks: native code holds them, or a reference was lost there";
+
+/// The reader of the Python holder chains.
+pub struct PyRetain;
+
+#[derive(Deserialize, Default)]
+struct File {
+    #[serde(default)]
+    dla_pyretain: Option<u32>,
+    #[serde(default)]
+    frames: u64,
+    #[serde(default)]
+    sites: Vec<SiteIn>,
+    #[serde(default)]
+    limitations: Vec<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct SiteIn {
+    #[serde(default)]
+    site: String,
+    #[serde(default)]
+    blocks_first: u64,
+    #[serde(default)]
+    blocks_last: u64,
+    #[serde(default)]
+    found_tracked: u64,
+    #[serde(default)]
+    found_untracked: u64,
+    #[serde(default)]
+    kept: u64,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    chains: Vec<ChainIn>,
+}
+
+#[derive(Deserialize, Default)]
+struct ChainIn {
+    #[serde(default)]
+    count: u64,
+    #[serde(default)]
+    root: RootIn,
+    #[serde(default)]
+    steps: Vec<StepIn>,
+}
+
+#[derive(Deserialize, Default)]
+struct RootIn {
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    module: String,
+    #[serde(default)]
+    key: String,
+    #[serde(default, rename = "class")]
+    class_name: String,
+    #[serde(default)]
+    attribute: String,
+    #[serde(default)]
+    function: String,
+    #[serde(default)]
+    at: String,
+}
+
+#[derive(Deserialize, Default, Clone, Debug)]
+struct StepIn {
+    #[serde(default, rename = "type")]
+    ty: String,
+    #[serde(default)]
+    via: Option<String>,
+    #[serde(default)]
+    at: Option<String>,
+    #[serde(default)]
+    repeat: Option<u64>,
+}
+
+/// One site a holder holds.
+#[derive(Debug, Clone)]
+struct Held {
+    site: String,
+    first: u64,
+    last: u64,
+    tracked: u64,
+    untracked: u64,
+    kept: u64,
+}
+
+/// One group of chains of a site that end at the holder.
+#[derive(Debug, Clone)]
+struct PathRow {
+    site: String,
+    count: u64,
+    steps: Vec<StepIn>,
+}
+
+/// One holder: a distinct root.
+#[derive(Debug, Clone)]
+struct HolderOut {
+    key: String,
+    kind: FindingHolder,
+    /// `module.name`, the form the tie rule uses; `None` for a stack or a native holder.
+    owner: Option<String>,
+    sites: Vec<Held>,
+    kept: u64,
+    paths: Vec<PathRow>,
+    /// No Python container refers to the blocks or objects of this holder.
+    unreferenced: bool,
+}
+
+impl HolderOut {
+    /// The chain with the most objects.
+    fn best(&self) -> Option<&PathRow> {
+        self.paths.iter().max_by_key(|p| p.count)
+    }
+
+    /// The site of a finding added for this holder: the `at` of the first step that has one,
+    /// from the root down, else the site that grew most.
+    fn finding_site(&self) -> Option<String> {
+        self.best()
+            .and_then(|p| p.steps.iter().rev().find_map(|s| s.at.clone()))
+            .or_else(|| {
+                self.sites
+                    .iter()
+                    .max_by_key(|s| s.last.saturating_sub(s.first))
+                    .map(|s| s.site.clone())
+            })
+    }
+}
+
+fn clip(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_owned()
+    } else {
+        let mut t: String = s.chars().take(n).collect();
+        t.push_str("...");
+        t
+    }
+}
+
+fn bad(i: &Input, why: impl std::fmt::Display) -> Failure {
+    Failure::refuse(
+        "malformed-artifact",
+        format!("{}: {why}", i.shown()),
+        "py-<n>.retain.json written by the Python harness",
+        "dla harness run <H> --capture heap",
+    )
+}
+
+fn parse(i: &Input) -> Res<File> {
+    let text = i.read_text(MAX_BYTES)?;
+    let f: File = serde_json::from_str(&text).map_err(|e| bad(i, e))?;
+    if f.dla_pyretain.is_none() {
+        return Err(bad(i, "no `dla_pyretain` version"));
+    }
+    Ok(f)
+}
+
+/// The holders of one file, largest first by kept objects. Chains that end at the depth limit
+/// or reach no root name no holder; their count is the second value.
+fn holders_of(f: &File, red: &super::redact::Redactor) -> (Vec<HolderOut>, u64) {
+    let mut by_key: BTreeMap<String, HolderOut> = BTreeMap::new();
+    let mut unrooted = 0u64;
+    let name = |s: &str| red.name(s);
+    let step = |s: &StepIn| StepIn {
+        ty: name(&s.ty),
+        via: s.via.as_deref().map(name),
+        at: s.at.as_deref().map(name),
+        repeat: s.repeat,
+    };
+    for site in &f.sites {
+        let held = Held {
+            site: name(&site.site),
+            first: site.blocks_first,
+            last: site.blocks_last,
+            tracked: site.found_tracked,
+            untracked: site.found_untracked,
+            kept: 0,
+        };
+        let mut add = |key: String,
+                       kind: FindingHolder,
+                       owner: Option<String>,
+                       unreferenced: bool,
+                       count: u64,
+                       steps: Vec<StepIn>| {
+            let h = by_key.entry(key.clone()).or_insert_with(|| HolderOut {
+                key,
+                kind,
+                owner,
+                sites: Vec::new(),
+                kept: 0,
+                paths: Vec::new(),
+                unreferenced,
+            });
+            h.kept += count;
+            match h.sites.iter_mut().find(|s| s.site == held.site) {
+                Some(s) => s.kept += count,
+                None => h.sites.push(Held {
+                    kept: count,
+                    ..held.clone()
+                }),
+            }
+            if !steps.is_empty() {
+                h.paths.push(PathRow {
+                    site: held.site.clone(),
+                    count,
+                    steps,
+                });
+            }
+        };
+        if site.note.is_some() && site.chains.is_empty() {
+            add(
+                held.site.clone(),
+                FindingHolder::NativeHandleGlobalRef,
+                None,
+                true,
+                0,
+                Vec::new(),
+            );
+            continue;
+        }
+        for c in &site.chains {
+            let steps: Vec<StepIn> = c.steps.iter().map(step).collect();
+            match c.root.kind.as_str() {
+                "module-global" => {
+                    let owner = name(&format!("{}.{}", c.root.module, c.root.key));
+                    add(
+                        format!("static:{owner}"),
+                        FindingHolder::StaticGlobal,
+                        Some(owner),
+                        false,
+                        c.count,
+                        steps,
+                    );
+                }
+                "class-attribute" => {
+                    let owner = name(&format!("{}.{}", c.root.class_name, c.root.attribute));
+                    add(
+                        format!("static:{owner}"),
+                        FindingHolder::StaticGlobal,
+                        Some(owner),
+                        false,
+                        c.count,
+                        steps,
+                    );
+                }
+                "frame" => add(
+                    format!("stack:{}@{}", name(&c.root.function), name(&c.root.at)),
+                    FindingHolder::BlockedStack,
+                    None,
+                    false,
+                    c.count,
+                    steps,
+                ),
+                "no-referrer" => add(
+                    held.site.clone(),
+                    FindingHolder::NativeHandleGlobalRef,
+                    None,
+                    true,
+                    c.count,
+                    steps,
+                ),
+                _ => unrooted += c.count,
+            }
+        }
+    }
+    let mut v: Vec<HolderOut> = by_key.into_values().collect();
+    for h in &mut v {
+        h.sites
+            .sort_by_key(|s| std::cmp::Reverse(s.last.saturating_sub(s.first)));
+    }
+    v.sort_by(|a, b| b.kept.cmp(&a.kept).then_with(|| a.key.cmp(&b.key)));
+    (v, unrooted)
+}
+
+fn steps_json(steps: &[StepIn]) -> Value {
+    json!(
+        steps
+            .iter()
+            .map(|s| {
+                let mut o = Map::new();
+                o.insert("type".into(), json!(clip(&s.ty, CLIP)));
+                if let Some(v) = &s.via {
+                    o.insert("via".into(), json!(clip(v, CLIP)));
+                }
+                if let Some(a) = &s.at {
+                    o.insert("at".into(), json!(clip(a, CLIP)));
+                }
+                if let Some(r) = s.repeat {
+                    o.insert("repeat".into(), json!(r));
+                }
+                Value::Object(o)
+            })
+            .collect::<Vec<_>>()
+    )
+}
+
+/// A path cut to about `n` steps: the first and the last step stay, and the steps in between
+/// that say where code was (`at`) or that repeat stay longest; a run of steps cut is one `...`.
+fn short_steps(steps: &[StepIn], n: usize) -> Vec<StepIn> {
+    if steps.len() <= n {
+        return steps.to_vec();
+    }
+    let last = steps.len() - 1;
+    let mut keep = vec![true; steps.len()];
+    let mut over = steps.len() - n;
+    // Plain middle steps go first, then the ones with a place, from the kept object's side.
+    for plain in [true, false] {
+        for k in 1..last {
+            if over == 0 {
+                break;
+            }
+            let marked = steps[k].at.is_some() || steps[k].repeat.is_some();
+            if keep[k] && marked != plain {
+                keep[k] = false;
+                over -= 1;
+            }
+        }
+    }
+    let mut v: Vec<StepIn> = Vec::new();
+    for (k, s) in steps.iter().enumerate() {
+        if keep[k] {
+            v.push(s.clone());
+        } else if v.last().is_none_or(|p| p.ty != "...") {
+            v.push(StepIn {
+                ty: "...".into(),
+                ..StepIn::default()
+            });
+        }
+    }
+    v
+}
+
+/// The holder as the evidence record shows it.
+fn record_entry(h: &HolderOut, sites: usize, steps: usize) -> Value {
+    let mut o = Map::new();
+    o.insert("key".into(), json!(clip(&h.key, CLIP)));
+    o.insert("holder_kind".into(), json!(h.kind));
+    o.insert("kept".into(), json!(h.kept));
+    o.insert(
+        "sites".into(),
+        json!(
+            h.sites
+                .iter()
+                .take(sites)
+                .map(|s| json!({"site": clip(&s.site, CLIP), "first": s.first, "last": s.last}))
+                .collect::<Vec<_>>()
+        ),
+    );
+    if h.sites.len() > sites {
+        o.insert("more_sites".into(), json!(h.sites.len() - sites));
+    }
+    if h.unreferenced {
+        o.insert("unreferenced".into(), json!(UNREFERENCED));
+    }
+    if let Some(p) = h.best() {
+        o.insert("path".into(), steps_json(&short_steps(&p.steps, steps)));
+    }
+    Value::Object(o)
+}
+
+/// The holder as the raw file shows it: every site and every chain.
+fn raw_entry(h: &HolderOut) -> Value {
+    let mut o = Map::new();
+    o.insert("key".into(), json!(h.key));
+    o.insert("holder_kind".into(), json!(h.kind));
+    if let Some(owner) = &h.owner {
+        o.insert("owner".into(), json!(owner));
+    }
+    o.insert("kept".into(), json!(h.kept));
+    o.insert(
+        "sites".into(),
+        json!(
+            h.sites
+                .iter()
+                .map(|s| json!({
+                    "site": s.site,
+                    "first": s.first,
+                    "last": s.last,
+                    "found_tracked": s.tracked,
+                    "found_untracked": s.untracked,
+                    "kept": s.kept,
+                }))
+                .collect::<Vec<_>>()
+        ),
+    );
+    if h.unreferenced {
+        o.insert("unreferenced".into(), json!(UNREFERENCED));
+    }
+    o.insert(
+        "paths".into(),
+        json!(
+            h.paths
+                .iter()
+                .map(|p| json!({"site": p.site, "count": p.count, "path": steps_json(&p.steps)}))
+                .collect::<Vec<_>>()
+        ),
+    );
+    Value::Object(o)
+}
+
+/// The harness a capture file belongs to: `<H>` of `.../harness/<H>/out/...`.
+fn harness_of(rel: &str) -> Option<&str> {
+    let mut it = rel.split('/');
+    while let Some(p) = it.next() {
+        if p == "harness" {
+            return it.next().filter(|h| !h.is_empty());
+        }
+    }
+    None
+}
+
+/// The growth evidence of a trend that has a passing column for `site`.
+fn growth_evidence_of(ledger: &Ledger, site: &str) -> Option<String> {
+    let column = format!("py.blocks@{site}");
+    ledger
+        .evidence()
+        .filter(|e| {
+            matches!(
+                e.kind,
+                EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries
+            )
+        })
+        .filter(|e| {
+            e.result
+                .get("passed")
+                .and_then(Value::as_array)
+                .is_some_and(|p| {
+                    p.iter().any(|c| {
+                        c.get("column")
+                            .and_then(Value::as_str)
+                            .is_some_and(|n| n.strip_suffix(".pre_gc").unwrap_or(n) == column)
+                    })
+                })
+        })
+        .map(|e| e.evidence_id.to_string())
+        .last()
+}
+
+/// The findings of a holder: the leak-side findings whose owner names it, and those at a site
+/// it holds.
+fn findings_of(
+    ledger: &Ledger,
+    who: &tie::Who,
+    h: &HolderOut,
+    owners: &[String],
+) -> Vec<(FindingId, tie::TieReason)> {
+    let mut m: Vec<(FindingId, tie::TieReason)> = Vec::new();
+    if let Some(o) = &h.owner {
+        for f in tie::findings_by_holder(ledger, who, o, owners, None) {
+            m.push((f, tie::TieReason::holder(o)));
+        }
+    }
+    for s in &h.sites {
+        for f in tie::findings_at_site(ledger, who, &s.site) {
+            m.push((f, tie::TieReason::site(&s.site)));
+        }
+    }
+    m.retain(|(f, _)| {
+        ledger
+            .finding(f)
+            .is_some_and(|x| x.polarity() == Polarity::Leak)
+    });
+    m
+}
+
+/// The command a holder that names no finding gets.
+fn add_command(h: &HolderOut, evidence: &str) -> String {
+    let site = h.finding_site().unwrap_or_default();
+    let owner = h
+        .owner
+        .as_ref()
+        .map(|o| format!(" --owner {o}"))
+        .unwrap_or_default();
+    format!(
+        "dla ledger add --origin growth-series --evidence {evidence} --site {site}{owner} --region heap --holder {}",
+        h.kind
+    )
+}
+
+/// The command the route of the finding that names a holder needs next.
+fn route_command(
+    ledger: &Ledger,
+    f: &FindingId,
+    h: &HolderOut,
+    harness: Option<&str>,
+    evidence: &str,
+) -> String {
+    let Some(finding) = ledger.finding(f) else {
+        return format!("dla ledger show {f}");
+    };
+    if finding.holder.is_none() {
+        return format!("dla ledger annotate {f} --holder {}", h.kind);
+    }
+    let growth = h
+        .sites
+        .iter()
+        .find_map(|s| growth_evidence_of(ledger, &s.site));
+    let has_sibling = ledger.findings().any(|x| x.parent.as_ref() == Some(f));
+    let can_test = matches!(
+        finding.state,
+        dla_core::FindingState::Candidate
+            | dla_core::FindingState::Unresolved
+            | dla_core::FindingState::SuspectedStaticOnly
+    );
+    let cmds = dla_core::grown::commands(
+        f,
+        harness.unwrap_or("<H>"),
+        growth.as_deref().or(Some(evidence)),
+        None,
+        has_sibling,
+        can_test,
+        false,
+    );
+    cmds.into_iter().next().unwrap_or_default()
+}
+
+impl Adapter for PyRetain {
+    fn name(&self) -> &'static str {
+        "py-retain"
+    }
+    fn op(&self) -> Op {
+        Op::HeapGraph
+    }
+    fn runtime(&self) -> &'static str {
+        "python"
+    }
+    fn tool_class(&self) -> &'static str {
+        tool_class::DUMP_PARSER
+    }
+    fn formats(&self) -> &'static str {
+        "Python harness holder chains (py-<n>.retain.json, {\"dla_pyretain\":1, \"sites\"})"
+    }
+    fn sniff(&self, input: &Input) -> bool {
+        input.head_text().contains("\"dla_pyretain\"")
+    }
+    fn run(&self, ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
+        retain(ctx, inputs, opts)
+    }
+}
+
+fn retain(ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
+    let tc = ctx.tc;
+    let red = &ctx.redactor;
+    let mut parsed = Vec::new();
+    for i in inputs {
+        parsed.push(parse(i)?);
+    }
+    let mut ledger_ref = ctx.ledger()?;
+    let ledger: &mut Ledger = &mut ledger_ref;
+    if let Some(f) = &opts.finding
+        && ledger.finding(f).is_none()
+    {
+        return Err(Failure::from(dla_core::Refusal::new(
+            dla_core::error::codes::UNKNOWN_FINDING,
+            format!("no finding {f} in the ledger"),
+            "an existing finding",
+            "dla ledger show",
+        )));
+    }
+    let who = tie::Who::new(tc.worker.as_deref(), Some(Runtime::Python));
+    let mut out = AdapterOut::default();
+    let mut shown_holders: Vec<Value> = Vec::new();
+    let mut next: Vec<String> = Vec::new();
+    let mut all_unrooted = 0u64;
+    let mut unreferenced_sites = 0usize;
+    let mut files: Vec<Value> = Vec::new();
+    for (i, f) in inputs.iter().zip(&parsed) {
+        let (holders, unrooted) = holders_of(f, red);
+        all_unrooted += unrooted;
+        unreferenced_sites += holders
+            .iter()
+            .filter(|h| h.unreferenced)
+            .map(|h| h.sites.len())
+            .sum::<usize>();
+        let owners: Vec<String> = holders.iter().filter_map(|h| h.owner.clone()).collect();
+        let found: Vec<Vec<(FindingId, tie::TieReason)>> = holders
+            .iter()
+            .map(|h| findings_of(ledger, &who, h, &owners))
+            .collect();
+        let ties: Vec<tie::Resolved> = found
+            .iter()
+            .map(|m| tie::resolve(m.clone(), opts.finding.as_ref()))
+            .collect();
+        // ---- the raw file: every holder and chain, the digest of the input
+        let (id, arel) = emit::next_id(tc, "retain", 'R')?;
+        let mut limitations: Vec<String> = f.limitations.clone();
+        if unrooted > 0 {
+            limitations.push(format!(
+                "{unrooted} kept object(s) ended at the depth limit or reached no root, so they name no holder"
+            ));
+        }
+        let raw_value = json!({
+            "id": id,
+            "tool": TOOL,
+            "mode": "single",
+            "captures": [{
+                "number": 1,
+                "label": i.shown(),
+                "frames": f.frames,
+                "sites": f.sites.len(),
+                "sha256": i.sha256,
+            }],
+            "holders": holders.iter().map(raw_entry).collect::<Vec<_>>(),
+            "sites": f.sites.iter().map(|s| json!({
+                "site": red.name(&s.site),
+                "blocks_first": s.blocks_first,
+                "blocks_last": s.blocks_last,
+                "found_tracked": s.found_tracked,
+                "found_untracked": s.found_untracked,
+                "kept": s.kept,
+                "unreferenced": (s.note.is_some() && s.chains.is_empty()).then_some(UNREFERENCED),
+            })).collect::<Vec<_>>(),
+            "limitations": limitations,
+            "redaction": red.mode(),
+        });
+        let raw = emit::write_raw(tc, &arel, &raw_value)?;
+        // ---- the evidence record
+        let mut stated: Vec<Value> = Vec::new();
+        let mut cited: Vec<FindingId> = Vec::new();
+        for (h, r) in holders.iter().zip(&ties) {
+            let Some((fid, why)) = &r.tie else { continue };
+            if stated.len() >= STATED_TIES {
+                break;
+            }
+            let mut all: Vec<FindingId> = std::iter::once(fid.clone())
+                .chain(r.also.iter().cloned())
+                .collect();
+            all.sort();
+            all.dedup();
+            stated.push(json!({
+                "holder": clip(&h.key, 40),
+                "finding": fid,
+                "candidates": all,
+                "tie": why.to_json(),
+            }));
+            cited.extend(all);
+        }
+        cited.sort();
+        cited.dedup();
+        // Holders the findings name go first, then by kept objects.
+        let mut order: Vec<usize> = (0..holders.len()).collect();
+        order.sort_by_key(|&k| (ties[k].tie.is_none(), std::cmp::Reverse(holders[k].kept)));
+        let build = |n: usize, sites: usize, steps: usize, with_ties: bool| -> Value {
+            let mut base = Map::new();
+            base.insert("file".into(), json!(clip(i.shown(), 80)));
+            base.insert("sites".into(), json!(f.sites.len()));
+            base.insert(
+                "kept".into(),
+                json!(holders.iter().map(|h| h.kept).sum::<u64>()),
+            );
+            base.insert(
+                "holders".into(),
+                json!(
+                    order
+                        .iter()
+                        .take(n)
+                        .map(|&k| record_entry(&holders[k], sites, steps))
+                        .collect::<Vec<_>>()
+                ),
+            );
+            if holders.len() > n {
+                base.insert("more".into(), json!(holders.len() - n));
+            }
+            if with_ties && !stated.is_empty() {
+                base.insert("finding".into(), json!(cited[0]));
+                base.insert("candidates".into(), json!(cited));
+                base.insert("ties".into(), json!(stated));
+            }
+            Value::Object(base)
+        };
+        let (mut n, mut sites, mut steps, mut with_ties) =
+            (holders.len(), RECORD_SITES, RECORD_STEPS, true);
+        let mut result = build(n, sites, steps, with_ties);
+        while dla_core::evidence::result_size(&result) > emit::RESULT_BUDGET {
+            if steps > 4 {
+                steps = 4;
+            } else if sites > 2 {
+                sites = 2;
+            } else if n > 1 {
+                n -= 1;
+            } else if sites > 1 {
+                sites = 1;
+            } else if with_ties {
+                with_ties = false;
+            } else {
+                break;
+            }
+            result = build(n, sites, steps, with_ties);
+        }
+        let mut spec = EvidenceSpec::new(
+            EvidenceKind::RetentionPath,
+            TOOL,
+            env!("CARGO_PKG_VERSION"),
+            result,
+        );
+        spec.authority = ctx.authority(Authority::Live);
+        spec.source = Some(Source::Artifact {
+            path: i.rel.clone(),
+            sha256: i.sha256.clone(),
+        });
+        spec.coverage = EvidenceCoverage {
+            status: CoverageStatus::Complete,
+            examined: Some(f.sites.len() as u64),
+            total: None,
+        };
+        spec.limitations = limitations;
+        let signal = Signal::new(TOOL, tool_class::DUMP_PARSER, &i.sha256);
+        let rec: Recorded = ctx.record(ledger, spec, &signal, &raw)?;
+        let evidence = rec.id.to_string();
+        // ---- what is said, and what comes next
+        for (k, h) in holders.iter().enumerate() {
+            let named = &ties[k];
+            let mut row = json!({
+                "key": clip(&h.key, 56),
+                "holder_kind": h.kind,
+                "kept": h.kept,
+                "sites": h.sites.len(),
+            });
+            if h.unreferenced {
+                row["unreferenced"] = json!(true);
+            }
+            match &named.tie {
+                Some((fid, _)) => {
+                    row["finding"] = json!(fid);
+                    if shown_holders.len() < SHOWN_HOLDERS && next.len() < SHOWN_NEXT {
+                        next.push(route_command(
+                            ledger,
+                            fid,
+                            h,
+                            harness_of(i.shown()),
+                            &evidence,
+                        ));
+                    }
+                    if !out.candidates.iter().any(|c| &c.finding == fid) {
+                        let fx = ledger.finding(fid);
+                        out.candidates.push(CandidateRow {
+                            finding: fid.clone(),
+                            owner: fx.and_then(|x| x.owner.clone()),
+                            holder: Some(h.kind),
+                            site: tie::site_of(ledger, fid),
+                            region: Some(Region::Heap),
+                            origin: "growth-series".into(),
+                            added: false,
+                            via: None,
+                        });
+                    }
+                }
+                None => {
+                    if shown_holders.len() < SHOWN_HOLDERS && next.len() < SHOWN_NEXT {
+                        next.push(add_command(h, &evidence));
+                    }
+                }
+            }
+            if shown_holders.len() < SHOWN_HOLDERS {
+                shown_holders.push(row);
+            }
+        }
+        files.push(
+            json!({"file": clip(i.shown(), 80), "evidence": evidence, "holders": holders.len()}),
+        );
+        out.evidence.push(rec);
+        out.raw = Some(raw);
+        out.enumerated += f.sites.len() as u64;
+    }
+    let mut body = Map::new();
+    body.insert("files".into(), json!(files));
+    body.insert("holders".into(), json!(shown_holders));
+    if unreferenced_sites > 0 {
+        body.insert("unreferenced_sites".into(), json!(unreferenced_sites));
+    }
+    if all_unrooted > 0 {
+        body.insert("unrooted".into(), json!(all_unrooted));
+    }
+    body.insert("next".into(), json!(next));
+    body.insert("redaction".into(), json!(red.mode()));
+    out.body = body;
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(json: &str) -> File {
+        serde_json::from_str(json).unwrap()
+    }
+
+    fn red() -> super::super::redact::Redactor {
+        super::super::redact::Redactor::new(b"salt", false)
+    }
+
+    #[test]
+    fn one_holder_per_distinct_root_with_the_sites_it_holds() {
+        let f = file(
+            r#"{"dla_pyretain":1,"frames":1,"sites":[
+            {"site":"a.py:3","blocks_first":10,"blocks_last":50,"found_tracked":40,"found_untracked":0,"kept":40,
+             "chains":[{"count":30,"root":{"kind":"module-global","module":"pkg.m","key":"_reg"},"steps":[{"type":"pkg.m.E","via":"[0]"},{"type":"list","via":"._reg"}]},
+                       {"count":10,"root":{"kind":"class-attribute","class":"pkg.K","attribute":"items"},"steps":[{"type":"pkg.m.E","via":"[1]"}]}]},
+            {"site":"a.py:9","blocks_first":5,"blocks_last":45,"found_tracked":40,"found_untracked":0,"kept":40,
+             "chains":[{"count":40,"root":{"kind":"module-global","module":"pkg.m","key":"_reg"},"steps":[{"type":"int","via":".n"}]}]},
+            {"site":"a.py:12","blocks_first":5,"blocks_last":45,"found_tracked":0,"found_untracked":0,"kept":0,"note":"x","chains":[]},
+            {"site":"a.py:15","blocks_first":5,"blocks_last":45,"found_tracked":4,"found_untracked":0,"kept":4,
+             "chains":[{"count":4,"root":{"kind":"frame","function":"_w","at":"a.py:20"},"steps":[{"type":"int"}]},
+                       {"count":2,"root":{"kind":"depth-limit"},"steps":[{"type":"int"}]}]}]}"#,
+        );
+        let (h, unrooted) = holders_of(&f, &red());
+        assert_eq!(unrooted, 2);
+        let keys: Vec<&str> = h.iter().map(|h| h.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                "static:pkg.m._reg",
+                "static:pkg.K.items",
+                "stack:_w@a.py:20",
+                "a.py:12"
+            ]
+        );
+        let reg = &h[0];
+        assert_eq!(reg.kept, 70);
+        assert_eq!(reg.kind, FindingHolder::StaticGlobal);
+        assert_eq!(reg.owner.as_deref(), Some("pkg.m._reg"));
+        assert_eq!(reg.sites.len(), 2);
+        // The site that grew most (both 40) keeps the order of the larger growth, then input.
+        assert_eq!(h[2].kind, FindingHolder::BlockedStack);
+        assert!(h[2].owner.is_none());
+        let native = &h[3];
+        assert_eq!(native.kind, FindingHolder::NativeHandleGlobalRef);
+        assert!(native.unreferenced && native.paths.is_empty());
+        assert_eq!(native.sites[0].site, "a.py:12");
+    }
+
+    #[test]
+    fn the_finding_site_is_the_step_nearest_the_root_that_has_one() {
+        let f = file(
+            r#"{"dla_pyretain":1,"sites":[{"site":"a.py:3","blocks_first":0,"blocks_last":9,"chains":[
+            {"count":5,"root":{"kind":"module-global","module":"m","key":"_n"},"steps":[
+              {"type":"X","via":"tb_frame","at":"a.py:3"},
+              {"type":"traceback","via":"__traceback__","at":"a.py:14","repeat":7},
+              {"type":"E","via":".ex"},
+              {"type":"H","via":"._n"}]}]}]}"#,
+        );
+        let (h, _) = holders_of(&f, &red());
+        assert_eq!(h[0].finding_site().as_deref(), Some("a.py:14"));
+        let f = file(
+            r#"{"dla_pyretain":1,"sites":[{"site":"a.py:3","blocks_first":0,"blocks_last":9,"chains":[
+            {"count":5,"root":{"kind":"module-global","module":"m","key":"_n"},"steps":[{"type":"X","via":".a"}]}]}]}"#,
+        );
+        let (h, _) = holders_of(&f, &red());
+        assert_eq!(h[0].finding_site().as_deref(), Some("a.py:3"));
+    }
+
+    #[test]
+    fn a_long_path_keeps_the_ends() {
+        let steps: Vec<StepIn> = (0..12)
+            .map(|k| StepIn {
+                ty: format!("T{k}"),
+                ..StepIn::default()
+            })
+            .collect();
+        let s = short_steps(&steps, 6);
+        let names: Vec<&str> = s.iter().map(|s| s.ty.as_str()).collect();
+        assert_eq!(names, ["T0", "...", "T7", "T8", "T9", "T10", "T11"]);
+        // A step with a place stays when the plain ones are enough to cut.
+        let mut placed = steps.clone();
+        placed[3].at = Some("a.py:3".into());
+        let s = short_steps(&placed, 6);
+        assert!(s.iter().any(|s| s.ty == "T3"), "{s:?}");
+        let names: Vec<&str> = s.iter().map(|s| s.ty.as_str()).collect();
+        assert_eq!(names, ["T0", "...", "T3", "...", "T8", "T9", "T10", "T11"]);
+    }
+
+    #[test]
+    fn the_harness_is_read_from_the_path() {
+        assert_eq!(
+            harness_of(".dla/R1/harness/H2/out/p1/capture/9/py-1.retain.json"),
+            Some("H2")
+        );
+        assert_eq!(harness_of("in/py-1.retain.json"), None);
+    }
+}

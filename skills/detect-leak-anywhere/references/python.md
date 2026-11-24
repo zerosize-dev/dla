@@ -58,12 +58,33 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   a test runner grows on its own), refute the loser, `dla ledger confirm`. The final gate lists a growing
   `py.blocks@` column that ties to no dispositioned finding, and `dla ledger resolve` refuses to close a
   finding whose column passed until an alloc-test is bound to it. After `dla alloc-test` favors leak,
-  capture the stacks that lead to the line: run the `dla harness run H --mode <m> --capture alloc` command
-  it prints first, then the `dla summarize alloc-stack-diff` command that run prints (it ties the stacks at
-  the line to the finding), then label, `dla bundle` and explain; `dla bundle` is refused with
-  `stacks-not-captured` for a confirmed finding at such a line until that capture was made. The frame above
-  the growing line shows who receives the object: for a callback or a wrapper object it is a function of an
-  extension module, so read that module's source for the reference it keeps.
+  capture the stacks that lead to the line and the objects that hold it: run the `dla harness run H --mode <m>
+  --capture alloc,heap` command it prints first, then the two `dla summarize` commands that run prints
+  (`alloc-stack-diff` ties the stacks at the line to the finding, `heap-graph` names who holds the objects),
+  then label, `dla bundle` and explain; `dla bundle` is refused with `stacks-not-captured` for a confirmed
+  finding at such a line until that capture was made and every summarize command of it was run. The frame
+  above the growing line shows who receives the object: for a callback or a wrapper object it is a function
+  of an extension module, so read that module's source for the reference it keeps.
+- Who holds the objects of a growing line: a `py.blocks@<file:line>` column says where the surviving objects
+  were made, not who keeps them, and in a loop over the project's tests several lines often grow because one
+  holder keeps them all (a module-level object that stores an exception and raises that same object again keeps
+  every raising frame and its locals through the growing traceback). The route is a growing line, then who
+  holds it, then one finding at the holder. Run `dla harness run H --mode <m> --capture heap` as soon as a trend
+  lists growing lines that no finding is at (the trend says so in `holders_hint`) and the `dla summarize
+  heap-graph` command that run prints. Its record lists the holders: `static:<module>.<name>` is a module
+  global or a class attribute (static/global), `stack:<function>@<file:line>` a function frame
+  (blocked-stack), and a holder keyed by a bare `file:line` with `unreferenced` is held from native code or
+  by a reference lost there. Each holder lists the lines it keeps with their block counts at the first and
+  last dump, the kept objects found and `path`, the chain with the most objects from a kept object to the
+  holder (`via` is how the next step refers to it, `at` a place in code, `repeat` a run of the same step).
+  `next` prints the `dla ledger add ... --site <the place nearest the holder> --owner <module.name>` command
+  for a holder that no finding names: add one finding there, and it accounts for every line the holder keeps
+  (the final gate lists those lines as tied to that finding and no add command for them); then the route of
+  the finding as above. When one holder keeps several of the lines, never add a finding per line. A holder
+  that is native (`unreferenced`: no Python container refers to the blocks, so the test runner, pytest or the
+  tracer do not hold them) is explained by the extension function the line calls: read it for the reference
+  it keeps, and add the finding at the line. Values are not written (a dict key is shown as its type) unless
+  the run's consent allows raw values.
 - A table at module level that the project fills at import time through a registration function (plugin
   modules call it, or a wrapper of it, at their top level), and that a driver grows by calling that function
   or its wrapper with new keys, is reported as grown by the registration function itself, not as reproduced
@@ -98,13 +119,17 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   that targets the finding or measured it, never on another one (`harness-not-about`); a probe driver whose unit does not call the function of the line comes back inconclusive.
   `--tests` narrows the loop: it is for a loop that cannot run in full (it stopped with a `DLA-PYTEST` line) or for a second look at a part. The first step of the queue is the loop over all test files, and a narrowed loop does not replace it: the queue keeps naming the full loop, and the summary of a narrowed loop carries `pytest_hint` while the full loop has not run.
 - Purges: `trim` (glibc `malloc_trim` through ctypes) and `gc`.
-- Raw captures: `dla harness run H1 --capture histogram,alloc,nonheap`. `histogram` writes
+- Raw captures: `dla harness run H1 --capture histogram,alloc,nonheap,heap`. `histogram` writes
   `py-<n>.types.json` (300 types by instance count), `alloc` writes `py-<n>.alloc.json` (tracemalloc live
   bytes per stack, innermost frame first; frames: 10 with `alloc`, else 1) and `py-1.memray.json` when
   memray imports in the program's own interpreter (`DLA_PY_MEMRAY=0` leaves it out), `nonheap` writes
   `py-<n>.nonheap.json` (threads by name pattern and creation site, pending asyncio tasks, ResourceWarning
-  sites). Run the `dla summarize` commands the harness prints. A run with `alloc` is for attribution, not
-  for the trend: tracemalloc with several frames and memray slow the points that take them.
+  sites), `heap` writes `py-1.retain.json` once, at the last dump point (the holder chains of the objects
+  made at the lines that grew: summarize it with `heap-graph`; it costs time and memory in proportion to
+  the objects the program tracks, `DLA_HEAP_SECS` bounds it, and `harness/python/README.md` has the
+  figures). Run the `dla summarize` commands the harness prints. A run with `alloc` or `heap` is for
+  attribution, not for the trend: tracemalloc with several frames, memray and the chain search slow the
+  points that take them.
 
 ## Census
 - Native codec contexts are listed as kind `handle`, holder `native-handle/global-ref`, off-heap, like
@@ -123,7 +148,9 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
 ## Artifacts
 - memray capture files and stats land under `attach/P<n>/`; the raw `.bin` is not read by any adapter.
   Harness captures are read by `dla summarize`: `py-tracemalloc` and `py-memray` (`alloc-stack-diff`) tie
-  by the stack's first project frame; `py-types` (`type-histogram-diff`) ties only when a growing type is
+  by the stack's first project frame; `py-retain` (`heap-graph`) ties a holder to the finding whose owner
+  is the holder (`static:<module>.<name>`) or that is at a line the holder keeps, and the final gate then ties
+  every `py.blocks@` column of the lines it keeps to that finding; `py-types` (`type-histogram-diff`) ties only when a growing type is
   the finding's accumulation class and never for built-in containers (a `py.type:*` count that ties to no finding has no residual route: it needs its own disposition); `py-resources` (`non-heap`) ties a
   thread or task group to the finding at the line that created it.
 - memray missing in the target's interpreter is a coverage gap (`pip install memray` there); the

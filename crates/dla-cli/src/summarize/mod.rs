@@ -56,6 +56,7 @@ pub mod nonheap_json;
 pub mod proc_fd;
 pub mod py_memray;
 pub mod py_resources;
+pub mod py_retain;
 pub mod py_tracemalloc;
 pub mod py_types;
 pub mod redact;
@@ -363,6 +364,7 @@ pub fn registry() -> &'static [&'static dyn Adapter] {
         &go_goroutine::GoGoroutine,
         &py_tracemalloc::PyTracemalloc,
         &py_memray::PyMemray,
+        &py_retain::PyRetain,
         &py_types::PyTypes,
         &py_resources::PyResources,
         &jfr::JfrOldObjectSample,
