@@ -339,37 +339,41 @@ pub fn add_feature_gates(project: &Path, targets: &mut [Target], enabled: &[Stri
     }
 }
 
-/// The `_attention` lines of `dla harness gen` for a Rust harness: a target whose file, or whose
-/// crate's entry files (`lib.rs`, `main.rs`), have gated sites of a feature the build leaves off.
-/// One line per target, the first four; the lines name the exact command that generates the
-/// harness again with the features on.
+/// The `_attention` lines of `dla harness gen` for a Rust harness: one per feature that the build
+/// leaves off and that has gated sites in the file of a target or in the crate's entry files
+/// (`lib.rs`, `main.rs`). A line is short (the output bound cuts a longer one) and sends the
+/// reader to the `regenerate` key, which holds the command whole.
 pub fn feature_attention(targets: &[Target]) -> Vec<String> {
-    let lines: Vec<String> = targets
-        .iter()
-        .filter_map(|t| {
-            let gaps: Vec<FeatureGap> = t
-                .gated_sites()
-                .into_iter()
-                .filter(|g| g.in_file > 0 || g.in_entry > 0)
-                .collect();
-            (!gaps.is_empty()).then(|| {
-                format!(
-                    "{} ({}): {}",
-                    t.id,
-                    t.site,
-                    dla_core::features::lead(&gaps, &t.feature_command)
-                )
-            })
-        })
-        .collect();
-    let mut out: Vec<String> = lines.iter().take(4).cloned().collect();
-    if lines.len() > 4 {
-        out.push(format!(
-            "and {} more targets behind features: the same command",
-            lines.len() - 4
-        ));
+    let mut by_feature: std::collections::BTreeMap<String, (usize, FeatureGap)> =
+        std::collections::BTreeMap::new();
+    for t in targets {
+        for g in t
+            .gated_sites()
+            .into_iter()
+            .filter(|g| g.in_file > 0 || g.in_entry > 0)
+        {
+            by_feature
+                .entry(g.feature.clone())
+                .and_modify(|(n, _)| *n += 1)
+                .or_insert((1, g));
+        }
     }
-    out
+    by_feature
+        .into_iter()
+        .map(|(f, (n, g))| {
+            format!(
+                "feature {f} is {}: {n} target{} ha{} code behind it ({} gated sites in the crate); run the command under regenerate",
+                if g.default_on {
+                    "off in this build"
+                } else {
+                    "off by default"
+                },
+                if n == 1 { "" } else { "s" },
+                if n == 1 { "s" } else { "ve" },
+                g.in_crate
+            )
+        })
+        .collect()
 }
 
 /// What `dla harness gen --entry` says about a target besides what every harness says.

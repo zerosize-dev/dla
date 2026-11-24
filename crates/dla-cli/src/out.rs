@@ -61,13 +61,16 @@ const PROTECTED: [&str; 9] = [
 /// `junit_hint` and `pytest_hint` point at the project's own tests as a hookless harness;
 /// `queue_next` is the queue's next command with the count of what is left; `stacks_hint` is the
 /// alloc-test's sentence about capturing the stacks that lead to a growing allocation line;
-/// `holders_hint` is the trend's sentence about capturing who holds the objects of such a line.
-const KEPT_WHOLE: [&str; 5] = [
+/// `holders_hint` is the trend's sentence about capturing who holds the objects of such a line;
+/// `regenerate` is the `dla harness gen` command that builds a Rust harness again with the
+/// features its targets need (a cut command does not run).
+const KEPT_WHOLE: [&str; 6] = [
     "junit_hint",
     "pytest_hint",
     "queue_next",
     "stacks_hint",
     "holders_hint",
+    "regenerate",
 ];
 
 /// Longest string kept whole in a protected value.
@@ -317,6 +320,25 @@ mod tests {
         assert!(serde_json::to_string(&b).unwrap().len() < MAX_OUTPUT_BYTES);
         assert_eq!(b["truncated"], true);
         assert_eq!(b["holders_hint"], hint);
+    }
+
+    #[test]
+    fn the_regenerate_command_of_a_harness_gen_is_never_cut() {
+        let command = format!(
+            "dla harness gen --lang rust --driver --workload rust:test:m/Cargo.toml --features enable {}",
+            "--probe F12 ".repeat(20)
+        );
+        assert!(command.len() > PROTECTED_STR, "{}", command.len());
+        let v = json!({
+            "ok": true,
+            "_attention": ["feature enable is off by default"],
+            "regenerate": command,
+            "columns": vec!["a long text ".repeat(20); 40],
+        });
+        let b = bound(v);
+        assert!(serde_json::to_string(&b).unwrap().len() < MAX_OUTPUT_BYTES);
+        assert_eq!(b["truncated"], true);
+        assert_eq!(b["regenerate"], command);
     }
 
     #[test]

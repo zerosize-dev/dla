@@ -2994,6 +2994,9 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             if !attention.is_empty() {
                 // `dla` prints it as the first key of the output, and the output bound keeps it.
                 m.insert("_attention".into(), json!(attention));
+                if let Some(t) = described.iter().find(|t| !t.feature_command.is_empty()) {
+                    m.insert("regenerate".into(), json!(t.feature_command));
+                }
             }
             m.insert(
                 "targets_full".into(),

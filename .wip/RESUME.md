@@ -2598,3 +2598,29 @@ flat test-loop readings get only 9 second looks.
   fill a unit that makes and drops root spans, run: the target at spsc.rs must be executed
   (heavy build: after the dynamic run).
 - Full dynamic run (task bd9vj6wjf) with dla-H5try still going.
+
+## 16:05 UTC 2026-11-24 (clock checked 15:58): R2 built; final tree frozen and sent to CI; R3 sent
+
+(My headings of the last two hours ran ahead of the clock by up to 30 minutes.)
+- R2 built: the regenerate command carries --workload (from the manifest), --no-default-features
+  and the features already on; a workspace root with no package gets its own
+  driver-unavailable wording and a fix naming the member crates with a library target; two
+  rust_driver tests, one targets unit test, pin, rust.md, VERIFY row.
+- Final combined tree (G + H..H5 + R + R2): fmt clean, builds, schema ok, 39 files +2820/-68.
+  Frozen: u112/dla-F2 (sha 013807e0f299), u112/dla-bench-F2 (dla-F1 deleted).
+  Snapshot f0a84e5 pushed WITHOUT [skip ci]; CI waiter bg2n0fd6p (logs u115/ci-snap-24).
+- On the real Rust project with dla-F2 (u117/fastrace): root refusal now reads "the manifest at
+  the working directory is a workspace with no package" with the fix
+  `dla harness gen --lang rust --driver --workload rust:test:fastrace/Cargo.toml (a member crate
+  with a library target; the others: ...)`. With the workload `_attention` is the first key,
+  BUT its entries are cut at 160 characters (out.rs PROTECTED_STR) because the output is over
+  its bound, so the command at the end of each entry is lost; the driver block and
+  features.json have it in full.
+- R3 SENT to builder R: `_attention` one short entry per feature; a new top-level key
+  `regenerate` with the full command in KEPT_WHOLE; tests. This changes the tree after the CI
+  snapshot: plan = commit the tree of f0a84e5 to main if its CI and my local checks are green
+  (the cut is a known small flaw of that commit), then R3 as its own commit after its own CI.
+- Local dynamic run on all fixtures (binary dla-H5try, task bd9vj6wjf) started 15:48, 9 of 64
+  done after 10 minutes.
+- Still to do locally on dla-F2: otel replays, Pillow walk, the fastrace unit with the feature
+  on (target at spsc.rs executed), whole suite (after the dynamic run, for CPU), own mutations.
