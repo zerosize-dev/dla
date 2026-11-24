@@ -1,0 +1,49 @@
+A run does not keep one full copy of the project per harness
+
+`dla harness gen` copies the project into the harness's `work/`. A real
+unattended run on a Python library made 168 harnesses, one probe driver per
+batch of candidates. Each kept a copy of about 80 MB, 13 GB in all, and the
+disk was full before the run ended. Almost every file of such a copy is
+byte for byte the project's file, and most harnesses are used for a few
+minutes and never again.
+
+A harness's `work/` is now a copy that can be thinned and filled again.
+Thinning removes every regular file that the project holds with the same
+length, permissions and bytes, after writing the list of those files with
+their digests to `harness/<H>/work-thinned.json`. Changed files, new files,
+build outputs, symlinks and all directories stay. A harness that is used
+again gets its files back first, with the project file's modification time
+and permissions, so a build tool sees the tree it saw before.
+
+Every missing file is checked against its listed length and digest before
+anything is copied back. When the project changed in between, nothing is
+changed and the command is refused with `work-copy-stale`: it names the
+files, and the fix is a new harness on the project as it is now. The run's
+seals cover only the run's own files, so no reseal is needed.
+
+`harness/<H>/work.lock` keeps the two apart. A command that reads or runs
+in `work/` holds the lock shared for as long as it does, fills first when
+the copy was thinned, and stamps the lock with the time of use. The thinner
+only tries the exclusive lock and skips a harness that is in use.
+
+`dla harness gen` thins every harness except the new one and the four used
+last, and says what it thinned in its output. `dla report` thins all.
+`DLA_KEEP_WORK=1` turns thinning off.
+
+On the real library with seven drivers: four whole copies of 80 MB, the
+older ones 260 KB each, and 5 MB for all seven after the report against
+560 MB before. A thinned harness that is run again is filled in about a
+second and a half and gives the same series as one that was never thinned.
+With a project file changed after the thin the run is refused and names
+the file; with the file put back it runs.
+
+Build outputs inside `work/` are not touched: a compiled harness keeps
+them, and for a Rust harness they are most of its size. Not covered: a
+multi-process stress of the lock, and a thinned harness of a compiled
+runtime in a real run.
+
+The test of the first point of a Python series, added with the last
+change, compared every step for equality. Under load one point can read a
+few dozen objects off in twenty thousand. It now accepts a tenth of the
+usual step and still fails by a whole step when the fix it guards is
+removed.

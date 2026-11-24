@@ -1667,8 +1667,10 @@ mod tests {
             // H3 was used last of all but H7; H7 is the new one.
             let age = if n == 3 { 900 } else { n * 10 };
             let when = base + std::time::Duration::from_secs(age);
-            if n == 2 {
-                // No lock file yet: the time of the directory says when it was used.
+            if n == 2 && cfg!(unix) {
+                // No lock file yet: the time of the directory says when it was used. (Windows
+                // does not open a directory this way to set its time: there H2 gets a lock
+                // file like the others.)
                 fs::File::open(&h).unwrap().set_modified(when).unwrap();
             } else {
                 open_lock(&h).unwrap().set_modified(when).unwrap();

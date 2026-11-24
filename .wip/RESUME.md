@@ -1948,3 +1948,22 @@ flat test-loop readings get only 9 second looks.
   or more harnesses (disk before/after), CI snapshot, commit 22.
 - Then pillow-11 (unattended; refresh plugin from the commit; `cargo clean` first for disk), then
   version 0.9.0-preview.7.
+
+## 05:50 UTC 2026-11-24
+
+- Local full dynamic bench on the tree of 49bccfe: 63/64 pass + 1 xfail (baseline).
+- Builder W (agent ae577710f60833b67) reported; its tree + my test fix = snapshot 8afb484 on
+  wip/progress (NON-skip, CI running; waiter logs u105/ci-22). My edit: alloc_test.rs
+  `the_first_point_...` compared steps for equality and failed twice under load on a +49 blip; now
+  a tenth of the median step (R2 mutation still fails it; 3 clean runs of the file).
+- W checked: real library (u105/thin.py with frozen u105/dla-W): gens 5,6,7 thin H1,H2,H3
+  (80 MB -> 260 KB each), H1 run fills and gives the same trend as never-thinned H7, report thins
+  all (harness dir 322 MB -> 5 MB), a changed README.md -> `work-copy-stale` naming it, restored
+  -> runs. My mutations W1..W5 (u105/mut3.py): all caught.
+- Running locally (task bp1vspg40): u105/suite.sh -> u105/suite.out, then dynamic bench ->
+  u105/dynamic.log. When CI (8afb484) and these are green: commit with
+  wip-notes/commit-message-22.txt (`commit-snapshot-tree.sh 8afb484d5d0d62a295423ee4358cd250f06fddd7 ...`),
+  push main and dev.
+- CI on main for 49bccfe (run 45327928611) was still in progress at 05:17; waiter task bh2fo8jl9.
+- Then: pillow-11 unattended (plugin refreshed from the new commit; `cargo clean` first), then
+  version 0.9.0-preview.7 (previews are pre-authorized).
