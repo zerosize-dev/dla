@@ -2982,3 +2982,52 @@ unattended run at a time and no builder beside it.
   column text).
 - Still to write: G2 (Go order and nested modules), close-rest versus second look, a recorded
   control series (design open).
+
+## 20:55 UTC 2026-11-24 (clock checked): builder W reported and checked on the real Rust library; commit 2 on main; N's capture rule breaks the benchmark driver
+
+- COMMIT 2 ON MAIN: 987170a "The Rust driver builds with a pinned toolchain and its feature
+  warning is never cut" (tree of bb8fd30; pushed to main and dev). CI waiter bpvfman9c, logs
+  u115/ci-main-25. Task 109 closed.
+- BUILDER W REPORTED (20:38): verdict `writer_not_executed` for Rust, Go, Node; counts in
+  new crates/dla-workload/src/harness/lines.rs; guard lines in new crates/dla-census/src/
+  guards.rs; queue is_miss; targets.rs add_writer_gaps; new test file crates/dla-cli/tests/
+  writer_lines.rs (7 real-build tests); schemas/trend.schema.json regenerated. Python and JVM
+  not changed (stated).
+- MY CHECK on the real Rust library (u125/fastrace, binary u125/dla-W1 = W's build, then
+  u125/dla-W2 with my queue fix), using the model's own driver from the failed rerun
+  (r2-fastrace-keep/H2/dla_harness.rs):
+  - trend S1: F41 `writer_not_executed` "function send at .../spsc.rs:35 ran; the lines that add
+    to the holder did not: :38 0, :49 0, :55 0"; F21 (SPSC_RXS) "ran 1 times in 440 units";
+    queue pending F6, F21, F41; close-rest closed 41 and left the three.
+  - DEFECT FOUND (older, from the feature work): the queue said "dla harness run H1" and
+    `harness gen --next` declared nothing ("no pending candidate"), because H1 (generated
+    without the feature, never run) still "held" the targets that H2 (generated again with the
+    feature) had run. MY FIX (crates/dla-core/src/queue.rs, `in_flight`): an unrun harness does
+    not hold a target that a later harness declared and ran. Test
+    a_later_harness_that_ran_a_target_takes_it_over_from_an_earlier_one_that_never_ran
+    (mutation MUT_Q1 applied, failed, reverted). queue tests 54 pass.
+  - With the fix: queue "Next batch (focus): F6, F21, F41", `harness gen --next --features
+    enable` makes H4, `_attention` names F21 and F41, the block shows for F41 the three lines
+    "ran 0 times in the last run: self.pending_messages.push(value);" each under "above it,
+    line 37: if let Err(PushError::Full(value)) = self.tx.push(value) {".
+  - Names: W's guard test copied the library's API names (force_send, PushError::Full,
+    self.tx.push): replaced by neutral ones by me (guards.rs test only; 7 guard tests pass).
+- W's FIXTURE WARNING CONFIRMED BY ME (each run alone, quiet machine, current tree):
+  go-subscription-workers FAIL, go-subscription-workers-closed FAIL, node-socket-heartbeat
+  FAIL, all with `gate check --final: residual_capture H<n>: 1 heap residual row over the
+  threshold and H<n> has no summarized capture`; go-buffer-pool and
+  node-socket-heartbeat-cleared pass. CAUSE: N's part 4 (the capture rule) is not known to
+  the benchmark's fixed policy (bench/runner/src/dynamic/policy.rs, ops.rs). The dynamic
+  acceptance has NEVER run to its end on N's tree (every CI run of it was cancelled or failed
+  earlier; my local suite runs the static bench only). So the snapshot in CI (a2b404a) is
+  expected to fail its dynamic job, and N cannot go to main before this is fixed.
+- BUILDER N2 started 20:45 (Sonnet, agent a7b31e24433d31376): wip-notes/bench-capture-brief.md:
+  the fixed policy runs the capture and its summaries when a gate lists `residual_capture` or
+  a resolve is refused with `capture-not-summarized`; then the WHOLE dynamic run (started
+  20:49, uses target/debug/dla). DO NOT rebuild dla-cli or run heavy jobs until it reports.
+- Commit plan after N2: tree A = a2b404a tree + bench/runner changes (N, lock fix, N2: messages
+  25 and 27, plus a paragraph on the policy); then the full tree (W, queue fix: message 28).
+  One CI run on the full tree; A's own evidence is the a2b404a run (all jobs but the dynamic
+  one) plus N2's local dynamic run.
+- Then builders T, X, G2 (briefs ready), one at a time, each checked by a replay before any
+  unattended run.

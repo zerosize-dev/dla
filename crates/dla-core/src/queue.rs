@@ -624,8 +624,12 @@ impl Index {
             .min_by_key(|v| priority(*v))
     }
 
-    /// The first harness of `runtime` with pending targets that has not run, if any.
+    /// The first harness of `runtime` with pending targets that has not run, if any. A target
+    /// that a later harness declared and ran is no longer held by the earlier one: the later
+    /// harness took it over (a driver generated again with other options, or a harness of its
+    /// own for one target), and its reading stands.
     fn in_flight(&self, runtime: &str, pending: &[FindingId]) -> Option<String> {
+        let number = |h: &str| h.strip_prefix('H').and_then(|n| n.parse::<u64>().ok());
         self.runtime
             .iter()
             .filter(|(h, rt)| {
@@ -635,9 +639,14 @@ impl Index {
             })
             .map(|(h, _)| h)
             .find(|h| {
-                pending
-                    .iter()
-                    .any(|p| self.declared_by.get(p).is_some_and(|v| v.contains(h)))
+                pending.iter().any(|p| {
+                    self.declared_by.get(p).is_some_and(|v| {
+                        v.contains(h)
+                            && !v
+                                .iter()
+                                .any(|o| self.run.contains(o) && number(o) > number(h))
+                    })
+                })
             })
             .cloned()
     }
@@ -1964,6 +1973,33 @@ mod tests {
         assert_eq!(q.in_flight.as_deref(), Some("H1"));
         assert_eq!(q.batch, [FindingId::new(3)]);
         assert_eq!(q.pending.len(), 3);
+    }
+
+    #[test]
+    fn a_later_harness_that_ran_a_target_takes_it_over_from_an_earlier_one_that_never_ran() {
+        // H1 was generated for F1 and F2 and never run. H2 was generated again for the same
+        // two (other options) and ran: it missed both. H1 holds nothing any more, so the
+        // missed ones get their focus batch instead of "run H1".
+        let (run, _) = Run::new(3);
+        run.harness(&manifest("H1", &[1, 2], true));
+        run.harness(&manifest("H2", &[1, 2], true));
+        run.series("S1", "H2");
+        run.trend(
+            "T1",
+            "S1",
+            &[(1, Verdict::NotExecuted), (2, Verdict::NotExecuted)],
+        );
+        let q = queues(&run.reload(), None).remove(0);
+        assert_eq!(q.in_flight, None, "{q:?}");
+        assert!(q.batch.contains(&FindingId::new(1)), "{q:?}");
+        // A target H1 declared that no later harness ran is still held by H1.
+        let (run, _) = Run::new(3);
+        run.harness(&manifest("H1", &[1, 2], true));
+        run.harness(&manifest("H2", &[1], true));
+        run.series("S1", "H2");
+        run.trend("T1", "S1", &[(1, Verdict::NotExecuted)]);
+        let q = queues(&run.reload(), None).remove(0);
+        assert_eq!(q.in_flight.as_deref(), Some("H1"), "{q:?}");
     }
 
     #[test]

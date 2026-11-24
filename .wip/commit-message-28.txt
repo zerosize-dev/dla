@@ -1,0 +1,59 @@
+A holder counts as exercised only when a line that adds to it ran
+
+The changed tool was run again, unattended, on the Rust library of the
+earlier test. The feature warning worked: the model turned the feature on
+and the driver built. The run then ended after 93 seconds with nothing
+confirmed. Its driver made the library's usual set-up call. The documented
+leak is a vector that a channel sender fills in three lines, and those
+lines run only when the ring buffer is full, which happens only without
+that set-up. `dla trend` answered `executed` for the target because the
+function ran; every column was flat; the queue counted the target as
+measured and `dla ledger close-rest` closed the rest. The Go library of
+the same test has the same shape: each of fourteen methods appends to the
+leaking slice only while no delegate is set, after an early return.
+
+A flat series says something about a holder only when the lines that add
+to it ran. The coverage data the harness already collects has that:
+
+- For each target with writer sites the harness records how often each
+  adding line ran: from the regions of the coverage export for Rust (the
+  innermost region that covers the line), from the blocks of the cover
+  profile for Go, from the block ranges of the V8 coverage for Node,
+  mapped through source maps where the project is built. A line that
+  nothing covers reads unknown and changes nothing. A site that resets or
+  reassigns is not counted.
+- New target verdict `writer_not_executed`: the function ran and every
+  adding line has a known count of 0. For a Rust run in fresh-key mode it
+  is also given when the adding lines ran fewer than one time per ten
+  units ("ran 1 times in 440 units: the units do not feed the holder").
+  A flat probe column is read the same way when the coverage says the
+  adding lines never ran.
+- The queue treats it as a missed target: it gets a focus harness, and
+  after two different drivers that never ran a writer line it is settled
+  as not reached, with a remedy that says so. `dla ledger close-rest`
+  leaves it while it is pending.
+- The block of the next driver shows, per adding line that did not run,
+  the line with its source text and count and the lines above it that
+  decide whether it runs: the conditions and loops that enclose it and
+  the `if`s before it that leave early, nearest first, six at most. The
+  same lines are in the remedy of `dla trend`; `dla harness gen` names
+  the targets in `_attention`.
+- A harness that was generated and never run no longer holds a target
+  that a later harness declared and ran. Before, a driver generated again
+  with a feature on left the first one "in flight", and the queue kept
+  sending the reader back to run it.
+
+Replayed on the Rust library with the driver the model wrote in that run:
+the documented holder reads `writer_not_executed` (":38 0, :49 0, :55 0"),
+stays in the queue, and the next driver's block shows the three lines
+under `if let Err(...Full(value)) = ...push(value)`.
+
+Not covered. The JVM agent reports classes and methods only, so a JVM
+target is still read per function; the Python agent counts the lines of a
+finding's site, not its writer lines. Go coverage runs in `set` mode, so
+a count is 0 or 1 and the "fewer than one per ten units" reading is
+given for Rust only. A Go package in a module below the project root may
+read unknown. The Node mapping through a source map was tested on a
+hand-written map, not on a real bundler's output. The replay shows what
+the tool now says, not that a model then finds the set-up that fills the
+buffer.

@@ -243,14 +243,14 @@ pub fn writer_lines(project: &Path, file: &str, line: u32, count: Option<u64>) -
 mod tests {
     use super::*;
 
-    const RUST: &str = "impl Q {\n    pub fn force_send(&mut self, value: u32) {\n        if self.draining {\n            return;\n        }\n        if let Err(PushError::Full(value)) = self.tx.push(value) {\n            log();\n            self.pending.push(value);\n        }\n    }\n}\n";
+    const RUST: &str = "impl Q {\n    pub fn offer(&mut self, value: u32) {\n        if self.draining {\n            return;\n        }\n        if let Err(Refused::Full(value)) = self.ring.put(value) {\n            log();\n            self.pending.push(value);\n        }\n    }\n}\n";
 
     #[test]
     fn a_condition_that_opens_the_block_of_the_line_is_a_guard() {
         let g = guard_lines(RUST, 8, Some(2));
         assert_eq!(g.len(), 2, "{g:?}");
         assert_eq!(g[0].0, 6);
-        assert!(g[0].1.starts_with("if let Err(PushError::Full"));
+        assert!(g[0].1.starts_with("if let Err(Refused::Full"));
         // The early return before the block is the second.
         assert_eq!(g[1], (3, "if self.draining {".to_owned()));
     }
