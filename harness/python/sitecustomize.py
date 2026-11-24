@@ -1770,9 +1770,9 @@ def _heap_walk(start, relation, roots, own, deadline):
         for node in level:  # `level` grows while it is walked
             visited += 1
             if visited > _HEAP_WALK_NODES:
-                return "nodes", None, None
+                return "nodes", None, None, None
             if not visited & 127 and time.monotonic() > deadline:
-                return "time", None, None
+                return "time", None, None, None
             key = id(node)
             memo = known.get(key)
             if memo is not None:
@@ -1828,46 +1828,74 @@ def _heap_walk(start, relation, roots, own, deadline):
             elif best[0] == 1:
                 thing = (class_dicts[id(thing)], thing)
             root = (names[best[0]], thing)
-            _heap_remember(path, lvl, depth, root, known)
-            return "ok", path, root
+            _heap_remember(path, lvl, depth, root, known, None)
+            return "ok", path, root, None
         if memo_pick is None and pending and not following:
             memo_pick = min(pending, key=lambda c: (c[0], c[1]))
             depth = memo_pick[0]
         if memo_pick is not None:
-            node = memo_pick[2]
+            joint = memo_pick[2]
             path = []
-            cur = node
+            cur = pred[id(joint)]  # the objects before the known one
             while cur is not None:
                 path.append(cur)
                 cur = pred[id(cur)]
             path.reverse()
-            cut = len(path) - 1
-            entry = known[id(node)]
-            root = entry[2]
-            nxt = entry[0]
-            while nxt is not None:
-                path.append(nxt)
-                nxt = known[id(nxt)][0]
-            _heap_remember(path[: cut + 1], lvl, memo_pick[0], root, known, tail=path[cut + 1 :])
-            return "ok", path, root
+            root = known[id(joint)][2]
+            _heap_remember(path, lvl, memo_pick[0], root, known, joint)
+            return "ok", path, root, joint
         level = following
         depth += 1
-    return ("depth" if level else "none"), None, None
+    return ("depth" if level else "none"), None, None, None
 
 
 _HEAP_RANK = {"module-global": 0, "class-attribute": 1, "frame": 2, "no-referrer": 3}
 
 
-def _heap_remember(path, lvl, final, root, known, tail=()):
-    """Records, for each object of `path` not known yet, the object after it on the way to the root
-    and the levels left. `tail` is the part of the way that is known already."""
-    after = tail[0] if tail else None
-    for i in range(len(path) - 1, -1, -1):
-        node = path[i]
+def _heap_remember(path, lvl, final, root, known, joint):
+    """Records, for each object of `path` (the object first) not known yet, the object after it on
+    the way to the root, the levels left, the root and, for a traceback followed by another one,
+    the run of tracebacks it starts: `(count, last)`. `joint` is the known object the path ends
+    at (the object after the last one), or None when the path ends at the root."""
+    after = joint
+    for node in reversed(path):
         key = id(node)
+        run = None
+        if after is not None and type(node) is types.TracebackType and type(after) is types.TracebackType:
+            ahead = known[id(after)][3]
+            run = (ahead[0] + 1, ahead[1]) if ahead else (2, after)
         if key not in known:
-            known[key] = (after, max(final - lvl.get(key, 0), 0), root)
+            known[key] = (after, max(final - lvl.get(key, 0), 0), root, run)
         after = node
+
+
+def _heap_add(items, first, second, count, last):
+    """Adds a run (`count` objects from `first` to `last`; `second` is the one after `first`) to
+    `items`, joined to the run before it when both are tracebacks."""
+    if items:
+        f0, s0, c0, l0 = items[-1]
+        if type(l0) is types.TracebackType and type(first) is types.TracebackType:
+            items[-1] = (f0, s0 if c0 > 1 else first, c0 + count, last)
+            return
+    items.append((first, second, count, last))
+
+
+def _heap_items(path, joint, known):
+    """The path as items `(first, second, count, last)`: a run of tracebacks is one item. The part
+    after `joint` is read from the way that is remembered, a run at a time."""
+    items = []
+    for node in path:
+        _heap_add(items, node, None, 1, node)
+    node = joint
+    while node is not None:
+        after, _levels, _root, run = known[id(node)]
+        if run:
+            _heap_add(items, node, after, run[0], run[1])
+            node = known[id(run[1])][0]
+        else:
+            _heap_add(items, node, None, 1, node)
+            node = after
+    return items
 
 
 def _heap_gen_live(gen):
@@ -1877,8 +1905,8 @@ def _heap_gen_live(gen):
         return False
 
 
-def _heap_chain(path, root, raw):
-    """`(root dict, steps)` for one path, the object first, as written to the file."""
+def _heap_chain(items, root, raw):
+    """`(root dict, steps)` for one path (items of `_heap_items`, the object first), as written."""
     kind, thing = root
     holder = None
     named = False
@@ -1896,39 +1924,31 @@ def _heap_chain(path, root, raw):
         code = getattr(thing, "f_code", None) or getattr(thing, "gi_code", None) or getattr(thing, "cr_code", None)
         rootd["function"] = _heap_cut(getattr(code, "co_name", "?"))
         rootd["at"] = _heap_at(thing) or "?"
-    last = path[-1]
+    last = items[-1][3]
     if kind in ("module-global", "class-attribute"):
         via = _heap_link(holder, last, None, raw, names=True)
         rootd["key" if kind == "module-global" else "attribute"] = via[1:] if via and via.startswith(".") else via
     steps = []
-    count = len(path)
-    for i, node in enumerate(path):
+    count = len(items)
+    for i, (first, _second, run, end) in enumerate(items):
         if i + 1 < count:
-            held_by, owner = path[i + 1], (path[i + 2] if i + 2 < count else None)
-            via = _heap_link(held_by, node, owner, raw)
+            ahead = items[i + 1]
+            owner = ahead[1] if ahead[2] > 1 else (items[i + 2][0] if i + 2 < count else None)
+            via = _heap_link(ahead[0], end, owner, raw)
         elif holder is not None:
-            via = _heap_link(holder, node, None, raw, names=named)
+            via = _heap_link(holder, end, None, raw, names=named)
         else:
             via = None
-        step = {"type": _heap_type(node)}
+        step = {"type": _heap_type(first)}
         if via is not None:
             step["via"] = via
-        at = _heap_at(node)
+        at = _heap_at(first)
         if at is not None:
             step["at"] = at
+        if run > 1:
+            step["repeat"] = run  # a run of tracebacks is one step with a count
         steps.append(step)
-    # A run of tracebacks (one `tb_next` after the other) is one step with a count.
-    merged = []
-    for step in steps:
-        if merged and step["type"] == "traceback" and merged[-1]["type"] == "traceback":
-            merged[-1]["repeat"] = merged[-1].get("repeat", 1) + 1
-            if "via" in step:
-                merged[-1]["via"] = step["via"]
-            else:
-                merged[-1].pop("via", None)
-        else:
-            merged.append(step)
-    return rootd, merged
+    return rootd, steps
 
 
 def _heap_signature(rootd, steps):
@@ -1950,9 +1970,9 @@ def _heap_groups(kept, relation, roots, own, deadline, raw, tally):
         if time.monotonic() > deadline:
             tally["timed_out"] += 1
             continue
-        status, path, root = _heap_walk(obj, relation, roots, own, deadline)
+        status, path, root, joint = _heap_walk(obj, relation, roots, own, deadline)
         if status == "ok":
-            rootd, steps = _heap_chain(path, root, raw)
+            rootd, steps = _heap_chain(_heap_items(path, joint, relation[3]), root, raw)
             path = None
         else:
             if status in ("time", "nodes"):

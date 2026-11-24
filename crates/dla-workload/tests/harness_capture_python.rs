@@ -1391,3 +1391,106 @@ fn the_agent_gets_raw_values_only_when_the_runs_consent_allows_them() {
         "unset"
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// the walk to the holder does not go through a long shared chain once per object
+
+/// A module-level object that stores an exception and raises that same object again, 16 000
+/// times, with six lines that keep a list per call: every kept object of every line is held through
+/// the one traceback list of about 32 000 objects.
+const RERAISE_SCRIPT: &str = "\
+class Holder:
+    def __init__(self, ex):
+        self.ex = ex
+
+    def __getattr__(self, name):
+        raise self.ex
+
+
+_h = Holder(ImportError('missing'))
+
+
+def unit(i):
+    a1 = [i]
+    a2 = [i]
+    a3 = [i]
+    a4 = [i]
+    a5 = [i]
+    a6 = [i]
+    try:
+        _h.something
+    except ImportError:
+        pass
+    return len(a1) + len(a2) + len(a3) + len(a4) + len(a5) + len(a6)
+
+
+for n in range(16000):
+    unit(n)
+";
+
+#[test]
+fn a_chain_every_kept_object_runs_through_is_walked_once() {
+    if !have_python() {
+        return;
+    }
+    let run = Run::new();
+    fs::write(run.project.join("reraise_big.py"), RERAISE_SCRIPT).unwrap();
+    run.python(&["reraise_big.py"], &[("DLA_CAPTURE", "heap")]);
+    let doc = json(&run.pid_dir().join("py-1.retain.json"));
+    // The capture's own time, as the agent reports it: the walk that went through the list again
+    // for each object took the whole 60 s bound here, the walk that remembers its way takes a few
+    // seconds. The bound leaves room for a slow machine and is far from the old time.
+    let rec = run
+        .records()
+        .into_iter()
+        .rev()
+        .find(|r| !captures(r).is_empty())
+        .unwrap();
+    let heap = captures(&rec)
+        .into_iter()
+        .find(|c| c["kind"] == "heap")
+        .unwrap();
+    let ms = heap["ms"].as_u64().unwrap();
+    assert!(ms < 20_000, "the heap capture took {ms} ms");
+    // Every line that has kept objects has chains, and nothing was cut by the time bound.
+    let sites = doc["sites"].as_array().unwrap();
+    let lines: Vec<&Value> = sites
+        .iter()
+        .filter(|s| {
+            s["site"]
+                .as_str()
+                .is_some_and(|x| x.starts_with("reraise_big.py:"))
+                && s["kept"].as_u64().unwrap() > 0
+        })
+        .collect();
+    assert!(lines.len() >= 6, "{doc}");
+    for s in &lines {
+        let objects: u64 = s["chains"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["count"].as_u64().unwrap())
+            .sum();
+        assert_eq!(objects, s["kept"].as_u64().unwrap(), "{s}");
+        assert!(
+            s["chains"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|c| c["root"]["kind"] == "module-global"),
+            "{s}"
+        );
+    }
+    let text = doc["limitations"].to_string();
+    assert!(!text.contains("time bound"), "{text}");
+    // The run of tracebacks is one step with its length.
+    let longest = lines
+        .iter()
+        .flat_map(|s| s["chains"].as_array().unwrap())
+        .flat_map(|c| c["steps"].as_array().unwrap())
+        .filter(|st| st["type"] == "traceback")
+        .filter_map(|st| st["repeat"].as_u64())
+        .max()
+        .unwrap();
+    assert!(longest > 10_000, "{longest}");
+}
