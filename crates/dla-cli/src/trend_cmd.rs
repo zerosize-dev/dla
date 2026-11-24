@@ -504,7 +504,9 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         let held = dla_core::measured_holders::scan_in(&ledger, Some(&ctx.run_dir)).tests_only;
         let n = cols
             .iter()
-            .filter(|c| dla_core::grown::is_alloc_site_column(&c.name) && dla_core::gate::non_flat(c))
+            .filter(|c| {
+                dla_core::grown::is_alloc_site_column(&c.name) && dla_core::gate::non_flat(c)
+            })
             .filter(|c| dla_core::grown::column_site(c).is_some_and(|s| held.contains(s)))
             .count();
         if let Some(note) = dla_core::measured_holders::Scan::note_for(n) {

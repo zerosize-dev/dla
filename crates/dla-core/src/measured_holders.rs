@@ -78,10 +78,7 @@ pub fn harness_of_path(rel: &str) -> Option<&str> {
 /// True when `f` covers the holder whose owner is `owner`: a leak-side finding with that owner
 /// (a shorter form of one, or a longer one, counts: [`owners_match`]).
 pub fn finding_covers(f: &Finding, owner: &str) -> bool {
-    f.polarity() == Polarity::Leak
-        && f.owner
-            .as_deref()
-            .is_some_and(|o| owners_match(owner, o))
+    f.polarity() == Polarity::Leak && f.owner.as_deref().is_some_and(|o| owners_match(owner, o))
 }
 
 /// True when some finding of the ledger covers the holder whose owner is `owner`.
@@ -230,10 +227,86 @@ impl Scan {
 /// The description of the gate item for an uncovered holder of the project.
 pub fn item_text(h: &ProjectHolder) -> String {
     format!(
-        "{} is a holder of the project that keeps {} growing line{} and no finding has its owner {}: act on it first, one finding at the holder covers every line it keeps",
+        "{} keeps {} growing line{} and no finding has the owner {}: one finding at the holder covers them",
         h.key,
         h.lines.len(),
         if h.lines.len() == 1 { "" } else { "s" },
         h.owner
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        evidence::{EvidenceCoverage, NewEvidence, Tool},
+        ledger::Ledger,
+    };
+    use serde_json::json;
+
+    /// A ledger with one retention record of harness H4 whose bounded result lists `result` and
+    /// whose raw file in the returned directory lists `raw`.
+    fn ledger_with(result: Value, raw: Option<Value>) -> (tempfile::TempDir, Ledger) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut l = Ledger::create(dir.path()).unwrap();
+        let raw_rel = raw.map(|v| {
+            fs::create_dir_all(dir.path().join("retain")).unwrap();
+            fs::write(dir.path().join("retain/R1.json"), v.to_string()).unwrap();
+            "retain/R1.json".to_owned()
+        });
+        l.add_evidence(NewEvidence {
+            source: Source::Artifact {
+                path: "harness/H4/out/p1/capture/1/py-1.retain.json".into(),
+                sha256: "0".into(),
+            },
+            tool: Tool {
+                name: TOOL.into(),
+                version: "1".into(),
+            },
+            authority: Authority::Live,
+            kind: EvidenceKind::RetentionPath,
+            result,
+            raw: raw_rel,
+            coverage: EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        })
+        .unwrap();
+        (dir, l)
+    }
+
+    #[test]
+    fn the_raw_file_gives_every_line_a_holder_keeps_when_the_bounded_record_lists_few() {
+        let entry = |lines: &[&str]| {
+            json!({"key": "static:pkg.m._reg", "owner": "pkg.m._reg", "of": "project",
+                "finding_site": lines[1],
+                "sites": lines.iter().map(|l| json!({"site": l})).collect::<Vec<_>>()})
+        };
+        let (dir, l) = ledger_with(
+            json!({"holders": [entry(&["a.py:1", "a.py:2"])]}),
+            Some(json!({"holders": [entry(&["a.py:1", "a.py:2", "a.py:3", "a.py:4"])]})),
+        );
+        let s = scan_in(&l, Some(dir.path()));
+        assert_eq!(s.project.len(), 1);
+        assert_eq!(s.project[0].lines, ["a.py:1", "a.py:2", "a.py:3", "a.py:4"]);
+        assert_eq!(s.project[0].site, "a.py:2");
+        assert_eq!(s.project[0].evidence, "E1");
+        assert_eq!(
+            s.harnesses.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["H4"]
+        );
+        // A raw file that is gone leaves the bounded record's lines.
+        let s = scan_in(&l, None);
+        assert_eq!(s.project[0].lines, ["a.py:1", "a.py:2"]);
+        // An older record has no `of`: no holder is the project's or the tests'.
+        let (dir, l) = ledger_with(
+            json!({"holders": [{"key": "static:pkg.m._reg", "sites": [{"site": "a.py:1"}]}]}),
+            None,
+        );
+        let s = scan_in(&l, Some(dir.path()));
+        assert!(s.project.is_empty() && s.tests_only.is_empty());
+        assert_eq!(Scan::note_for(0), None);
+        assert!(Scan::note_for(1).unwrap().contains("1 growing line "));
+        assert!(Scan::note_for(3).unwrap().contains("3 growing lines "));
+    }
 }

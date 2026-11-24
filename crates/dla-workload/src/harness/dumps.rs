@@ -480,6 +480,26 @@ mod tests {
     }
 
     #[test]
+    fn line_counts_keep_the_numbers_and_a_malformed_section_does_not_lose_the_record() {
+        let r = parse_record(&line(json!({
+            "dla_harness":1,"phase":"checkpoint","pid":5,"runtime":"python","x":10,
+            "line_counts":{"a.py:3":12,"a.py:4":0,"a.py:5":"many"}
+        })))
+        .unwrap();
+        let counts = r.dump.line_counts.unwrap();
+        assert_eq!(counts.len(), 2);
+        assert_eq!(counts["a.py:3"], 12.0);
+        assert_eq!(counts["a.py:4"], 0.0);
+        let r = parse_record(&line(json!({
+            "dla_harness":1,"phase":"exit","pid":5,"runtime":"python","x":10,
+            "line_counts":["a.py:3"]
+        })))
+        .unwrap();
+        assert!(r.dump.line_counts.is_none());
+        assert_eq!(r.dump.x, Some(10.0));
+    }
+
+    #[test]
     fn shim_raw_sites_do_not_lose_the_record() {
         let l = line(json!({
             "dla_harness":1,"phase":"exit","pid":5,"runtime":"native","x":1000,

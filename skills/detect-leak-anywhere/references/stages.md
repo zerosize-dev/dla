@@ -400,6 +400,13 @@ under the run directory and need tier 1.
     program's interpreter has it, threads, tasks, ResourceWarning sites, and with `heap` the holder chains
     of the objects made at the lines that grew, read by `heap-graph`). `alloc` and `heap` slow the points
     that take them; a growing `py.blocks@` line is explained by `--capture alloc,heap` (one run, two summarize commands).
+    A holder of the project (a module global or a class attribute of a project source file that is not test code) that
+    keeps a growing line and that no finding has the owner of is the first thing to act on, before the next driver and
+    before any alloc-test: `dla summarize heap-graph` prints it first (`_attention`), the gate and `dla run status` list it before
+    everything else, and `dla harness gen --next` is refused with `measured-holder-first` until the `dla ledger add ... --owner
+    <owner> --site <line> --holder static/global --region heap` it prints is run. A holder of the tests (the driver, a file of test code, the test runner)
+    is no finding: the gate and `dla trend` say how many lines the test code holds. A line the unit does not execute proves
+    nothing (a branch it does not take allocates nothing): an alloc-test that says `inconclusive` because the line did not run is not evidence against the leak.
   - Rust and native, program started directly: `--tool valgrind` (memcheck XML plus the vgdb chain
     files) or `--tool heaptrack` (`heaptrack_print` report and a first-to-last diff) instead of a
     measured series. A wrapper (make, sh) gets no vgdb chain. A missing tool refuses with

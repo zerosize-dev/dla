@@ -59,8 +59,9 @@ pub fn collect(src: &str, info: &mut ProjectInfo) {
             else {
                 return;
             };
+            info.go_types.insert(text(name, src).to_owned());
             if ty.kind() == "struct_type" {
-                info.note_fields(text(name, src), text(ty, src));
+                note_go_fields(text(name, src), ty, src, info);
             }
             if ty.kind() == "interface_type" {
                 info.go_interfaces.insert(text(name, src).to_owned());
@@ -80,9 +81,22 @@ pub fn collect(src: &str, info: &mut ProjectInfo) {
             }) =>
         {
             info.longlived.extend(super::caps_idents(text(n, src)));
+            info.longlived.extend(built_types(n, src));
+            info.go_startup_calls.extend(plain_calls(n, src));
         }
         "function_declaration" => {
             let name = n.child_by_field_name("name").map_or("", |c| text(c, src));
+            let built = built_types(n, src);
+            if name == "init" {
+                info.go_startup_calls.extend(plain_calls(n, src));
+            }
+            if super::entry_fn_name(name) {
+                info.longlived.extend(built.iter().cloned());
+            }
+            info.go_fn_built
+                .entry(name.to_owned())
+                .or_default()
+                .extend(built);
             if super::entry_fn_name(name) {
                 let body = text(n, src);
                 for t in super::caps_idents(body) {
@@ -95,6 +109,82 @@ pub fn collect(src: &str, info: &mut ProjectInfo) {
         }
         _ => {}
     });
+}
+
+/// Records the types the fields of struct `owner` mention. A name through a package
+/// qualifier counts when it is exported; any other name is kept, of any case, until
+/// `ProjectInfo::finish` knows the declared types. Field names are not type names.
+fn note_go_fields(owner: &str, ty: Node<'_>, src: &str, info: &mut ProjectInfo) {
+    visit(ty, &mut |f| {
+        if f.kind() != "field_declaration" {
+            return;
+        }
+        let Some(t) = f.child_by_field_name("type") else {
+            return;
+        };
+        visit(t, &mut |id| {
+            if id.kind() != "type_identifier" {
+                return;
+            }
+            let name = text(id, src);
+            if id.parent().is_some_and(|p| p.kind() == "qualified_type") {
+                if name.starts_with(char::is_uppercase) && name != owner {
+                    info.holds
+                        .entry(owner.to_owned())
+                        .or_default()
+                        .push(name.to_owned());
+                }
+            } else {
+                info.go_field_types
+                    .entry(owner.to_owned())
+                    .or_default()
+                    .push(name.to_owned());
+            }
+        });
+    });
+}
+
+/// Names of the types built under `n` by a composite literal (`T{..}`, `&T{..}`) or
+/// `new(T)`, of any case.
+fn built_types(n: Node<'_>, src: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let plain = |t: Node<'_>| {
+        let t = if t.kind() == "generic_type" {
+            t.child_by_field_name("type")?
+        } else {
+            t
+        };
+        (t.kind() == "type_identifier").then(|| text(t, src).to_owned())
+    };
+    visit(n, &mut |c| match c.kind() {
+        "composite_literal" => {
+            out.extend(c.child_by_field_name("type").and_then(plain));
+        }
+        "call_expression" => {
+            let is_new = c
+                .child_by_field_name("function")
+                .is_some_and(|f| f.kind() == "identifier" && text(f, src) == "new");
+            if is_new && let Some(args) = c.child_by_field_name("arguments") {
+                out.extend(named_kids(args).first().copied().and_then(plain));
+            }
+        }
+        _ => {}
+    });
+    out
+}
+
+/// Names of the package-level functions called as `name(..)` under `n`.
+fn plain_calls(n: Node<'_>, src: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    visit(n, &mut |c| {
+        if c.kind() == "call_expression"
+            && let Some(f) = c.child_by_field_name("function")
+            && f.kind() == "identifier"
+        {
+            out.push(text(f, src).to_owned());
+        }
+    });
+    out
 }
 
 fn named_kids<'t>(n: Node<'t>) -> Vec<Node<'t>> {
@@ -452,6 +542,47 @@ mod tests {
         let built = "package p\ntype Hub struct {\n\tsubs []int\n}\ntype Inner struct {\n\titems map[string]int\n}\ntype App struct {\n\tin *Inner\n}\nfunc main() {\n\t_ = &App{}\n}\n";
         let owners: Vec<String> = run(built).iter().map(|h| h.owner.clone()).collect();
         assert_eq!(owners, ["p.a.Hub.subs", "p.a.Inner.items"]);
+    }
+
+    const LEAK: &str = "package p\nvar global = defaultProvider()\nfunc defaultProvider() *Box {\n\tv := &Box{}\n\tv.Store(&provider{})\n\treturn v\n}\ntype provider struct {\n\tmeters map[string]*meter\n}\ntype meter struct {\n\tinstruments []instrument\n}\nfunc (m *meter) Counter() {\n\tm.instruments = append(m.instruments, &counter{})\n}\nfunc (m *meter) Reset() {\n\tm.instruments = nil\n}\n";
+
+    #[test]
+    fn unexported_types_built_at_start_up_hold_their_fields() {
+        let owners: Vec<String> = run(LEAK).iter().map(|h| h.owner.clone()).collect();
+        assert!(
+            owners.contains(&"p.a.meter.instruments".to_owned()),
+            "{owners:?}"
+        );
+        assert!(
+            owners.contains(&"p.a.provider.meters".to_owned()),
+            "{owners:?}"
+        );
+        // The same types, with the start-up call removed: nothing long-lived holds them.
+        let idle = LEAK.replace("var global = defaultProvider()\n", "");
+        assert!(run(&idle).is_empty());
+        // A literal directly in a package variable, and a call from `init`, count too.
+        let direct = "package p\nvar g = &hub{}\ntype hub struct {\n\titems []int\n}\n";
+        assert_eq!(run(direct).len(), 2);
+        let from_init = "package p\nfunc init() {\n\tmk()\n}\nfunc mk() {\n\t_ = new(hub)\n}\ntype hub struct {\n\titems []int\n}\n";
+        assert_eq!(run(from_init).len(), 1);
+    }
+
+    #[test]
+    fn a_type_built_only_where_a_test_calls_it_is_not_long_lived() {
+        let src = "package p\nfunc build() *hub {\n\treturn &hub{}\n}\nfunc TestBuild() {\n\t_ = build()\n}\ntype hub struct {\n\titems []int\n}\n";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn builtin_types_and_field_names_are_not_edges() {
+        // `string` and the field name `meter` are not project types.
+        let src = "package p\ntype root struct {\n\tmeter string\n\tn int\n}\ntype meter struct {\n\titems []int\n}\nfunc main() {\n\t_ = &root{}\n}\n";
+        assert!(run(src).is_empty());
+        let mut info = ProjectInfo::default();
+        collect(src, &mut info);
+        info.finish();
+        assert!(info.holds.get("root").is_none_or(Vec::is_empty));
+        assert!(!info.is_long_lived("meter"));
     }
 
     #[test]

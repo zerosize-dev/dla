@@ -717,6 +717,8 @@ mod tests {
         let gone = p.absent_site.expect("the missing column is named");
         assert_eq!(gone.column, "py.blocks@shop/store.py:5");
         assert_eq!(gone.site, "shop/store.py:5");
+        // The series whose trend showed it grow is the one the next step names.
+        assert_eq!(gone.series, "S1");
         // With no trend of any harness that counted it, the whole-process column is the fallback
         // as before.
         let p = pick_in(&s, &ledger, Some(&f), &[], Some(&t_here), &[&t_here], "H2").unwrap();

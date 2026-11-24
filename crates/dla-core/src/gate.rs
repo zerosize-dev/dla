@@ -1263,7 +1263,9 @@ fn series_mode(view: &RunView, series: &str) -> Option<String> {
 /// retention record, one capture. Only the holder items refuse `dla harness gen --next`.
 pub fn measured_lead(view: &RunView) -> Vec<Missing> {
     let mut out = measured_holder_items(view);
-    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    // One item per harness and mode: the series of a rerun and of the two key modes of one
+    // harness share the capture.
+    let mut captures: Vec<(String, String, Vec<String>, usize)> = Vec::new();
     for t in &view.trends {
         if view.gap_series.contains(&t.series) || view.summary_series.contains(&t.series) {
             continue;
@@ -1287,20 +1289,30 @@ pub fn measured_lead(view: &RunView) -> Vec<Missing> {
             }
         }
         let Some(h) = harness else { continue };
-        if !seen.insert(t.series.as_str()) {
-            continue;
-        }
         let mode = series_mode(view, &t.series).unwrap_or_else(|| "fresh".to_owned());
+        match captures
+            .iter_mut()
+            .find(|(ch, cm, ..)| *ch == h && *cm == mode)
+        {
+            Some((_, _, series, n)) => {
+                series.push(t.series.clone());
+                *n = (*n).max(lines);
+            }
+            None => captures.push((h, mode, vec![t.series.clone()], lines)),
+        }
+    }
+    for (h, mode, series, lines) in captures {
         out.push(Missing {
             kind: CAPTURE_KIND.to_owned(),
-            id: format!("{}:capture", t.series),
+            id: format!("{}:capture", series[0]),
             description: format!(
-                "series {} of {h} has {lines} growing py.blocks line{} tied to no finding and {h} has no retention record: the capture says who holds the objects, and one finding at the holder covers the lines it keeps",
-                t.series,
-                if lines == 1 { "" } else { "s" }
+                "{} growing py.blocks line{} of {} tied to no finding and {h} has no retention record",
+                lines,
+                if lines == 1 { "" } else { "s" },
+                series.join(", ")
             ),
             fix: format!(
-                "dla harness run {h} --mode {mode} --capture alloc,heap, then the two dla summarize commands that run prints (alloc-stack-diff for the stacks, heap-graph for who holds the objects)"
+                "dla harness run {h} --mode {mode} --capture alloc,heap, then the two dla summarize commands it prints"
             ),
         });
     }
@@ -3234,13 +3246,23 @@ mod holder_chain_tests {
         let dir = tempfile::tempdir().unwrap();
         let mut l = Ledger::create(dir.path()).unwrap();
         let mut add = |kind: EvidenceKind, authority: Authority, result: serde_json::Value| {
+            // The holder chains are the capture of harness H1 (a harness with growing lines and no
+            // retention record gets a capture item instead of one item per line).
+            let retention = kind == EvidenceKind::RetentionPath;
             l.add_evidence(NewEvidence {
-                source: Source::Repo {
-                    commit: "c".into(),
-                    path: None,
+                source: if retention {
+                    Source::Artifact {
+                        path: "harness/H1/out/p1/capture/1/py-1.retain.json".into(),
+                        sha256: "0".into(),
+                    }
+                } else {
+                    Source::Repo {
+                        commit: "c".into(),
+                        path: None,
+                    }
                 },
                 tool: Tool {
-                    name: "t".into(),
+                    name: if retention { "dla-py-retain" } else { "t" }.into(),
                     version: "1".into(),
                 },
                 authority,
@@ -3423,5 +3445,225 @@ mod holder_chain_tests {
             .unwrap_or_else(|| panic!("{all:?}"));
         assert!(item.description.contains("tied to no finding"), "{item:?}");
         assert!(!item.fix.contains("F1"), "{item:?}");
+    }
+}
+
+#[cfg(test)]
+mod measured_holder_tests {
+    use super::*;
+    use crate::{
+        Ledger, NewFinding, Origin,
+        evidence::{Authority, EvidenceCoverage, NewEvidence, Source, Tool},
+    };
+
+    /// A run with a Python harness series S1 whose trend has the non-flat site columns of
+    /// `lines`, the Python holder chains `holders` as the capture record of harness H1 (none
+    /// with `holders` `None`), and the findings `(owner, site)` (the first is F1).
+    fn scene(
+        holders: Option<serde_json::Value>,
+        lines: &[&str],
+        findings: &[(&str, &str)],
+    ) -> RunView {
+        let dir = tempfile::tempdir().unwrap();
+        let mut l = Ledger::create(dir.path()).unwrap();
+        let mut add = |kind: EvidenceKind, retention: bool, result: serde_json::Value| {
+            l.add_evidence(NewEvidence {
+                source: if retention {
+                    Source::Artifact {
+                        path: "harness/H1/out/p1/capture/1/py-1.retain.json".into(),
+                        sha256: "0".into(),
+                    }
+                } else {
+                    Source::Repo {
+                        commit: "c".into(),
+                        path: None,
+                    }
+                },
+                tool: Tool {
+                    name: if retention { "dla-py-retain" } else { "t" }.into(),
+                    version: "1".into(),
+                },
+                authority: if retention {
+                    Authority::Live
+                } else {
+                    Authority::Static
+                },
+                kind,
+                result,
+                raw: None,
+                coverage: EvidenceCoverage::default(),
+                limitations: vec![],
+                unknowns: vec![],
+            })
+            .unwrap();
+        };
+        add(EvidenceKind::StaticHit, false, serde_json::json!({}));
+        if let Some(h) = holders {
+            add(
+                EvidenceKind::RetentionPath,
+                true,
+                serde_json::json!({ "holders": h }),
+            );
+        }
+        for (owner, site) in findings {
+            let mut nf = NewFinding::new(
+                Origin::parse("census").unwrap(),
+                vec![crate::EvidenceId::new(1)],
+            );
+            if !owner.is_empty() {
+                nf.owner = Some((*owner).into());
+            }
+            nf.site = Some((*site).into());
+            l.add_finding(nf).unwrap();
+        }
+        let state =
+            crate::state::RunState::init("/p", None, 3600, None, crate::state::now_utc()).unwrap();
+        let mut view = RunView::new(state, l, None);
+        let col = |name: String| -> ColumnTrend {
+            serde_json::from_value(serde_json::json!({
+                "name": name, "unit": "count", "kind": "counter", "region": "heap",
+                "n": 8, "noise": 0.0, "rise": 100.0, "shape": "steady", "gate": "pass",
+                "gate_failed": [],
+            }))
+            .unwrap()
+        };
+        view.trends = vec![TrendReport {
+            schema_version: 1,
+            id: "T1".into(),
+            series: "S1".into(),
+            thresholds: dla_stats::GateThresholds::default(),
+            columns: lines
+                .iter()
+                .map(|l| col(format!("py.blocks@{l}")))
+                .collect(),
+            targets: vec![],
+        }];
+        view.series_harness.insert("S1".into(), "H1".into());
+        // The ledger's files are in a directory that goes away with `dir`; the view reads none.
+        drop(dir);
+        view
+    }
+
+    fn project_holder() -> serde_json::Value {
+        serde_json::json!([
+            {"key": "static:pkg.m._providers", "of": "project", "kept": 40, "lines": 2,
+             "finding_site": "a.py:2", "sites": [{"site": "a.py:1"}, {"site": "a.py:2"}]}
+        ])
+    }
+
+    fn column_ids(all: &[Missing]) -> Vec<&str> {
+        all.iter()
+            .filter(|m| m.kind == "trend_column")
+            .map(|m| m.id.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn a_holder_of_the_project_that_no_finding_covers_is_the_first_item_with_the_add_command() {
+        let v = scene(
+            Some(project_holder()),
+            &["a.py:1", "a.py:2", "a.py:9"],
+            &[("other.mod.attr", "z.py:3")],
+        );
+        for target in [GateTarget::Stage(Stage::Classify), GateTarget::Final] {
+            let all = missing(&v, target, None);
+            let first = &all[0];
+            assert_eq!(first.kind, HOLDER_KIND, "{all:?}");
+            assert_eq!(first.id, "holder:pkg.m._providers");
+            assert_eq!(
+                first.fix,
+                "dla ledger add --origin growth-series --evidence E2 --owner pkg.m._providers --site a.py:2 --holder static/global --region heap"
+            );
+            // The lines it keeps have no item of their own; a line it does not keep has.
+            assert_eq!(column_ids(&all)[..1], ["T1:py.blocks@a.py:9"], "{all:?}");
+            assert_eq!(actions(&all).list[0].kind, HOLDER_KIND);
+        }
+    }
+
+    #[test]
+    fn a_finding_with_the_holders_owner_covers_it_and_every_line_it_keeps() {
+        let v = scene(
+            Some(project_holder()),
+            &["a.py:1", "a.py:2"],
+            &[("pkg.m._providers", "z.py:3")],
+        );
+        let all = missing(&v, GateTarget::Final, None);
+        assert!(all.iter().all(|m| m.kind != HOLDER_KIND), "{all:?}");
+        assert!(measured_holder_items(&v).is_empty());
+        // The lines are tied to it, so their items wait for its disposition (they name it).
+        for c in &v.trends[0].columns {
+            assert_eq!(
+                tied_findings(&v, &v.trends[0], c)
+                    .iter()
+                    .map(|f| f.id.to_string())
+                    .collect::<Vec<_>>(),
+                ["F1"]
+            );
+        }
+        // A finding at a kept line that has no owner is not the holder's.
+        let v = scene(
+            Some(project_holder()),
+            &["a.py:1", "a.py:2"],
+            &[("", "a.py:1")],
+        );
+        assert_eq!(measured_holder_items(&v).len(), 1);
+    }
+
+    #[test]
+    fn a_line_only_the_tests_hold_is_no_item_and_the_gate_counts_it() {
+        let v = scene(
+            Some(serde_json::json!([
+                {"key": "static:__main__._seen", "of": "tests", "kept": 9,
+                 "sites": [{"site": "a.py:1"}, {"site": "a.py:2"}]},
+                {"key": "stack:w@a.py:9", "kept": 3, "sites": [{"site": "a.py:2"}]}
+            ])),
+            &["a.py:1", "a.py:2", "a.py:7"],
+            &[],
+        );
+        let all = missing(&v, GateTarget::Final, None);
+        assert!(all.iter().all(|m| m.kind != HOLDER_KIND), "{all:?}");
+        // a.py:1 is the tests' alone and a.py:2 is held by a frame as well.
+        assert_eq!(
+            column_ids(&all),
+            ["T1:py.blocks@a.py:2", "T1:py.blocks@a.py:7"],
+            "{all:?}"
+        );
+        let note = v.measured_holders().tests_note().unwrap();
+        assert!(note.contains("test code holds 1 growing line "), "{note}");
+    }
+
+    #[test]
+    fn untied_lines_of_a_harness_with_no_retention_record_are_one_capture_item() {
+        let v = scene(None, &["a.py:1", "a.py:2", "a.py:9"], &[]);
+        let all = missing(&v, GateTarget::Final, None);
+        let items: Vec<&Missing> = all.iter().filter(|m| m.kind == CAPTURE_KIND).collect();
+        assert_eq!(items.len(), 1, "{all:?}");
+        assert_eq!(items[0].id, "S1:capture");
+        assert!(
+            items[0]
+                .description
+                .starts_with("3 growing py.blocks lines")
+        );
+        assert!(
+            items[0].fix.starts_with(
+                "dla harness run H1 --mode fresh --capture alloc,heap, then the two dla summarize commands"
+            ),
+            "{}",
+            items[0].fix
+        );
+        assert!(column_ids(&all).is_empty(), "{all:?}");
+        assert_eq!(actions(&all).list[0].kind, CAPTURE_KIND);
+        // The capture item does not refuse `harness gen --next`: only a holder item does.
+        assert!(measured_holder_items(&v).is_empty());
+        // With a retention record of the harness that roots none of them, the per-line items
+        // are back.
+        let v = scene(
+            Some(serde_json::json!([{"key": "stack:w@a.py:9", "kept": 3, "sites": []}])),
+            &["a.py:1", "a.py:2", "a.py:9"],
+            &[],
+        );
+        let all = missing(&v, GateTarget::Final, None);
+        assert!(all.iter().all(|m| m.kind != CAPTURE_KIND), "{all:?}");
+        assert_eq!(column_ids(&all).len(), 3, "{all:?}");
     }
 }

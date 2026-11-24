@@ -2049,6 +2049,47 @@ fn next_commands(
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_lines_an_alloc_test_counts_are_the_finding_and_the_columns_tied_to_it() {
+        use dla_core::{finding::Region, ids::FindingId, trend::TrendReport};
+        let mut f = Finding::candidate(
+            FindingId::new(3),
+            dla_core::Origin::parse("growth-series").unwrap(),
+            vec![],
+        );
+        f.region = Some(Region::Heap);
+        f.site = Some("shop/providers.py:8".to_owned());
+        let col = |name: &str, candidates: Vec<&str>, rise: f64| -> dla_core::trend::ColumnTrend {
+            serde_json::from_value(serde_json::json!({
+                "name": name, "unit": "count", "kind": "counter", "region": "heap",
+                "n": 8, "noise": 0.0, "rise": rise, "shape": "steady", "gate": "pass",
+                "gate_failed": [], "candidates": candidates,
+            }))
+            .unwrap()
+        };
+        let trend = TrendReport {
+            schema_version: 1,
+            id: "T1".into(),
+            series: "S1".into(),
+            thresholds: dla_stats::GateThresholds::default(),
+            columns: vec![
+                // Tied by the candidate, at another line than the finding's.
+                col("py.blocks@shop/providers.py:9", vec!["F3"], 10.0),
+                // Another finding's line, a whole-process column and the finding's own line again.
+                col("py.blocks@shop/other.py:2", vec!["F9"], 10.0),
+                col("py.traced", vec!["F3"], 10.0),
+                col("py.blocks@shop/providers.py:8", vec![], 10.0),
+            ],
+            targets: vec![],
+        };
+        let ledger = Ledger::from_text("").unwrap();
+        assert_eq!(
+            lines_of_finding(&ledger, &f, &[&trend]),
+            ["shop/providers.py:8", "shop/providers.py:9"]
+        );
+        assert_eq!(lines_of_finding(&ledger, &f, &[]), ["shop/providers.py:8"]);
+    }
+
     fn growth_evidence(ledger: &Ledger, root: &Finding) -> Option<EvidenceId> {
         let all: Vec<&dla_core::evidence::EvidenceRecord> = ledger.evidence().collect();
         dla_core::grown::growth_evidence(&all, root, &[])

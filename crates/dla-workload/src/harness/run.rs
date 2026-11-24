@@ -4034,6 +4034,18 @@ mod test_hooks {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_lines_the_agent_counts_are_listed_once_and_bounded() {
+        let v = |l: &[&str]| l.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(lines_env(&[]), None);
+        assert_eq!(
+            lines_env(&v(&["a.py:1", "b.py:2", "a.py:1", "x,y:3"])).as_deref(),
+            Some("a.py:1,b.py:2")
+        );
+        let many: Vec<String> = (0..MAX_LINES + 50).map(|n| format!("a.py:{n}")).collect();
+        assert_eq!(lines_env(&many).unwrap().split(',').count(), MAX_LINES);
+    }
+
     use super::*;
 
     #[test]

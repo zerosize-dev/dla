@@ -163,6 +163,10 @@ pub mod codes {
     /// A harness copy of the project was thinned (only the files that differ from the project
     /// were kept) and a file it needs back has changed or gone from the project since.
     pub const WORK_COPY_STALE: &str = "work-copy-stale";
+    /// `dla harness gen --next` was asked while a measurement showed a holder of the project that
+    /// keeps growing lines and that no finding covers: the holder comes before the next
+    /// candidate of the queue.
+    pub const MEASURED_HOLDER_FIRST: &str = "measured-holder-first";
 }
 
 /// A rule-based refusal: what was refused, what is missing, the command that fixes it.

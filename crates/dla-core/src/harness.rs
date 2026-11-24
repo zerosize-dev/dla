@@ -1536,6 +1536,33 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn the_line_runs_of_a_series_are_read_over_the_points_after_the_warm_up() {
+        let runs = LineRuns {
+            dla_line_runs: 1,
+            series: "S1".into(),
+            sites: BTreeMap::from([
+                (
+                    "a.py:1".to_owned(),
+                    vec![Some(4.0), Some(10.0), None, Some(30.0)],
+                ),
+                ("a.py:2".to_owned(), vec![Some(0.0), Some(0.0), Some(0.0)]),
+                ("a.py:3".to_owned(), vec![Some(1.0), None, None]),
+            ]),
+        };
+        // The warm-up point is skipped, a point with no count is skipped.
+        assert_eq!(runs.span("a.py:1", 1), Some((10.0, 30.0)));
+        assert_eq!(runs.span("a.py:1", 0), Some((4.0, 30.0)));
+        // A line that never ran has a span that did not rise; a line with one count has none.
+        assert_eq!(runs.span("a.py:2", 1), Some((0.0, 0.0)));
+        assert_eq!(runs.span("a.py:3", 0), None);
+        assert_eq!(runs.span("other.py:1", 0), None);
+        let dir = tempfile::tempdir().unwrap();
+        runs.save(dir.path(), "H1").unwrap();
+        assert_eq!(LineRuns::load(dir.path(), "H1", "S1"), Some(runs));
+        assert_eq!(LineRuns::load(dir.path(), "H1", "S2"), None);
+    }
+
     fn manifest() -> HarnessManifest {
         HarnessManifest {
             sibling_of: Default::default(),

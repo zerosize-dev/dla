@@ -2342,3 +2342,29 @@ flat test-loop readings get only 9 second looks.
     `next: dla ledger refute F1 --evidence E19`; the refute is ACCEPTED. The loss reproduced.
 - After builder H: line mode must end with inconclusive and a refused refute; holder mode must
   show the holder item first in the classify gate and refuse `harness gen --next` until the add.
+
+## 12:50 UTC 2026-11-24 (approx.): builder G reported and checked (Go census)
+
+- G changed crates/dla-census/src/lang/go.rs (+133) and model.rs (+28) only. New: held field
+  types of any case when the project declares the type (go_types, go_field_types resolved in
+  finish); types built by a literal or new() in a package-level var, in an entry-named function,
+  or in a function called (one level, plain name) from a var initializer or init are long-lived
+  (go_fn_built, go_startup_calls).
+- My checks: diff read; `cargo test -p dla-census` 135 + 7 pass; my mutation MUT_G1 (skip the
+  start-up calls in finish) fails unexported_types_built_at_start_up_hold_their_fields, reverted,
+  diff hash unchanged; no markers. Real project (u112/otel-go, binary u112/dla-G-try built from
+  the tree at 12:42 with H's work in progress): 469 candidates (439 before), and
+  internal.global.meter.meter.instruments at internal/global/meter.go:95 IS listed with its 14
+  writers. Its rank: 118 of 149, tier 4, score 61 (w_grow +25, container +20, w_runtime +20; no
+  growth_unmatched because the reset in setDelegate counts as a remover); last of 20 ranked
+  candidates of its package, so the third Go batch of that package. NOT tuned: a reset-only
+  remover on a configuration path is a ranking question for later, with more than one case.
+- Seen in that ranking, general: test-support packages rank at the top (tracetest recorder,
+  otest collector storage, internaltest carriers: ranks 3 to 12). A penalty for test-support
+  directories is a candidate change; not started.
+- go-header-index loses four entries: struct Request has a FIELD named Request ([]byte); the old
+  rule read the field name as a self-reference. Expected site index.go:36 still flagged (G);
+  the dynamic acceptance run on the combined tree is the check.
+- Still to do for G: static acceptance by me on the combined tree; VERIFY row; commit message.
+- Builder H still working (tree has its edits: measured_holders.rs, holder_first.rs,
+  test_agent_lines.py, gate, alloc, py_retain, harness agent).
