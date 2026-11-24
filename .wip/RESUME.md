@@ -2796,3 +2796,38 @@ flat test-loop readings get only 9 second looks.
   with message 24 (its own CI: 14 jobs green, the dynamic job failed only in the JVM flake; its
   superset tree fully green), commit 3 = N tree with message 25. commit-message-26.txt is a
   combined message, kept as a fallback only.
+
+## 19:10 UTC 2026-11-24: CI on the N tree failed on Windows clippy (a test helper unused there); fixed, pushed again
+
+- Main 546b74c: CI green after the re-run of the ubuntu job (run 45444056351, all 15 jobs).
+- Snapshot 86587bf (main + R3 + R4 + N), run 45463531468: `clippy and test (windows-latest)` failed:
+  `function node_project is never used` (scratch.rs tests: the helper's three callers are
+  `#[cfg(unix)]`, the helper was not). Fix: `#[cfg(unix)]` on the helper (one line, mine).
+  Not seen locally because the gate is a Windows-only lint.
+- Disk: `cargo clean --profile dev` (9.8 GB), Go build cache, old frozen binaries (dla-W, dla-F4,
+  dla-bench-F4, dla-P7), u113/interceptors deleted: 12 GB free. target/debug is EMPTY: the next
+  cargo build is a full one.
+- Rig: /root/dla-real/run.py has --warm-gradle, --env KEY=VALUE, --path-prepend DIR (backup
+  run.py.before-round2).
+- SET B PREPARED (answer-key sections 2, 4, 8, 10 still unread):
+  - mcp-sdk v1.11.0: /root/dla-real/src/mcp-sdk; `--py-venv python3.12 --py-setup "uv sync
+    --frozen --inexact --all-extras"`; tests 488 pass, 2 fail (root user, a command).
+  - x-crypto v0.51.0: /root/dla-real/src/x-crypto; `go build ./...` and `go test ./ssh/` pass.
+  - jni-rs v0.20.0: /root/dla-real/src/jni-rs; builds with `--features invocation`; tests pass
+    with `--env LD_LIBRARY_PATH=/usr/lib/jvm/java-21-openjdk-amd64/lib/server`.
+  - micrometer v1.3.5: Gradle 5.6.4, needs JDK <= 12: openjdk-11 installed by apt
+    (/usr/lib/jvm/java-11-openjdk-amd64). The tagged build cannot be configured today: its
+    release plug-in needs artifacts that lived only in repositories that are gone
+    (build-info-extractor 2.11.2: 404 everywhere reachable). Build-file patch in the scratch
+    copy u119/micrometer-try/project (sources untouched): root build.gradle without the
+    release, license and publishing plug-ins, `version = '1.3.5'`, `apply plugin:
+    'maven-publish'` for subprojects; settings.gradle without micrometer-bom. With it
+    `:micrometer-core:compileJava compileTestJava` succeed on JDK 11. Warm-up of the whole
+    Gradle home and an offline check of the two harness class-path tasks: u119/micrometer-try/
+    warm.sh (task bu3iri1fe). The harness build script tries `--offline` first, so a warm home is
+    enough. Run options: `--warm-gradle u119/micrometer-try/gradle --env JAVA_HOME=/usr/lib/jvm/
+    java-11-openjdk-amd64 --path-prepend /usr/lib/jvm/java-11-openjdk-amd64/bin`. The patch must
+    be copied to /root/dla-real/src/micrometer before the run.
+- ORDER DECIDED for round 2: set A reruns FIRST (development set: do the fixes hold unattended?),
+  set B only when set A mostly passes (set B is informative once), Jetty last. Machine has 4
+  cores: two runs at a time at most, no builder with cargo tests beside them.

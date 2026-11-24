@@ -1965,6 +1965,7 @@ mod tests {
         assert!(run.join("harness/H7").join(WORK).join("f").is_file());
     }
     /// A TypeScript-shaped Node project: sources tracked, `lib` and `node_modules` ignored.
+    #[cfg(unix)]
     fn node_project(d: &Path, main: &str) -> Option<PathBuf> {
         let p = d.join("p");
         for (f, text) in [
