@@ -1255,7 +1255,7 @@ fn refuse_uncaptured_residual(ctx: &Ctx, id: &OpenItemId) -> Res<()> {
     Err(Failure::refuse(
         core_codes::CAPTURE_NOT_SUMMARIZED,
         format!(
-            "{id} cannot be left unresolved: it is a heap residual above its threshold and harness {} has no summarized capture (no retention or allocation-stack record under harness/{}/)",
+            "{id} cannot be left unresolved: it is a heap residual above its threshold and harness {} has no summarized capture (no retention or allocation-stack summary computed from capture files under harness/{}/)",
             u.harness, u.harness
         ),
         format!(

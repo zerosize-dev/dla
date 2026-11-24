@@ -1,7 +1,9 @@
 //! A heap residual above its threshold is not left unresolved before the harness that showed the
 //! growth has a summarized capture: the gate lists one item per harness with the capture command,
 //! `dla ledger resolve <O> --as unresolved` is refused (`capture-not-summarized`), and both go once
-//! a retention or allocation-stack record lies under that harness.
+//! a retention or allocation-stack summary of that harness exists: a record whose source lies
+//! under `harness/<H>/`, or an allocation-stack record whose raw file lists capture files under
+//! it. A row whose unattributed growth over its series is under 64 KiB demands no capture.
 
 use std::{fs, path::Path};
 
@@ -76,9 +78,15 @@ impl Run {
     }
 }
 
-/// A run with a harness series S1 of `runtime`, a heap residual row over its threshold and the
-/// open item O1 of the row.
+/// A run with a harness series S1 of `runtime`, a heap residual row over its threshold (9 bytes
+/// per unit over 10,000 units, 90,000 bytes) and the open item O1 of the row.
 fn scene(runtime: &str) -> Run {
+    scene_with(runtime, 9.0, 10_000.0)
+}
+
+/// [`scene`] with the residual per unit and the units between the first and the last point of
+/// the series; the threshold is a quarter of the residual.
+fn scene_with(runtime: &str, residual: f64, units: f64) -> Run {
     let dir = tempfile::tempdir().unwrap();
     let o = base(dir.path())
         .env("DLA_CONSENT_TIERS", "1,2")
@@ -96,7 +104,9 @@ fn scene(runtime: &str) -> Run {
         r.run_dir().join("series/S1.json"),
         json!({"schema_version": 1, "id": "S1",
                "source": {"kind": "harness", "harness": "H1", "mode": "fresh", "runtime": runtime},
-               "axis": "n", "warmup": 0, "columns": [], "points": []})
+               "axis": "n", "warmup": 0, "columns": [],
+               "points": [{"x": 0.0, "t_ms": 0, "values": []},
+                          {"x": units, "t_ms": 1000, "values": []}]})
         .to_string(),
     )
     .unwrap();
@@ -111,11 +121,11 @@ fn scene(runtime: &str) -> Run {
         m.set_residual(vec![ResidualRow {
             series: Some("S1".into()),
             region: Region::Heap,
-            total_slope: 10.0,
-            attributed_slope: 1.0,
-            residual: 9.0,
-            unit: "bytes/iteration".into(),
-            threshold: 1.0,
+            total_slope: residual,
+            attributed_slope: 0.0,
+            residual,
+            unit: "bytes/n".into(),
+            threshold: residual / 4.0,
             open_item: Some("O1".parse().unwrap()),
         }]);
     })
@@ -197,4 +207,78 @@ fn a_runtime_without_capture_is_not_held_to_it() {
     assert!(r.capture_items(&["--final"]).is_empty());
     let (code, v) = r.resolve_unresolved();
     assert_eq!(code, 0, "{v}");
+}
+
+/// An allocation-stack record whose result file is `allocs/A2.json`, computed from capture files
+/// under the harnesses `from`: its raw file lists them.
+fn summarize_allocs(r: &Run, from: &[&str]) {
+    let captures: Vec<Value> = from
+        .iter()
+        .enumerate()
+        .map(|(i, h)| {
+            json!({"number": i + 1,
+                   "label": format!(".dla/{}/harness/{h}/out/p{}-fresh/capture/1/go-1.heap.pb.gz", r.run_id, i + 1),
+                   "source": "go-pprof-heap", "groups": 3, "sha256": "0"})
+        })
+        .collect();
+    fs::create_dir_all(r.run_dir().join("allocs")).unwrap();
+    fs::write(
+        r.run_dir().join("allocs/A2.json"),
+        json!({"id": "A2", "tool": "go-pprof-heap", "captures": captures}).to_string(),
+    )
+    .unwrap();
+    let mut l = Ledger::load(&r.run_dir()).unwrap();
+    l.add_evidence(NewEvidence {
+        source: Source::Artifact {
+            path: "allocs/A2.json".into(),
+            sha256: "0".into(),
+        },
+        tool: Tool {
+            name: "go-pprof-heap".into(),
+            version: "1".into(),
+        },
+        authority: Authority::Live,
+        kind: EvidenceKind::AllocStack,
+        result: json!({"captures": from.len()}),
+        raw: Some("allocs/A2.json".into()),
+        coverage: EvidenceCoverage::default(),
+        limitations: vec![],
+        unknowns: vec![],
+    })
+    .unwrap();
+}
+
+#[test]
+fn an_allocation_stack_summary_of_the_harness_captures_clears_it_wherever_its_file_lies() {
+    let r = scene("go");
+    // Computed from captures of H2: H1 is still asked for one, and refused.
+    summarize_allocs(&r, &["H2"]);
+    assert_eq!(r.capture_items(&["--final"]).len(), 1);
+    assert_eq!(
+        r.resolve_unresolved().1["error"]["code"],
+        "capture-not-summarized"
+    );
+    // Computed from captures of H1 (its result file is allocs/A2.json): cleared.
+    summarize_allocs(&r, &["H1"]);
+    assert!(r.capture_items(&["--final"]).is_empty());
+    assert!(r.capture_items(&["--stage", "classify"]).is_empty());
+    let (code, v) = r.resolve_unresolved();
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn a_row_under_the_growth_floor_demands_no_capture() {
+    // 0.004 bytes per unit over 3,520 units: 14 bytes.
+    let r = scene_with("go", 0.004, 3520.0);
+    assert!(r.capture_items(&["--final"]).is_empty());
+    assert!(r.capture_items(&["--stage", "classify"]).is_empty());
+    let (code, v) = r.resolve_unresolved();
+    assert_eq!(code, 0, "{v}");
+    // 250 bytes per unit over 3,520 units: 880,000 bytes.
+    let r = scene_with("go", 250.0, 3520.0);
+    assert_eq!(r.capture_items(&["--final"]).len(), 1);
+    assert_eq!(
+        r.resolve_unresolved().1["error"]["code"],
+        "capture-not-summarized"
+    );
 }

@@ -1259,9 +1259,29 @@ impl UncapturedResidual {
     }
 }
 
+/// Least unattributed heap growth, in bytes over the measured span of its series, for which a
+/// heap residual row demands a capture. A capture cannot attribute less than that: a profile is
+/// sampled and a dump is rounded by the allocator, so a row that grew by a few bytes (a row
+/// barely over a tiny threshold) is noise, and such a row stays an open item that can be
+/// resolved as unresolved without a capture.
+pub const MIN_CAPTURE_GROWTH_BYTES: f64 = 64.0 * 1024.0;
+
+/// The bytes a residual row left unattributed over the measured span of its series: the
+/// residual (bytes per unit of the series axis) times the units between the first and the last
+/// point of the series file.
+pub fn residual_growth_bytes(residual: f64, series: &crate::series::SeriesFile) -> f64 {
+    let (Some(first), Some(last)) = (series.points.first(), series.points.last()) else {
+        return 0.0;
+    };
+    residual * (last.x - first.x).max(0.0)
+}
+
 /// The over-threshold heap residual rows whose harness has no summarized capture, one entry per
-/// harness. A harness has one when the run holds a retention or allocation-stack record whose
-/// source lies under `harness/<H>/` ([`crate::measured_holders::Scan::summarized`]).
+/// harness. A row counts only when its unattributed growth over the span of its series is at
+/// least [`MIN_CAPTURE_GROWTH_BYTES`]. A harness has a summarized capture when the run holds a
+/// retention or allocation-stack record computed from its capture files: its source lies under
+/// `harness/<H>/`, or the capture files its raw file lists do
+/// ([`crate::measured_holders::Scan::summarized`]).
 pub fn uncaptured_residuals(view: &RunView) -> Vec<UncapturedResidual> {
     let (Some(cov), Some(run_dir)) = (&view.coverage, view.run_dir.as_deref()) else {
         return Vec::new();
@@ -1285,7 +1305,10 @@ pub fn uncaptured_residuals(view: &RunView) -> Vec<UncapturedResidual> {
         let Ok(file) = crate::series::SeriesFile::load(run_dir, series) else {
             continue;
         };
-        if !file.source.runtime.is_some_and(supports_capture) || scan.summarized.contains(harness) {
+        if !file.source.runtime.is_some_and(supports_capture)
+            || scan.summarized.contains(harness)
+            || residual_growth_bytes(r.residual, &file) < MIN_CAPTURE_GROWTH_BYTES
+        {
             continue;
         }
         let mode = file
@@ -1422,7 +1445,7 @@ pub fn measured_lead(view: &RunView) -> Vec<Missing> {
             kind: RESIDUAL_CAPTURE_KIND.to_owned(),
             id: format!("{}:residual-capture", u.harness),
             description: format!(
-                "{} heap residual row{} of {} over the threshold ({}) and {} has no summarized capture (no retention or allocation-stack record under harness/{}/)",
+                "{} heap residual row{} of {} over the threshold ({}) and {} has no summarized capture (no retention or allocation-stack summary computed from capture files under harness/{}/)",
                 u.items.len(),
                 if u.items.len() == 1 { "" } else { "s" },
                 u.series.join(", "),

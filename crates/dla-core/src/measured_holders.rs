@@ -65,7 +65,9 @@ pub struct Scan {
     /// Harnesses (`H3`) some retention record was read from.
     pub harnesses: BTreeSet<String>,
     /// Harnesses (`H3`) with a summarized capture of any tool: a retention record or an
-    /// allocation-stack record whose source lies under `harness/<H>/`.
+    /// allocation-stack record whose source lies under `harness/<H>/`, or an allocation-stack
+    /// record whose raw file lists capture files under `harness/<H>/` (its result file lies in
+    /// `allocs/`, so the captures it was computed from name the harness).
     pub summarized: BTreeSet<String>,
 }
 
@@ -122,6 +124,26 @@ fn lines_of(entry: &Value) -> Vec<String> {
         .collect()
 }
 
+/// The harnesses whose capture files an allocation-stack summary was computed from: the
+/// `captures[].label` of its raw file is the project-relative path of each input, so a file the
+/// harness wrote lies under `harness/<H>/`.
+fn capture_harnesses(run_dir: Option<&Path>, rec: &EvidenceRecord) -> BTreeSet<String> {
+    run_dir
+        .zip(rec.raw.as_deref())
+        .and_then(|(dir, raw)| fs::read_to_string(dir.join(raw)).ok())
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v.get("captures").and_then(Value::as_array).cloned())
+        .into_iter()
+        .flatten()
+        .filter_map(|c| {
+            c.get("label")
+                .and_then(Value::as_str)
+                .and_then(harness_of_path)
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
 /// Reads whose each holder of the retention records is.
 pub fn scan(view: &RunView) -> Scan {
     scan_in(&view.ledger, view.run_dir.as_deref())
@@ -135,10 +157,15 @@ pub fn scan_in(ledger: &Ledger, run_dir: Option<&Path>) -> Scan {
             rec.kind,
             EvidenceKind::RetentionPath | EvidenceKind::AllocStack
         ) && rec.authority != Authority::Static
-            && let Source::Artifact { path, .. } = &rec.source
-            && let Some(h) = harness_of_path(path)
         {
-            out.summarized.insert(h.to_owned());
+            if let Source::Artifact { path, .. } = &rec.source
+                && let Some(h) = harness_of_path(path)
+            {
+                out.summarized.insert(h.to_owned());
+            }
+            if rec.kind == EvidenceKind::AllocStack {
+                out.summarized.extend(capture_harnesses(run_dir, rec));
+            }
         }
         if rec.kind != EvidenceKind::RetentionPath
             || rec.authority == Authority::Static
