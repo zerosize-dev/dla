@@ -2026,3 +2026,25 @@ flat test-loop readings get only 9 second looks.
   skills/, agents/, data/, hooks/ or the binary between runs; Jetty 12.0.31 runs as a sixth
   project (on the owner's list, never run, leak class known to me, so it is not blind).
 - pillow-11 at 08:47: still running, 87 harnesses, run folder 558 MB, 13.2 GB free.
+
+## 09:10 UTC 2026-11-24: CI on main green; blind-test candidates chosen; key being checked
+
+- CI on main for cb933c3: run 45350380373 green, all 15 jobs.
+- pillow-11 waiter hit its 2 h limit at 08:56 and was stopped; run still going then (98 harnesses,
+  656 MB, 12.5 GB free). New waiter b3h61bqwf (45 min limit; the run ends by 09:26).
+- Research agent HO reported. Files: u106/candidates.md (read by me) and u106/answer-key.md (NOT
+  read by me). Candidates in order: Python 1 opentelemetry-python v1.40.0, 2 mcp python-sdk
+  v1.11.0; Go 3 opentelemetry-go v1.29.0, 4 golang.org/x/crypto v0.51.0; Node 5 @apollo/client
+  v3.3.13, 6 @mswjs/interceptors v0.40.0; Rust 7 fastrace commit 929879e, 8 jni-rs v0.20.0; JVM 9
+  logstash-logback-encoder 7.1.1, 10 micrometer v1.3.5.
+- HO's batched install-and-build command was DENIED by the permission system; it stopped and ran
+  no install. It did not ask me to run it. Told the owner. I prepare each chosen project myself,
+  one plain command at a time, as for every earlier real run; if one of mine is denied I stop.
+- HO read the code at the tag for only two of ten. Second Sonnet agent HV started 09:05 (brief
+  wip-notes/holdout-verify-brief.md): reads the fix and the code at each tag, rewrites
+  answer-key.md, reports per project only CONFIRMED / UNSURE / ABSENT and "reachable in one
+  process". No installs or builds in its scope.
+- Rules fixed before any run: per runtime, the first candidate whose key is CONFIRMED and
+  reachable and whose install works; otherwise the second; if neither, that runtime has no blind
+  project and I say so. A run whose key turns out wrong afterwards is reported as void, not as a
+  miss or a hit.
