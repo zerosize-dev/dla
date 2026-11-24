@@ -141,6 +141,7 @@ impl Run {
                         column: None,
                         detail: String::new(),
                         declared: true,
+                        writers: Vec::new(),
                     })
                     .collect(),
             };

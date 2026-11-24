@@ -25,6 +25,7 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   the functions that ran with the `llvm-profdata` and `llvm-cov` of the toolchain that builds it
   (`rustup component add llvm-tools`; the tools on PATH only when their LLVM version is rustc's). Targets without a probe
   read `executed` or `not_executed`; a build, run or tool that fails is a limitation line and the targets read `unknown`.
+  The same export gives, per writer line of a target, how often it ran: the count of the innermost code region that covers the line, written beside the functions in `cov/p1-<mode>-cover.rust.json` and `executed-S<n>.json` (`lines`; a line outside every region is unknown, never 0). A function that ran whose writer lines all have a count of 0 reads `writer_not_executed` (a writer behind a full buffer, a state that the set-up call removes), and in fresh-key mode so does one whose writer lines ran fewer than one time per ten units of the coverage round; the target keeps its queue place and its focus harness shows the writer line with the lines above it that decide whether it runs.
 - Command mode (bin-only crates, or no driver): the allocator shim in `harness/native/` is preloaded
   into the measured process only (`LD_PRELOAD`). It sees the C allocator, so it covers Rust on the
   system allocator but not a custom one (jemalloc, mimalloc) or a statically linked binary.

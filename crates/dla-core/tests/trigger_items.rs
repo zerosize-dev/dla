@@ -69,6 +69,7 @@ fn ran(dir: &Path, series: &str, h: &str, digest: &str, verdict: Verdict) {
             column: None,
             detail: String::new(),
             declared: true,
+            writers: Vec::new(),
         }],
     }
     .save(dir)

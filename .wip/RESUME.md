@@ -2885,3 +2885,72 @@ flat test-loop readings get only 9 second looks.
 - Order of next steps: wait for r2-otel-python; when CI on 86810ca is green: commits 2 and 3
   (messages 24, 25) and preview.8; then interceptors and otel-go reruns (otel-go is expected to
   miss until task 112); builder W result -> verify -> next frozen build -> fastrace again.
+
+## 20:00 UTC 2026-11-24 (clock 19:58): three reruns of set A done: 0 of 3; each failed one step later than before
+
+METHOD FLAW of this round, mine: three unattended runs, a builder's cargo builds and my own test
+runs shared 4 cores. Timings in these runs are worse than on a free machine. From now on: one
+unattended run at a time and no builder beside it.
+
+- r2-interceptors (19:10 to 19:47, 2189 s, about 1.30 dollars by the driver's figure):
+  INCOMPLETE (2413 open), 56 harness runs, 113 series, 0 captures, nothing confirmed. Records:
+  /root/dla-real/r2-interceptors-keep (redacted transcript, H1 driver, T1/T3, S1/S3). What
+  happened:
+  - The built-library fix WORKED: package loaded from lib/ with no workaround, all sites at
+    .ts lines, 88 ranked candidates (87 in the census check).
+  - The FIRST harness measured the documented leak: node.heap_used +14.8 KB per unit steady,
+    os.rss +18.8 KB per unit (the reproduction in the answer key: about 20 KB per request), and
+    live-listener columns at MockHttpSocket.ts:161, :353, :389 (F30), :659, agents.ts:36,
+    index.ts:90, MockSocket.ts:22, handleRequest.ts:103 (F85).
+  - The model took F85 (first in `next`): sibling, test, alloc-test: favors leak. It then made
+    a control by hand (the same loop with no interceptor: the runtime's own fetch keeps one
+    abort listener per request on a shared signal, 200 of 200) and judged F85 a driver effect.
+    `dla ledger refute F85 --reason ...` is no command; the tool's only path was "confirm F85".
+    It left F85 open, wrote that the listener columns "count calls to a line, not live
+    listeners" (WRONG: the agent counts live listeners on live objects after a forced
+    collection; the reference text says "counts what one line made", which reads like a call
+    counter), and dropped F28 and F30 with the same sentence.
+  - It never looked at the heap growth. The path to it is: `dla gap --residual` (manual, never
+    run: "Residual: not measured"; 1412 gate items waited on it), then the residual_capture
+    item, then the capture. The stop hook lists the queue item first, so the model worked
+    through 79 queue harnesses in loops and stopped with 144 of 180 minutes left.
+  - GENERAL CAUSES: (1) measured growth does not lead the run outside Python: the capture item
+    depends on a manual residual step and the queue item comes first; (2) the meaning of a
+    per-site count column is not said where the model reads it; (3) a control series (the same
+    unit without the project's code path) cannot be recorded, so a finding the model has
+    disproved by measurement stays open and blocks; with b91cbe6 it cannot be closed either.
+    Task 113.
+- r2-otel-python (19:04 to 19:52, 2871 s, about 0.33 dollars): INCOMPLETE (34 open), 2 harness
+  runs (the test loop, then the test loop with capture), 2 captures, 0 dispositioned. Records:
+  /root/dla-real/r2-otel-python-keep. What happened:
+  - Test loop H1 ran (S1), trend showed 11 growing lines; the new `measured_capture` item asked
+    for `dla harness run H1 --mode fresh --capture alloc,heap`. The model ran it in the
+    foreground under `timeout 550`: cut (the plain loop took 6 min 21 s in the first blind run
+    on a free machine; with tracing and under today's load it does not fit 10 minutes).
+  - It then ran `dla run abort --reason "capture run timed out in foreground"` to clean up:
+    that ABORTS THE RUN for good ("needs dla run init, which would start a new run").
+  - A second capture in the background with `--iterations 3` finished: series too short, the
+    alloc diff had 1 profile (needs 3), the retention walk stopped at its 60 s limit after
+    45,440 of 218,674 objects, so no holder was named and holder-first had nothing.
+  - GENERAL CAUSES: (4) the capture my holder-first change asks for on the test-loop harness
+    cannot finish within the agent's 10-minute foreground limit: my replay had no time limit,
+    so I did not see it; (5) `dla run abort` is the only clean-up the model found for a cut
+    command and it ends the run; (6) the retention walk has a fixed 60 s wall limit and no
+    order of importance, so on a large heap it names nothing.
+- r2-fastrace: see the entry above (writer line never ran; builder W in progress).
+- CI: snapshot 86810ca failed in ONE job: ubuntu test, the lock test of the work copy
+  (scratch.rs:1863, `thin_harness` answered Busy right after the user's lock was dropped). Task
+  103's flake, now on Linux. CAUSE: a child that another test thread is starting holds a copy
+  of the lock file until it execs, so a lock released a moment ago reads as held. FIX (mine,
+  one file): thin_harness asks again 20 times at 10 ms before it answers Busy; new test
+  a_lock_that_is_held_only_for_a_moment_is_waited_for (fails with 0 retries, mutation MUT_L1
+  applied and reverted; scratch tests 28 pass, three more runs pass). Pushed as snapshot
+  a2b404a = tree of 86810ca + scratch.rs (built with a temporary index, WITHOUT builder W's
+  unfinished work); CI waiter b423gt8th, logs u115/ci-snap-28. The working tree has the same
+  scratch.rs change.
+- When a2b404a is green: commit 2 = tree bb8fd30 (message 24), commit 3 = tree 86810ca (message
+  25), commit 4 = tree a2b404a (lock fix; message to write), then preview.8.
+- NEXT BUILDER TASKS after W, one at a time, in this order: T (runs that end by themselves
+  inside the foreground limit, a clean-up that does not abort the run, the retention walk), X
+  (growth first: task 113), G2 (Go order and modules: task 112). No more unattended runs until
+  W is verified; then one run at a time.

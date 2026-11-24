@@ -36,6 +36,7 @@ pub mod ast;
 pub mod callers;
 pub mod classfile;
 pub mod events;
+pub mod guards;
 pub mod jvm_class;
 pub mod lang;
 pub mod model;

@@ -275,6 +275,9 @@ fn default_remedy(
             "its probe never loaded: the workload did not import its module".to_owned()
         }
         Some(Verdict::NotExecuted) => "its code did not run".to_owned(),
+        Some(Verdict::WriterNotExecuted) => {
+            "its function ran but the lines that add to the holder never ran".to_owned()
+        }
         Some(Verdict::Executed) => "its code ran and showed no growth".to_owned(),
         Some(Verdict::Unknown) => queue::NO_COVERAGE.to_owned(),
         Some(Verdict::Changed) => "its holder changed but did not pass the growth gate".to_owned(),
@@ -295,6 +298,11 @@ fn default_remedy(
         return format!(
             "targeted in {list}, {outcome}: {}. Then write a unit that adds a new key to {place}{key}",
             dla_core::features::lead(&gaps, &command)
+        );
+    }
+    if best == Some(Verdict::WriterNotExecuted) {
+        return format!(
+            "targeted in {list}, {outcome}: write a unit that puts the object in the state in which those lines run (a state that normal set-up removes needs a unit or a set-up that does not remove it) and adds a new key to {place}{key}"
         );
     }
     format!("targeted in {list}, {outcome}: write a unit that adds a new key to {place}{key}")

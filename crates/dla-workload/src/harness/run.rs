@@ -72,7 +72,7 @@ use super::{
     capture::{self, AgentNotes, CaptureSet, NativeTool},
     cover::{self, CoverageOutcome},
     dumps::{self, DumpFile, Rec},
-    harness_dir,
+    harness_dir, lines,
     pace::{self, Pace},
     pymemray, scratch,
     symbolize::{Sites, symbolize},
@@ -952,6 +952,29 @@ fn write_line_runs(ctx: &ToolCtx, manifest: &HarnessManifest, series: &str, poin
         sites,
     }
     .save(&ctx.run_dir, &manifest.id);
+}
+
+/// The writer lines (project-relative file, 1-based line) of the findings a harness targets or
+/// probes: the lines that add to their holders, whose executions the coverage record counts
+/// (Rust, Go, Node). Empty when the ledger cannot be read.
+fn writer_lines(ctx: &ToolCtx, manifest: &HarnessManifest) -> Vec<lines::Wanted> {
+    let Ok(ledger) = ctx.ledger() else {
+        return Vec::new();
+    };
+    let mut ids: Vec<&dla_core::FindingId> = manifest.targets.iter().collect();
+    ids.extend(manifest.probes.iter().filter_map(|p| p.finding.as_ref()));
+    let mut out: Vec<lines::Wanted> = Vec::new();
+    for id in ids {
+        if let Some(a) = ledger.annotation(id) {
+            for w in a.adding_writer_lines() {
+                if !out.contains(&w) {
+                    out.push(w);
+                }
+            }
+        }
+    }
+    out.truncate(lines::MAX_LINES);
+    out
 }
 
 /// The most lines the agent is asked to count.
@@ -2796,9 +2819,19 @@ fn rust_cover_point(
         return Ok(());
     };
     let functions = cover::rust_export_functions(&doc, &paths.work);
+    // The writer lines of the targets, counted from the regions of the same export, with the
+    // key mode and the units of this point (what the counts are per unit of).
+    let counted = lines::rust_line_counts(&doc, &paths.work, &writer_lines(ctx, manifest));
     let file = raw(cover::RUST_COVER_SUFFIX);
-    fs::write(&file, json!({"functions": functions}).to_string())
-        .map_err(|e| io_refusal(&file, e))?;
+    fs::write(
+        &file,
+        json!({
+            "functions": functions, "lines": counted,
+            "mode": mode.as_str(), "units": manifest.step,
+        })
+        .to_string(),
+    )
+    .map_err(|e| io_refusal(&file, e))?;
     Ok(())
 }
 
@@ -3321,6 +3354,7 @@ pub fn run_points(
             hdir: &paths.hdir,
             cov_dir: &paths.cov,
             work: &paths.work,
+            writers: writer_lines(ctx, manifest),
         },
     )?;
     out.limitations.extend(cov_limits);

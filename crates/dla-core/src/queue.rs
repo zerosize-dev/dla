@@ -216,6 +216,8 @@ struct DeclaredRun {
     verdict: Option<Verdict>,
     /// The reason text the trend gave for the verdict.
     detail: Option<String>,
+    /// The writer lines and their counts the trend gave for a verdict `writer_not_executed`.
+    writers: Vec<crate::trend::WriterCount>,
     /// The harness declares at most [`FOCUS_MAX`] targets.
     focused: bool,
     /// An entry-path harness: it has its own rules, so it is no run of the queue's rule.
@@ -261,6 +263,8 @@ pub struct Miss {
     pub verdict: Verdict,
     /// The reason text the trend gave.
     pub detail: String,
+    /// The writer lines and how often each ran, when the verdict is `writer_not_executed`.
+    pub writers: Vec<crate::trend::WriterCount>,
 }
 
 /// The most targets of a focus harness (and so of a FOCUSED harness).
@@ -276,7 +280,11 @@ pub const SECOND_LOOK_MAX: usize = 3;
 pub fn is_miss(v: Verdict) -> bool {
     matches!(
         v,
-        Verdict::Constant | Verdict::NotLoaded | Verdict::NotExecuted | Verdict::Unknown
+        Verdict::Constant
+            | Verdict::NotLoaded
+            | Verdict::NotExecuted
+            | Verdict::WriterNotExecuted
+            | Verdict::Unknown
     )
 }
 
@@ -383,6 +391,10 @@ impl Index {
                 let detail = report
                     .and_then(|r| r.targets.iter().find(|t| &t.finding == f))
                     .map(|t| t.detail.clone());
+                let writers = report
+                    .and_then(|r| r.targets.iter().find(|t| &t.finding == f))
+                    .map(|t| t.writers.clone())
+                    .unwrap_or_default();
                 ix.declared.entry(f.clone()).or_default().push(DeclaredRun {
                     harness: h.clone(),
                     hook_driver: m.is_hook_driver(),
@@ -390,6 +402,7 @@ impl Index {
                     driver_key: key.clone(),
                     verdict,
                     detail,
+                    writers,
                     focused: m.targets.len() <= FOCUS_MAX,
                     entry: m.is_entry_path(),
                     second_look: m.is_second_look(),
@@ -552,7 +565,25 @@ impl Index {
                 harness: r.harness.clone(),
                 verdict: r.verdict?,
                 detail: r.detail.clone().unwrap_or_default(),
+                writers: r.writers.clone(),
             })
+        })
+    }
+
+    /// The latest run of a hook driver that read `id` as `writer_not_executed`: its function ran
+    /// and the lines that add to its holder did not. `None` when no run did.
+    pub fn writer_miss(&self, id: &FindingId) -> Option<Miss> {
+        let r = self
+            .declared
+            .get(id)?
+            .iter()
+            .rev()
+            .find(|r| !r.entry && r.verdict == Some(Verdict::WriterNotExecuted))?;
+        Some(Miss {
+            harness: r.harness.clone(),
+            verdict: Verdict::WriterNotExecuted,
+            detail: r.detail.clone().unwrap_or_default(),
+            writers: r.writers.clone(),
         })
     }
 
@@ -642,6 +673,7 @@ pub fn priority(v: Verdict) -> u8 {
         Verdict::Unknown => 3,
         Verdict::Constant => 4,
         Verdict::NotExecuted => 5,
+        Verdict::WriterNotExecuted => 5,
         Verdict::NotLoaded => 6,
     }
 }
@@ -1084,6 +1116,7 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                                 verdict: Verdict::Executed,
                                 detail: "its code ran and its holder stayed flat under one driver"
                                     .into(),
+                                writers: Vec::new(),
                             },
                         );
                     }
@@ -1404,7 +1437,12 @@ impl ReportFacts {
                 Some(Verdict::Changed) => changed += 1,
                 Some(Verdict::Executed) => executed += 1,
                 Some(Verdict::Unknown) => no_coverage += 1,
-                Some(Verdict::Constant | Verdict::NotExecuted | Verdict::NotLoaded) => {
+                Some(
+                    Verdict::Constant
+                    | Verdict::NotExecuted
+                    | Verdict::WriterNotExecuted
+                    | Verdict::NotLoaded,
+                ) => {
                     // "Not reached" is only what the rule settled: missed by two drivers, one
                     // of them a focused harness. A miss with no focus harness is "missed once".
                     if self.index.standing(id) == Standing::Settled(Why::NotReached) {
@@ -1632,6 +1670,7 @@ mod tests {
                         column: None,
                         detail: String::new(),
                         declared: true,
+                        writers: Vec::new(),
                     })
                     .collect(),
             };
@@ -2280,6 +2319,65 @@ mod tests {
             Standing::Settled(Why::NotReached)
         );
         assert_eq!(ix.not_reached_in(&FindingId::new(1)).as_deref(), Some("H2"));
+    }
+
+    #[test]
+    fn a_function_that_ran_without_its_writer_lines_is_a_miss_that_a_focus_harness_settles() {
+        assert!(is_miss(Verdict::WriterNotExecuted));
+        let (run, _) = Run::new(2);
+        ran(
+            &run,
+            "H1",
+            &[1, 2, 3],
+            "a",
+            "S1",
+            &[(1, Verdict::WriterNotExecuted), (2, Verdict::Executed)],
+        );
+        let view = run.reload();
+        // F1 stays pending, missed once, and the focus batch is for it.
+        assert_eq!(pending_of(&view), ["F1"]);
+        let ix = Index::of(&view);
+        let m = ix.missed_in(&FindingId::new(1)).unwrap();
+        assert_eq!(m.verdict, Verdict::WriterNotExecuted);
+        assert_eq!(m.harness, "H1");
+        assert_eq!(ix.writer_miss(&FindingId::new(2)).map(|m| m.harness), None);
+        let facts = ReportFacts::of(&view).unwrap();
+        assert!(
+            facts
+                .line()
+                .unwrap()
+                .contains("missed once, no focus harness 1"),
+            "{}",
+            facts.line().unwrap()
+        );
+        // A focused harness with another driver that also did not run the lines settles it.
+        ran(
+            &run,
+            "H2",
+            &[1],
+            "c",
+            "S2",
+            &[(1, Verdict::WriterNotExecuted)],
+        );
+        let view = run.reload();
+        let ix = Index::of(&view);
+        assert_eq!(
+            ix.standing(&FindingId::new(1)),
+            Standing::Settled(Why::NotReached)
+        );
+        assert_eq!(
+            ix.writer_miss(&FindingId::new(1)).map(|m| m.harness),
+            Some("H2".to_owned())
+        );
+        // It never counts as a measurement of the holder.
+        assert!(
+            !crate::trend::GrowthTarget {
+                finding: FindingId::new(1),
+                verdict: Verdict::WriterNotExecuted,
+                declared: true,
+            }
+            .is_measurement()
+        );
     }
 
     /// Writes the `features.json` of harness `h`: target F1 has a gap for each of `features`.

@@ -1,0 +1,20 @@
+Thinning waits a moment before it calls a work copy busy
+
+`thin_harness` takes the lock of a harness's work copy with one try and
+answered "busy" when the try failed. A lock that was released a moment ago
+can still read as held: a child process that another thread is starting
+holds a copy of every open file until it execs, the lock file among them.
+The test of this code failed that way twice in one day of CI runs, once on
+macOS and once on Linux, at the same line both times: the thinning right
+after the user of the copy let go.
+
+- `thin_harness` asks again up to 20 times, 10 ms apart, before it answers
+  "busy". A real user of a work copy holds the lock for a whole build or
+  run, which no short wait outlasts, so the answer for a copy in use is the
+  same as before, a fifth of a second later.
+- New test: a lock held for 20 ms by another thread is waited for and the
+  copy is thinned. With no retries the test fails.
+
+Not covered. The wait is a fixed fifth of a second; a child that takes
+longer than that between its start and its exec would still make the
+thinning skip one copy for one command.

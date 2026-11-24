@@ -1096,3 +1096,49 @@ fn the_node_texts_say_how_a_built_typescript_library_is_run_and_measured() {
         );
     }
 }
+
+#[test]
+fn the_texts_say_a_function_that_ran_is_not_a_writer_line_that_ran() {
+    let refs = root().join("skills/detect-leak-anywhere/references");
+    let stages = fs::read_to_string(refs.join("stages.md")).unwrap();
+    for want in [
+        "`writer_not_executed` (its function ran and every line that adds to its holder has a count of 0 in the coverage run: Rust, Go and Node count lines) is a miss, not a reading",
+        "a flat series says something about a holder only when the lines that add to it ran in that series",
+        "a state that normal set-up removes (a full buffer, a missing configuration, an error path, a second thread) needs a unit or a set-up that does not remove it",
+        "`remedy` shows each line with the lines above it that decide whether it runs",
+        "`not_loaded`, `not_executed`, `writer_not_executed` or `unknown`)",
+        "The JVM agent reports classes and methods only",
+    ] {
+        assert!(stages.contains(want), "stages.md lacks: {want}");
+    }
+    let rust = fs::read_to_string(refs.join("rust.md")).unwrap();
+    for want in [
+        "the count of the innermost code region that covers the line",
+        "a line outside every region is unknown, never 0",
+        "so does one whose writer lines ran fewer than one time per ten units of the coverage round",
+    ] {
+        assert!(rust.contains(want), "rust.md lacks: {want}");
+    }
+    let go = fs::read_to_string(refs.join("go.md")).unwrap();
+    for want in [
+        "the block of `p1-<mode>-cover.out` that covers the line and starts last gives its count",
+        "(`-covermode` stays `set`, so a count is 0 or 1 and says whether the line ran at all)",
+        "runs its function and never the append: the target reads `writer_not_executed`",
+    ] {
+        assert!(go.contains(want), "go.md lacks: {want}");
+    }
+    let node = fs::read_to_string(refs.join("node.md")).unwrap();
+    for want in [
+        "the innermost range of a function that has block coverage (`isBlockCoverage`) that covers the line, at the source line through the source map",
+        "a function V8 gave no block ranges for leaves the line unknown",
+    ] {
+        assert!(node.contains(want), "node.md lacks: {want}");
+    }
+    let verify = fs::read_to_string(root().join("docs/VERIFY.md")).unwrap();
+    for want in [
+        "| A function that ran was read as a writer line that ran (a Rust library the tool had not been run on) |",
+        "| A function that ran was read as a writer line that ran (a Go library the tool had not been run on) |",
+    ] {
+        assert!(verify.contains(want), "VERIFY.md lacks the row: {want}");
+    }
+}
