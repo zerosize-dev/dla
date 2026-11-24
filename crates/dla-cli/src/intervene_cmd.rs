@@ -541,6 +541,11 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: InterveneArgs) 
     // the run (twice with --rerun-control) does not fit in the time left.
     require_time_for_runs(&tc, &ctl, &src, if a.rerun_control { 2 } else { 1 })?;
 
+    // The plan and the clone read the harness's own copy: bring its files back when it was
+    // thinned, and keep the thinner away until the clone is made. The clone is a whole copy.
+    let src_lock =
+        dla_workload::harness::scratch::use_work(&src_dir, &tc.project, src.runtime.as_str())?;
+
     // Plan against the harness's own copy; nothing is cloned if this refuses.
     let edit = match &a.patch {
         Some(p) => {
@@ -560,6 +565,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: InterveneArgs) 
 
     // Clone, then the unedited run (only with --rerun-control), then the edit.
     let cloned = clone::clone_harness(&tc, &src)?;
+    drop(src_lock);
     let th = ctl.report.thresholds;
     let mode = ctl
         .series

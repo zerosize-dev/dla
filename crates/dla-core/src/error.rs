@@ -160,6 +160,9 @@ pub mod codes {
     /// whose series have nothing tied to it, or `dla ledger refute` / `confirm` citing the
     /// discriminator of such a harness.
     pub const HARNESS_NOT_ABOUT: &str = "harness-not-about";
+    /// A harness copy of the project was thinned (only the files that differ from the project
+    /// were kept) and a file it needs back has changed or gone from the project since.
+    pub const WORK_COPY_STALE: &str = "work-copy-stale";
 }
 
 /// A rule-based refusal: what was refused, what is missing, the command that fixes it.

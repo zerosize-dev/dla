@@ -944,3 +944,25 @@ fn the_references_teach_who_holds_the_objects_of_a_growing_line() {
         "VERIFY.md has no row for the holder chains"
     );
 }
+
+#[test]
+fn the_texts_say_older_harness_copies_are_thinned_and_come_back_on_use() {
+    let stages =
+        fs::read_to_string(root().join("skills/detect-leak-anywhere/references/stages.md"))
+            .unwrap();
+    for want in [
+        "Older harnesses keep only the files of their copy that differ from the project (`work-thinned.json` lists the others), and a harness that is used again gets its files back first.",
+        "`work-copy-stale` means the project changed after a harness was thinned: `dla harness gen` writes a harness on the project as it is now.",
+    ] {
+        assert!(stages.contains(want), "stages.md lacks: {want}");
+    }
+    assert!(
+        !skill().contains("work-copy-stale"),
+        "SKILL.md stays as it is: the stage text carries the rule"
+    );
+    let verify = fs::read_to_string(root().join("docs/VERIFY.md")).unwrap();
+    assert!(
+        verify.contains("| A run kept one full copy of the project per harness | corrected |"),
+        "VERIFY.md has no row for the thinned harness copies"
+    );
+}

@@ -11,7 +11,10 @@ use std::{
 };
 
 use dla_census::parse::Lang;
-use dla_core::{runtime::Runtime, state::Scope};
+use dla_core::{Refusal, runtime::Runtime, state::Scope};
+use serde::{Deserialize, Serialize};
+
+use super::WORK;
 
 use crate::model::SKIP_DIRS;
 #[cfg(unix)]
@@ -440,6 +443,437 @@ pub fn copy_project_for(
         ));
     }
     Ok(report)
+}
+
+// ---------------------------------------------------------------------------------------
+// Thinning: a harness copy that keeps only what differs from the project
+
+/// List of the files taken out of a harness's `work/`, in the harness directory.
+pub const THIN_LIST: &str = "work-thinned.json";
+/// Lock file of a harness's `work/`, in the harness directory. Its modification time is the
+/// harness's "last used" time.
+pub const WORK_LOCK: &str = "work.lock";
+/// `dla_work_thin` of the list.
+const THIN_VERSION: u32 = 1;
+/// Paths a `work-copy-stale` refusal names.
+const STALE_NAMED: usize = 3;
+/// The harnesses used last that [`thin_run`] callers keep whole at the end of `harness gen`.
+pub const KEEP_RECENT: usize = 4;
+/// Environment variable that turns thinning off (a fill still works).
+pub const KEEP_WORK_ENV: &str = "DLA_KEEP_WORK";
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ThinFile {
+    path: String,
+    len: u64,
+    digest: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ThinList {
+    dla_work_thin: u32,
+    files: Vec<ThinFile>,
+    bytes: u64,
+}
+
+/// What a thin removed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ThinReport {
+    /// Files removed.
+    pub files: usize,
+    /// Their size in bytes.
+    pub bytes: u64,
+}
+
+/// Why a fill did nothing.
+#[derive(Debug)]
+pub enum FillError {
+    /// Listed files whose project file has changed or gone since the thin (all of them).
+    Stale(Vec<String>),
+    /// The list or a file could not be read or written.
+    Io(dla_core::Error),
+}
+
+/// True when `DLA_KEEP_WORK` asks for whole copies.
+pub fn thinning_off() -> bool {
+    std::env::var_os(KEEP_WORK_ENV).is_some_and(|v| !v.is_empty() && v != "0")
+}
+
+fn read_full(r: &mut impl std::io::Read, buf: &mut [u8]) -> std::io::Result<usize> {
+    let mut n = 0;
+    while n < buf.len() {
+        let k = r.read(&mut buf[n..])?;
+        if k == 0 {
+            break;
+        }
+        n += k;
+    }
+    Ok(n)
+}
+
+/// True when both files hold the same bytes.
+fn same_bytes(a: &Path, b: &Path) -> std::io::Result<bool> {
+    let (mut fa, mut fb) = (fs::File::open(a)?, fs::File::open(b)?);
+    let (mut ba, mut bb) = (vec![0u8; 64 << 10], vec![0u8; 64 << 10]);
+    loop {
+        let (na, nb) = (read_full(&mut fa, &mut ba)?, read_full(&mut fb, &mut bb)?);
+        if na != nb || ba[..na] != bb[..nb] {
+            return Ok(false);
+        }
+        if na == 0 {
+            return Ok(true);
+        }
+    }
+}
+
+/// The files of `work` that the project holds byte for byte, with their length and digest.
+/// Symlinks, directories and everything that differs are left out. A file that cannot be
+/// read is not identical.
+fn identical_files(work: &Path, project: &Path) -> Vec<ThinFile> {
+    let mut out = Vec::new();
+    let mut stack = vec![PathBuf::new()];
+    while let Some(rel) = stack.pop() {
+        let Ok(rd) = fs::read_dir(work.join(&rel)) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let Ok(ft) = e.file_type() else { continue };
+            let child = rel.join(e.file_name());
+            if ft.is_dir() {
+                stack.push(child);
+                continue;
+            }
+            if !ft.is_file() {
+                continue;
+            }
+            let Some(path) = child.to_str().map(|_| dla_core::paths::to_slash(&child)) else {
+                continue;
+            };
+            let (from, theirs) = (work.join(&child), project.join(&child));
+            let (Ok(wm), Ok(pm)) = (fs::symlink_metadata(&from), fs::symlink_metadata(&theirs))
+            else {
+                continue;
+            };
+            if !pm.is_file()
+                || wm.len() != pm.len()
+                || wm.permissions() != pm.permissions()
+                || !same_bytes(&from, &theirs).unwrap_or(false)
+            {
+                continue;
+            }
+            let Ok((len, digest)) = dla_core::integrity::measure(&theirs) else {
+                continue;
+            };
+            if len == wm.len() {
+                out.push(ThinFile { path, len, digest });
+            }
+        }
+    }
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    out
+}
+
+/// A listed path as a relative path that stays below its root; `None` for anything else.
+fn listed_rel(path: &str) -> Option<PathBuf> {
+    let rel = PathBuf::from(path);
+    (!path.is_empty()
+        && rel
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_))))
+    .then_some(rel)
+}
+
+/// Removes from `work` every regular file the project holds with the same length and bytes.
+/// Files that differ, files the project does not hold, symlinks and all directories stay.
+/// The list of the files to remove is written to `list` (a temporary file, then a rename)
+/// before the first file goes, so a thin that stops half way leaves a list that [`fill_files`]
+/// can use. Nothing is written when no file is identical.
+pub fn thin_files(work: &Path, list: &Path, project: &Path) -> std::io::Result<ThinReport> {
+    let files = identical_files(work, project);
+    if files.is_empty() {
+        return Ok(ThinReport::default());
+    }
+    let bytes = files.iter().map(|f| f.len).sum();
+    let doc = ThinList {
+        dla_work_thin: THIN_VERSION,
+        files,
+        bytes,
+    };
+    let text = serde_json::to_string_pretty(&doc).map_err(std::io::Error::other)?;
+    dla_core::fsutil::write_atomic(list, text.as_bytes()).map_err(|e| match e {
+        dla_core::Error::Io { source, .. } => source,
+        other => std::io::Error::other(other.to_string()),
+    })?;
+    let mut report = ThinReport::default();
+    for f in &doc.files {
+        let Some(rel) = listed_rel(&f.path) else {
+            continue;
+        };
+        match fs::remove_file(work.join(rel)) {
+            Ok(()) => {
+                report.files += 1;
+                report.bytes += f.len;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(report)
+}
+
+/// Brings back the files `list` names that are missing in `work`, from `project`, then
+/// deletes `list`. Every missing file is checked first (length and digest as listed); when one
+/// or more do not match or are gone from the project, nothing is changed and the error names
+/// them all. A listed file that is still in `work` (a thin that was cut short) stays as it is.
+/// Returns the files brought back; no list means nothing to do.
+pub fn fill_files(work: &Path, list: &Path, project: &Path) -> Result<usize, FillError> {
+    let text = match fs::read_to_string(list) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(FillError::Io(dla_core::Error::io(list, e))),
+    };
+    let doc: ThinList = serde_json::from_str(&text)
+        .ok()
+        .filter(|d: &ThinList| d.dla_work_thin == THIN_VERSION)
+        .ok_or_else(|| {
+            FillError::Io(dla_core::Error::Malformed {
+                path: list.to_path_buf(),
+                message: "not a thinned-copy list of this version".to_owned(),
+            })
+        })?;
+    let (mut todo, mut stale) = (Vec::new(), Vec::new());
+    for f in &doc.files {
+        let Some(rel) = listed_rel(&f.path) else {
+            stale.push(f.path.clone());
+            continue;
+        };
+        if fs::symlink_metadata(work.join(&rel)).is_ok() {
+            continue;
+        }
+        let theirs = project.join(&rel);
+        let intact = fs::symlink_metadata(&theirs).is_ok_and(|m| m.is_file())
+            && dla_core::integrity::measure(&theirs)
+                .is_ok_and(|(len, digest)| len == f.len && digest == f.digest);
+        if intact {
+            todo.push((rel, theirs));
+        } else {
+            stale.push(f.path.clone());
+        }
+    }
+    if !stale.is_empty() {
+        return Err(FillError::Stale(stale));
+    }
+    for (rel, from) in &todo {
+        let to = work.join(rel);
+        let io = |p: &Path, e| FillError::Io(dla_core::Error::io(p, e));
+        if let Some(parent) = to.parent() {
+            fs::create_dir_all(parent).map_err(|e| io(parent, e))?;
+        }
+        // A copy that is cut short must never look like a finished file.
+        let mut tmp = to.clone().into_os_string();
+        tmp.push(".dla-fill");
+        let tmp = PathBuf::from(tmp);
+        let done = copy_file(from, &tmp).and_then(|()| fs::rename(&tmp, &to));
+        if let Err(e) = done {
+            let _ = fs::remove_file(&tmp);
+            return Err(io(&to, e));
+        }
+    }
+    fs::remove_file(list).map_err(|e| FillError::Io(dla_core::Error::io(list, e)))?;
+    Ok(todo.len())
+}
+
+/// A shared lock on a harness's `work/`, held while a process reads or runs in it. Dropping
+/// it releases the lock.
+#[derive(Debug)]
+pub struct WorkGuard {
+    _lock: Option<fs::File>,
+}
+
+fn open_lock(hdir: &Path) -> std::io::Result<fs::File> {
+    fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(hdir.join(WORK_LOCK))
+}
+
+fn io_refusal_at(path: &Path, e: std::io::Error) -> Refusal {
+    dla_core::Error::io(path, e).to_refusal()
+}
+
+fn stale_refusal(hdir: &Path, lang: &str, stale: &[String]) -> Refusal {
+    let id = hdir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let named = stale
+        .iter()
+        .take(STALE_NAMED)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let more = stale.len().saturating_sub(STALE_NAMED);
+    Refusal::new(
+        dla_core::error::codes::WORK_COPY_STALE,
+        format!(
+            "harness {id} keeps only the files that differ from the project, and {} file(s) it needs back changed or went from the project since: {named}{}",
+            stale.len(),
+            if more > 0 {
+                format!(" and {more} more")
+            } else {
+                String::new()
+            }
+        ),
+        format!("the project files as they were when {id} was thinned"),
+        format!(
+            "dla harness gen --lang {lang} (the new harness copies the project as it is now; the run's seals cover only the run's own files, so the changed project needs no `dla run reseal`), or put the named files back as they were"
+        ),
+    )
+}
+
+/// Takes the shared lock on the `work/` of the harness in `hdir` and, when that copy was
+/// thinned, brings its files back first (under the exclusive lock, then the shared lock is
+/// taken again). The returned guard must be held for as long as the caller reads or runs in
+/// `work/`. Sets the modification time of `work.lock` to now. Refuses with `work-copy-stale`
+/// when a file to bring back no longer matches the project.
+pub fn use_work(hdir: &Path, project: &Path, lang: &str) -> Result<WorkGuard, Refusal> {
+    use std::io::ErrorKind::Unsupported;
+    let (work, list) = (hdir.join(WORK), hdir.join(THIN_LIST));
+    loop {
+        let f = open_lock(hdir).map_err(|e| io_refusal_at(&hdir.join(WORK_LOCK), e))?;
+        match f.lock_shared() {
+            Ok(()) => {}
+            // A file system without locks: no protection, but the fill below still works.
+            Err(e) if e.kind() == Unsupported => {
+                fill_files(&work, &list, project).map_err(|e| fill_refusal(hdir, lang, e))?;
+                return Ok(WorkGuard { _lock: None });
+            }
+            Err(e) => return Err(io_refusal_at(&hdir.join(WORK_LOCK), e)),
+        }
+        if !list.exists() {
+            // Best effort: the time only orders harnesses for the thinner.
+            let _ = f.set_modified(std::time::SystemTime::now());
+            return Ok(WorkGuard { _lock: Some(f) });
+        }
+        f.unlock()
+            .and_then(|()| f.lock())
+            .map_err(|e| io_refusal_at(&hdir.join(WORK_LOCK), e))?;
+        if list.exists() {
+            fill_files(&work, &list, project).map_err(|e| fill_refusal(hdir, lang, e))?;
+        }
+        drop(f);
+    }
+}
+
+fn fill_refusal(hdir: &Path, lang: &str, e: FillError) -> Refusal {
+    match e {
+        FillError::Stale(paths) => stale_refusal(hdir, lang, &paths),
+        FillError::Io(e) => e.to_refusal(),
+    }
+}
+
+/// What [`thin_harness`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Thinned {
+    /// Files were removed (possibly none: nothing was identical).
+    Done(ThinReport),
+    /// The harness already has a list.
+    Already,
+    /// Another process holds the lock.
+    Busy,
+}
+
+/// The time a harness was last used: the modification time of `work.lock`, else of the
+/// harness directory.
+fn used_time(hdir: &Path) -> std::time::SystemTime {
+    fs::metadata(hdir.join(WORK_LOCK))
+        .or_else(|_| fs::metadata(hdir))
+        .and_then(|m| m.modified())
+        .unwrap_or(std::time::UNIX_EPOCH)
+}
+
+/// Thins the `work/` of the harness in `hdir` against `project`, unless it is thinned already
+/// or another process holds its lock (the exclusive lock is only tried, never waited for).
+pub fn thin_harness(hdir: &Path, project: &Path) -> std::io::Result<Thinned> {
+    let list = hdir.join(THIN_LIST);
+    if list.exists() {
+        return Ok(Thinned::Already);
+    }
+    let used = used_time(hdir);
+    let existed = hdir.join(WORK_LOCK).exists();
+    let f = open_lock(hdir)?;
+    if !existed {
+        // The lock file is new: it must not make the harness look used just now.
+        let _ = f.set_modified(used);
+    }
+    match f.try_lock() {
+        Ok(()) => {}
+        Err(fs::TryLockError::WouldBlock) => return Ok(Thinned::Busy),
+        Err(fs::TryLockError::Error(e)) => return Err(e),
+    }
+    if list.exists() {
+        return Ok(Thinned::Already);
+    }
+    thin_files(&hdir.join(WORK), &list, project).map(Thinned::Done)
+}
+
+/// What [`thin_run`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunThin {
+    /// Harnesses thinned (that freed at least one file).
+    pub thinned: Vec<String>,
+    /// Bytes freed.
+    pub bytes: u64,
+    /// Harnesses left alone for a reason other than being thinned already: `(id, reason)`.
+    pub skipped: Vec<(String, String)>,
+}
+
+/// Thins the harnesses of the run in `run_dir`, except `except` and the `keep_recent` used
+/// last. A harness without a manifest is being generated and is left alone. Never fails: a
+/// harness that cannot be thinned is named in [`RunThin::skipped`].
+pub fn thin_run(
+    run_dir: &Path,
+    project: &Path,
+    keep_recent: usize,
+    except: Option<&str>,
+) -> RunThin {
+    let mut found: Vec<(std::time::SystemTime, u64, String, PathBuf)> = Vec::new();
+    if let Ok(rd) = fs::read_dir(run_dir.join(dla_core::harness::HARNESS_DIR)) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let Some(n) = name
+                .strip_prefix('H')
+                .and_then(|d| d.parse::<u64>().ok())
+                .filter(|_| e.path().join(super::MANIFEST).is_file())
+            else {
+                continue;
+            };
+            found.push((used_time(&e.path()), n, name, e.path()));
+        }
+    }
+    found.sort_by_key(|a| std::cmp::Reverse((a.0, a.1)));
+    let mut out = RunThin::default();
+    for (_, _, id, hdir) in found.into_iter().skip(keep_recent) {
+        if except == Some(id.as_str()) {
+            continue;
+        }
+        match thin_harness(&hdir, project) {
+            Ok(Thinned::Done(r)) if r.files > 0 => {
+                out.thinned.push(id);
+                out.bytes += r.bytes;
+            }
+            Ok(Thinned::Done(_) | Thinned::Already) => {}
+            Ok(Thinned::Busy) => out
+                .skipped
+                .push((id, "in use by another process".to_owned())),
+            Err(e) => out.skipped.push((id, e.to_string())),
+        }
+    }
+    out.thinned
+        .sort_by_key(|id| id[1..].parse::<u64>().unwrap_or(0));
+    out
 }
 
 #[cfg(test)]
@@ -919,5 +1353,354 @@ mod tests {
             );
         }
         assert!(r.gaps.iter().any(|g| g.contains("build")), "{:?}", r.gaps);
+    }
+    // ---- thinning ----
+
+    /// A project and a harness directory holding a copy of it: `a.txt`, `sub/b.txt`,
+    /// `run.sh` (executable) and `c.txt`; the copy has the same files, `c.txt` changed, a new
+    /// `d.txt`, an empty directory and (Unix) a symlink.
+    struct Thin {
+        _d: tempfile::TempDir,
+        project: PathBuf,
+        hdir: PathBuf,
+    }
+
+    impl Thin {
+        fn new() -> Self {
+            let d = tempfile::tempdir().unwrap();
+            let project = d.path().join("project");
+            let hdir = d.path().join("H1");
+            fs::create_dir_all(project.join("sub")).unwrap();
+            fs::create_dir_all(&hdir).unwrap();
+            let old = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+            for (f, text) in [
+                ("a.txt", "alpha"),
+                ("sub/b.txt", "bravo"),
+                ("run.sh", "#!/bin/sh\n"),
+                ("c.txt", "charlie"),
+            ] {
+                let path = project.join(f);
+                fs::write(&path, text).unwrap();
+                fs::File::options()
+                    .write(true)
+                    .open(&path)
+                    .unwrap()
+                    .set_modified(old)
+                    .unwrap();
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(project.join("run.sh"), fs::Permissions::from_mode(0o755))
+                    .unwrap();
+            }
+            // The project holds a regular file with the bytes of what the copy has as a link.
+            #[cfg(unix)]
+            fs::write(project.join("link"), "alpha").unwrap();
+            copy_project(&project, &hdir.join(WORK)).unwrap();
+            fs::write(hdir.join(WORK).join("c.txt"), "charlia").unwrap();
+            fs::write(hdir.join(WORK).join("d.txt"), "driver").unwrap();
+            fs::create_dir_all(hdir.join(WORK).join("empty")).unwrap();
+            #[cfg(unix)]
+            {
+                fs::remove_file(hdir.join(WORK).join("link")).unwrap();
+                std::os::unix::fs::symlink("a.txt", hdir.join(WORK).join("link")).unwrap();
+            }
+            Self {
+                _d: d,
+                project,
+                hdir,
+            }
+        }
+
+        fn work(&self) -> PathBuf {
+            self.hdir.join(WORK)
+        }
+
+        fn list(&self) -> PathBuf {
+            self.hdir.join(THIN_LIST)
+        }
+
+        fn listed(&self) -> Vec<String> {
+            let v: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(self.list()).unwrap()).unwrap();
+            v["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|f| f["path"].as_str().unwrap().to_owned())
+                .collect()
+        }
+    }
+
+    #[test]
+    fn thin_removes_identical_files_only_and_lists_exactly_those() {
+        let t = Thin::new();
+        let r = thin_files(&t.work(), &t.list(), &t.project).unwrap();
+        let w = t.work();
+        assert_eq!(t.listed(), ["a.txt", "run.sh", "sub/b.txt"]);
+        assert_eq!(r.files, 3);
+        assert_eq!(
+            r.bytes,
+            ("alpha".len() + "#!/bin/sh\n".len() + "bravo".len()) as u64
+        );
+        for gone in ["a.txt", "run.sh", "sub/b.txt"] {
+            assert!(!w.join(gone).exists(), "{gone} should be gone");
+        }
+        // A changed file, a new file and a directory (empty or not) stay.
+        assert_eq!(fs::read_to_string(w.join("c.txt")).unwrap(), "charlia");
+        assert!(w.join("d.txt").is_file());
+        assert!(w.join("empty").is_dir() && w.join("sub").is_dir());
+        #[cfg(unix)]
+        assert!(fs::symlink_metadata(w.join("link")).unwrap().is_symlink());
+        let doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(t.list()).unwrap()).unwrap();
+        assert_eq!(doc["dla_work_thin"], 1);
+        assert_eq!(doc["bytes"], r.bytes);
+        let first = &doc["files"][0];
+        assert_eq!(first["len"], 5);
+        assert_eq!(first["digest"].as_str().unwrap().len(), 64);
+    }
+
+    #[test]
+    fn thin_writes_no_list_when_nothing_is_identical() {
+        let d = tempfile::tempdir().unwrap();
+        let (p, w) = (d.path().join("p"), d.path().join("w"));
+        fs::create_dir_all(&p).unwrap();
+        fs::create_dir_all(&w).unwrap();
+        fs::write(p.join("a"), "1").unwrap();
+        fs::write(w.join("a"), "2").unwrap();
+        fs::write(w.join("new"), "x").unwrap();
+        let list = d.path().join(THIN_LIST);
+        assert_eq!(thin_files(&w, &list, &p).unwrap(), ThinReport::default());
+        assert!(!list.exists() && w.join("a").is_file() && w.join("new").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_with_other_permissions_than_the_project_is_kept() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = Thin::new();
+        fs::set_permissions(t.work().join("a.txt"), fs::Permissions::from_mode(0o600)).unwrap();
+        thin_files(&t.work(), &t.list(), &t.project).unwrap();
+        assert!(t.work().join("a.txt").is_file());
+        assert_eq!(t.listed(), ["run.sh", "sub/b.txt"]);
+    }
+
+    #[test]
+    fn fill_brings_back_bytes_time_and_the_executable_bit() {
+        let t = Thin::new();
+        thin_files(&t.work(), &t.list(), &t.project).unwrap();
+        let n = fill_files(&t.work(), &t.list(), &t.project).unwrap();
+        assert_eq!(n, 3);
+        assert!(!t.list().exists(), "the list goes once the files are back");
+        for f in ["a.txt", "run.sh", "sub/b.txt"] {
+            let (mine, theirs) = (t.work().join(f), t.project.join(f));
+            assert_eq!(fs::read(&mine).unwrap(), fs::read(&theirs).unwrap(), "{f}");
+            assert_eq!(
+                fs::metadata(&mine).unwrap().modified().unwrap(),
+                fs::metadata(&theirs).unwrap().modified().unwrap(),
+                "{f} keeps the project's modification time"
+            );
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(t.work().join("run.sh"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o755
+            );
+        }
+        assert_eq!(
+            fs::read_to_string(t.work().join("c.txt")).unwrap(),
+            "charlia"
+        );
+    }
+
+    #[test]
+    fn a_project_file_changed_after_the_thin_refuses_the_fill_and_changes_nothing() {
+        let t = Thin::new();
+        thin_files(&t.work(), &t.list(), &t.project).unwrap();
+        fs::write(t.project.join("a.txt"), "ALPHA").unwrap();
+        fs::remove_file(t.project.join("sub/b.txt")).unwrap();
+        let before = fs::read_to_string(t.list()).unwrap();
+        match fill_files(&t.work(), &t.list(), &t.project) {
+            Err(FillError::Stale(paths)) => assert_eq!(paths, ["a.txt", "sub/b.txt"]),
+            other => panic!("{other:?}"),
+        }
+        // The file that still matches was not brought back either.
+        assert!(!t.work().join("run.sh").exists());
+        assert!(!t.work().join("a.txt").exists());
+        assert_eq!(fs::read_to_string(t.list()).unwrap(), before);
+    }
+
+    #[test]
+    fn a_cut_thin_fills_the_others_and_keeps_the_file_that_is_still_there() {
+        let t = Thin::new();
+        thin_files(&t.work(), &t.list(), &t.project).unwrap();
+        // A thin that stopped before it removed `a.txt`: the file is there, as the user left it.
+        fs::write(t.work().join("a.txt"), "left behind").unwrap();
+        let n = fill_files(&t.work(), &t.list(), &t.project).unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(
+            fs::read_to_string(t.work().join("a.txt")).unwrap(),
+            "left behind"
+        );
+        assert!(t.work().join("run.sh").is_file() && t.work().join("sub/b.txt").is_file());
+        assert!(!t.list().exists());
+    }
+
+    #[test]
+    fn a_list_that_tries_to_leave_the_copy_is_stale_not_followed() {
+        let t = Thin::new();
+        fs::write(
+            t.list(),
+            r#"{"dla_work_thin":1,"files":[{"path":"../x","len":1,"digest":"00"}],"bytes":1}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            fill_files(&t.work(), &t.list(), &t.project),
+            Err(FillError::Stale(p)) if p == ["../x"]
+        ));
+    }
+
+    #[test]
+    fn a_second_thin_of_a_thinned_harness_does_nothing() {
+        let t = Thin::new();
+        let first = thin_harness(&t.hdir, &t.project).unwrap();
+        assert!(
+            matches!(first, Thinned::Done(r) if r.files == 3),
+            "{first:?}"
+        );
+        let list = fs::read_to_string(t.list()).unwrap();
+        // Something new that is identical to the project appears: the list is not touched.
+        fs::write(t.work().join("a.txt"), "alpha").unwrap();
+        assert_eq!(thin_harness(&t.hdir, &t.project).unwrap(), Thinned::Already);
+        assert_eq!(fs::read_to_string(t.list()).unwrap(), list);
+        assert!(t.work().join("a.txt").is_file());
+    }
+
+    #[test]
+    fn a_harness_whose_lock_is_held_is_not_thinned_and_one_in_use_is_filled_first() {
+        let t = Thin::new();
+        let held = open_lock(&t.hdir).unwrap();
+        held.lock_shared().unwrap();
+        assert_eq!(thin_harness(&t.hdir, &t.project).unwrap(), Thinned::Busy);
+        assert!(!t.list().exists() && t.work().join("a.txt").is_file());
+        drop(held);
+        thin_harness(&t.hdir, &t.project).unwrap();
+        assert!(!t.work().join("a.txt").exists());
+        let guard = use_work(&t.hdir, &t.project, "python").unwrap();
+        assert!(t.work().join("a.txt").is_file() && !t.list().exists());
+        // While a user holds the copy, the thinner leaves it alone.
+        assert_eq!(thin_harness(&t.hdir, &t.project).unwrap(), Thinned::Busy);
+        drop(guard);
+        assert!(matches!(
+            thin_harness(&t.hdir, &t.project).unwrap(),
+            Thinned::Done(_)
+        ));
+    }
+
+    #[test]
+    fn using_a_copy_sets_the_last_used_time() {
+        let t = Thin::new();
+        let lock = open_lock(&t.hdir).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(86_400);
+        lock.set_modified(old).unwrap();
+        drop(lock);
+        let _g = use_work(&t.hdir, &t.project, "python").unwrap();
+        let used = fs::metadata(t.hdir.join(WORK_LOCK))
+            .unwrap()
+            .modified()
+            .unwrap();
+        assert!(
+            used > old + std::time::Duration::from_secs(3600),
+            "{used:?}"
+        );
+    }
+
+    #[test]
+    fn the_refusal_for_a_stale_copy_names_the_count_and_the_first_paths() {
+        let t = Thin::new();
+        for i in 0..6 {
+            fs::write(t.project.join(format!("m{i}.txt")), "m").unwrap();
+            fs::write(t.work().join(format!("m{i}.txt")), "m").unwrap();
+        }
+        thin_harness(&t.hdir, &t.project).unwrap();
+        for i in 0..6 {
+            fs::write(t.project.join(format!("m{i}.txt")), "changed").unwrap();
+        }
+        let r = match use_work(&t.hdir, &t.project, "python") {
+            Err(r) => r,
+            Ok(_) => panic!("the project changed"),
+        };
+        assert_eq!(r.code, "work-copy-stale");
+        assert!(r.message.contains("6 file(s)"), "{}", r.message);
+        assert!(
+            r.message.contains("m0.txt, m1.txt, m2.txt and 3 more"),
+            "{}",
+            r.message
+        );
+        assert!(r.fix.contains("dla harness gen --lang python"), "{}", r.fix);
+        assert!(r.fix.contains("reseal"), "{}", r.fix);
+        // Nothing was brought back and the list stays.
+        assert!(t.list().exists() && !t.work().join("a.txt").exists());
+    }
+
+    #[test]
+    fn thin_run_keeps_the_last_used_and_the_new_one() {
+        let d = tempfile::tempdir().unwrap();
+        let project = d.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("f"), "same").unwrap();
+        let run = d.path().join("run");
+        let base = std::time::SystemTime::now() - std::time::Duration::from_secs(10_000);
+        for n in 1..=7u64 {
+            let h = run.join("harness").join(format!("H{n}"));
+            fs::create_dir_all(h.join(WORK)).unwrap();
+            fs::write(h.join(WORK).join("f"), "same").unwrap();
+            fs::write(h.join(crate::harness::MANIFEST), "{}").unwrap();
+            // H3 was used last of all but H7; H7 is the new one.
+            let age = if n == 3 { 900 } else { n * 10 };
+            let when = base + std::time::Duration::from_secs(age);
+            if n == 2 && cfg!(unix) {
+                // No lock file yet: the time of the directory says when it was used. (Windows
+                // does not open a directory this way to set its time: there H2 gets a lock
+                // file like the others.)
+                fs::File::open(&h).unwrap().set_modified(when).unwrap();
+            } else {
+                open_lock(&h).unwrap().set_modified(when).unwrap();
+            }
+        }
+        // A directory without a manifest is being generated: left alone.
+        fs::create_dir_all(run.join("harness/H8").join(WORK)).unwrap();
+        fs::write(run.join("harness/H8").join(WORK).join("f"), "same").unwrap();
+        let r = thin_run(&run, &project, KEEP_RECENT, Some("H7"));
+        // Used last: H3 (900), H7 (70), H6 (60), H5 (50) are kept; H7 also as the new one.
+        assert_eq!(r.thinned, ["H1", "H2", "H4"]);
+        assert_eq!(r.bytes, 12);
+        assert!(r.skipped.is_empty(), "{:?}", r.skipped);
+        assert!(run.join("harness/H8").join(WORK).join("f").is_file());
+        for kept in ["H3", "H5", "H6", "H7"] {
+            assert!(
+                run.join("harness")
+                    .join(kept)
+                    .join(WORK)
+                    .join("f")
+                    .is_file()
+            );
+        }
+        // The lock file the thinner made for H2 did not make it look used just now: the four
+        // used last are still the same four, and nothing else is left to thin.
+        let second = thin_run(&run, &project, KEEP_RECENT, None);
+        assert!(second.thinned.is_empty(), "{second:?}");
+        // The new one is left alone whatever its age.
+        let again = thin_run(&run, &project, 0, Some("H7"));
+        assert_eq!(again.thinned, ["H3", "H5", "H6"]);
+        assert!(run.join("harness/H7").join(WORK).join("f").is_file());
     }
 }

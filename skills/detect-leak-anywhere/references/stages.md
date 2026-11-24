@@ -263,6 +263,7 @@ under the run directory and need tier 1.
   can read is refused with the reason (Go command mode: use `--driver`), and a finding with no probe of
   its own is probed through its module and the output says so. A point killed at its timeout says
   which phase the Python agent was in (the program's own code before its first hook, a named hook, a named probe).
+  Older harnesses keep only the files of their copy that differ from the project (`work-thinned.json` lists the others), and a harness that is used again gets its files back first. `work-copy-stale` means the project changed after a harness was thinned: `dla harness gen` writes a harness on the project as it is now.
 - The measurement queue. The candidates of tiers 1 to 4 that no harness run has settled are PENDING;
   `dla run status` prints a `queue` object per runtime (eligible, settled, pending, the ids of the
   next batch, the `command`, and `open` or the reason it is not open: floor reached, workload

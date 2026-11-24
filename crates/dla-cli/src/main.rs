@@ -246,8 +246,20 @@ fn dispatch_command(cli: Cli) -> Res<Output> {
         }
         Command::Ledger(c) => ledger_cmd::dispatch(&ctx()?, data, c).map(Output::Json),
         Command::Report => {
-            let r = report::run(&ctx()?)?;
+            let ctx = ctx()?;
+            let r = report::run(&ctx)?;
             eprintln!("report: {} sha256={}", r.path, r.sha256);
+            // The run is over: no harness needs a whole copy of the project any more.
+            if let Ok(root) = project_root(project) {
+                let t = harness_cmd::thin_old(&ctx.run_dir, &root, 0, None);
+                if let Some(h) = t.get("thinned") {
+                    let bytes = t.get("thinned_bytes").and_then(|b| b.as_u64()).unwrap_or(0);
+                    eprintln!("thinned: {h} bytes={bytes}");
+                }
+                if let Some(s) = t.get("thin_skipped") {
+                    eprintln!("thin_skipped: {s}");
+                }
+            }
             for t in &r.tamper {
                 eprintln!("tamper: {}", t.describe());
             }
