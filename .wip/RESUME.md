@@ -2135,3 +2135,45 @@ flat test-loop readings get only 9 second looks.
 - blind-fastrace started 10:33 (run 20261124-103359-0c40), waiter running. blind-otel-python
   still going (started 09:25; waiter bsqrpquxa ends about 11:22: restart it then).
 - Next: logstash (--warm-m2 u107/logstash-try/m2), then Jetty 12.0.31 (clone the tag first).
+
+## 10:39 UTC 2026-11-24: blind Rust run ended in under 3 minutes, nothing confirmed; JVM run started
+
+- blind-fastrace: exit 0, 165 s, 32 turns, cost 0.50. COMPLETE, "no leak confirmed", 2 min of a
+  2h47m budget. 44 candidates, only 8 ranked; 3 harnesses, 6 series; queue 8 of 8 targeted:
+  executed 3, not reached 5; 16 of 146 entry points exercised. The final gate passed. Whole
+  process rss grew 5 to 6 bytes per unit, under threshold. The model: "native.live_bytes was not
+  among the reported growth columns, but I didn't check it directly." Kept:
+  /root/dla-real/blind-fastrace-keep. Run directory deleted.
+  Score entry (key NOT read yet): nothing confirmed.
+- blind-logstash started 10:37 (run 20261124-103730-3c68, --warm-m2 u107/logstash-try/m2), waiter
+  running. blind-otel-python still going (started 09:25).
+- Jetty source fetched: /root/dla-real/src/jetty (tag jetty-12.0.31, 5eb4a85, 493 poms, 2581
+  source files). Runs LAST and ALONE: it needs a Maven build first, which must not run beside a
+  measuring run.
+- Pattern so far (3 of 3 blind runs, no leak confirmed): the run ends long before its budget
+  (9 min, 56 min, 3 min of about 3 h) with most code never exercised, and the gate or the stop
+  hook lets it.
+
+## 10:45 UTC 2026-11-24: first JVM run VOID (rig), rerun started; CI second flake; transcripts redacted
+
+- CI re-run (attempt 2) of the macOS job failed on ANOTHER test:
+  dla-workload tests/harness_run.rs:2078 `a_wrapper_script_that_runs_javac_and_tests_still_yields_the_main_jvm_record`,
+  `ratio(&series, "os.rss") < 4.0` (the known macOS flake of task 50). The lock test passed in
+  that attempt. Attempt 3 queued (waiter blxb9xo6h, logs u107/ci-main-23-rerun2).
+- blind-logstash (first): VOID, a rig failure. 89 s, measured nothing: inside the run's sandbox
+  Maven has no network (the JVM's proxy setting of this container is refused there), and my warm
+  Maven home held only what `./mvnw test` needs, not the goals of the tool's JUnit harness
+  (`dependency:build-classpath`, `dependency:get` of junit-platform-launcher). The report said
+  COMPLETE with "Measured: nothing" and the blocker build_fails; the model closed all 86 with
+  close-rest. Kept: /root/dla-real/blind-logstash-void-keep (no transcript: it showed
+  environment variable names of credentials).
+- Rig fix (no change to the tool): u107/logstash-try/m2 now also holds maven-dependency-plugin
+  2.8 (wrapper Maven 3.8.5) and 3.7.0 (system Maven 3.9.11) and junit-platform-launcher 1.8.2;
+  offline `test-compile dependency:build-classpath` and `dependency:get` pass. For Jetty the same
+  goals must be warmed.
+- blind-logstash-2 started 10:41 (run 20261124-104153-202a), waiter bgjn3sizr.
+- Kept transcripts can hold the sandbox's own proxy URL with credentials
+  (`://srt…@127.0.0.1:3128`). /root/dla-real/redact.py <src> <dst> removes credential-shaped
+  text; applied to the three blind keeps. Use it for every keep from now on; never copy a raw
+  transcript to the progress branch.
+- blind-otel-python still going (started 09:25); its waiter bsqrpquxa ends about 11:22.
