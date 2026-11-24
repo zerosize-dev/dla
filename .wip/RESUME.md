@@ -1967,3 +1967,24 @@ flat test-loop readings get only 9 second looks.
 - CI on main for 49bccfe (run 45327928611) was still in progress at 05:17; waiter task bh2fo8jl9.
 - Then: pillow-11 unattended (plugin refreshed from the new commit; `cargo clean` first), then
   version 0.9.0-preview.7 (previews are pre-authorized).
+
+## 07:00 UTC 2026-11-24
+
+- CI on main for 49bccfe (run 45327928611) FAILED in "clippy and test (ubuntu)": the R4 test
+  `the_first_point_of_a_command_mode_python_series_...` (exact step equality; one point read +51).
+  Fixed in the working tree (tolerance a tenth of the median step); main goes green with commit 22.
+- CI of snapshot 8afb484 FAILED on Windows only: scratch.rs test `thin_run_keeps_the_last_used_and_the_new_one`
+  set a directory's time through File::open (Access is denied on Windows). Fixed: that step is
+  `cfg!(unix)` only. New frozen snapshot 1397662 (NON-skip, CI running; waiter logs u105/ci-22b,
+  task b51juwzgc). Do not push another non-skip snapshot before it ends.
+- Local on the W tree: whole suite 3447 passed 0 failed; 3.12 only the 2 known; static 64; full
+  dynamic bench 63/64 + 1 xfail.
+- `cargo clean` done (target/ EMPTY; 14.4 GB free). Plugin in /root/dla-real/plugin refreshed
+  from snapshot 1397662; /root/dla-real/bin/dla = u105/dla-W2 (W tree, production code equal).
+- pillow-11 STARTED 06:56 UTC (task 100; timeout 9000 s; waiter task boah3w3e4 with low-disk
+  check; driver log /root/dla-real/pillow-11.driver.log; run dir /root/dla-real/pillow-11).
+  To read: report.md, ledger (confirmed findings, verifier labels), harness count and disk
+  (du of project/.dla), `thinned` in harness gen outputs, whether heap capture was used.
+- When CI 1397662 is green: commit with wip-notes/commit-message-22.txt
+  (`commit-snapshot-tree.sh 1397662aa4f0695e63854b4037456c6f16818211 ...`), push main and dev,
+  then version commit 0.9.0-preview.7 after pillow-11 is read (previews are pre-authorized).
