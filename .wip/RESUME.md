@@ -2687,3 +2687,17 @@ flat test-loop readings get only 9 second looks.
   (2) suite green -> snapshot of the final tree WITH CI -> second commit (message 24: the cut
   warning, `regenerate`, the driver's minimum Rust and edition rule, the pinned channel in the
   failure). (3) builder N (Node/TypeScript), brief ready. (4) second blind round (task 106).
+
+## 17:05 UTC 2026-11-24 (clock checked 17:02): FIRST COMMIT ON MAIN: 546b74c
+
+- CI run 45431852403 on snapshot f0a84e5: GREEN, all 15 jobs (dynamic acceptance included).
+- main = 546b74c "Three causes of the misses on projects the tool had never seen" (tree of
+  f0a84e5 without .wip; 44 files, +5238/-68; message wip-notes/commit-message-23.txt), pushed to
+  main and dev/wonderful-mccarthy-algc5s. CI waiter on main: bmain24 (logs u115/ci-main-24).
+- Working tree = main + R3 + R4 (13 files, +398/-50), uncommitted; local suite on it running
+  (task bnjue6rl3).
+- Next: suite green -> snapshot WITH CI -> second commit (write commit-message-24.txt: one short
+  `_attention` entry and the `regenerate` key; minimum Rust 1.70 and the edition rule for
+  `unsafe extern`; the pinned channel in a failed build's message; checked on the real library
+  with its pinned 1.80.0). Then version 0.9.0-preview.8 (previews are pre-authorized), builder N,
+  second blind round.

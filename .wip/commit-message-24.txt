@@ -1,0 +1,41 @@
+The Rust driver builds with a pinned toolchain and its feature warning is never cut
+
+Two defects left open by the last change, both seen when the changed tool
+was run by hand on the Rust library of the unattended test.
+
+The library pins its toolchain to 1.80.0 in `rust-toolchain.toml`. The
+generated driver did not compile there: its own code had an
+`unsafe extern "C"` block, which exists from Rust 1.82, and an inline
+`const` in an array, which exists from 1.79. In the unattended run the
+model lost time on this and changed the toolchain by hand.
+
+- The driver now holds to Rust 1.70, and its header and the Rust notes say
+  so. An `extern` block is written `unsafe extern` only when the crate's
+  edition is 2024 or later; the edition is read from the crate's manifest,
+  or from the workspace root when the crate inherits it. A template test
+  keeps the newer forms out.
+- When a harness does not build and the project pins a toolchain, the
+  refusal names the pinned channel, so the reader knows which compiler
+  spoke.
+
+`dla harness gen` warned about a feature that is off by default with one
+`_attention` entry per target, each ending in the command that turns the
+feature on. When the output is over its bound a protected string is cut at
+160 characters, so with seven targets every entry lost its command.
+
+- `_attention` now has one short entry per feature: that it is off, how
+  many targets of the harness have code behind it, the count of gated sites
+  in the crate, and where the command is. The command is in a new top-level
+  key, `regenerate`, that the output bound never cuts.
+
+On the library, with its own toolchain and no override: the warning is one
+line, the command under `regenerate` runs as printed, the driver builds,
+the code of the documented holder runs and live memory grows by 236 bytes
+per unit.
+
+Not covered. Rust 1.70 itself is not installed here: the claim rests on
+the versions in which the forms the driver uses became stable, and the
+driver was built with 1.80.0 and with the current stable. The coverage
+build of a harness is a separate build and its failure does not name the
+pinned channel. A workspace whose root pins the channel while a member
+sets its own edition was not tried.
