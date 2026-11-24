@@ -3110,3 +3110,14 @@ unattended run at a time and no builder beside it.
   residual_capture 5, skill_text 28, queue 16.
 - Next: full-tree CI (this snapshot), Python fixtures locally; then one commit to main
   (N + N2 + W + queue fix + this), messages 25 + 28 + N2 section + this; then preview.8.
+
+## 23:10 UTC 2026-11-24: Python fixtures 9/9 with the one-point fix; builder T started
+
+- Local `dla-bench dynamic --only python-` on the full tree: 9/9 pass (zstd decoy passes).
+- BUILDER T started (Sonnet, background): wip-notes/time-limit-brief.md (widened: all Python
+  fixtures, JVM ones if the JVM side changes). Scratch u121. The commit to main uses the TREE OF
+  SNAPSHOT d9ea782 (commit-snapshot-tree.sh), so T's edits in the working tree stay out of it.
+- Waiting: CI on main ef20720 (bimgi1bdd), CI on full tree d9ea782 (bfi290lly).
+- When d9ea782 is green: bash wip-notes/commit-snapshot-tree.sh d9ea7823d5b39f1c2dc82a6036a9f810dd450644
+  wip-notes/commit-message-29.txt (main must be ef20720 or its CI done first). Check the diff
+  stat: ~45 files, no .wip. Then version preview.8.

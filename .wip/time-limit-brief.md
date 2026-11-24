@@ -115,8 +115,11 @@ state `corrected`, "a Python library the tool had not been run on". Do NOT touch
   and the Python files that `crates/dla-cli/tests` run; two known failures on interpreters
   without `gc.freeze` support are not yours (say which fail before your change).
 - Existing tests that change: say which and why. Do not weaken a test. Nothing under
-  `bench/fixtures` is edited. Run `dla-bench dynamic --only <name>` for two Python fixtures (a
-  leak and a non-leak) and report the results.
+  `bench/fixtures` is edited. Run `./target/debug/dla-bench dynamic --only python-` (all nine
+  Python fixtures in one call, about ten minutes) and, if you changed the JVM side,
+  `--only jvm-` as well; report every row. A fixture that fails is reported with the first
+  lines of its failure; do not change the tool to make it pass without saying why the change
+  is right in general.
 
 ## Rules
 
