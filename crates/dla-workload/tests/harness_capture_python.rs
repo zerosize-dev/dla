@@ -1570,3 +1570,47 @@ fn a_step_is_named_like_the_growing_lines_in_the_copy_in_the_source_tree_and_nev
         "an absolute path in the file: {text}"
     );
 }
+
+#[test]
+fn a_run_of_tracebacks_lists_the_places_it_names_in_the_order_met() {
+    if !have_python() {
+        return;
+    }
+    let run = Run::new();
+    // One stored exception raised through three different lines in turn: the run of tracebacks is
+    // one step, and `at` is the first line only.
+    fs::write(
+        run.project.join("reraise_ats.py"),
+        "class Holder:\n    def __init__(self, ex):\n        self.ex = ex\n\n    def __getattr__(self, name):\n        raise self.ex\n\n\n_h = Holder(ImportError('x'))\n\n\ndef first(i):\n    keep = [i]\n    try:\n        _h.a\n    except ImportError:\n        pass\n    return len(keep)\n\n\ndef second(i):\n    try:\n        _h.b\n    except ImportError:\n        pass\n\n\nfor n in range(300):\n    first(n)\n    second(n)\n",
+    )
+    .unwrap();
+    run.python(&["reraise_ats.py"], &[("DLA_CAPTURE", "heap")]);
+    let doc = json(&run.pid_dir().join("py-1.retain.json"));
+    let steps: Vec<&Value> = doc["sites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|s| s["chains"].as_array().unwrap())
+        .flat_map(|c| c["steps"].as_array().unwrap())
+        .filter(|st| st["type"] == "traceback" && st["repeat"].as_u64().unwrap_or(0) > 100)
+        .collect();
+    assert!(!steps.is_empty(), "{doc}");
+    for st in steps {
+        let ats: Vec<&str> = st["ats"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{st}"))
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(ats.len() >= 2 && ats.len() <= 6, "{ats:?}");
+        assert_eq!(ats[0], st["at"].as_str().unwrap(), "{st}");
+        let mut distinct = ats.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), ats.len(), "{ats:?}");
+        assert!(
+            ats.iter().all(|a| a.starts_with("reraise_ats.py:")),
+            "{ats:?}"
+        );
+    }
+}

@@ -413,6 +413,12 @@ pub fn add(ctx: &Ctx, a: AddArgs) -> Res<Value> {
         &nf.supports,
         None,
     ));
+    let (nf_owner, nf_site) = (nf.owner.clone(), nf.site.clone());
+    warnings.extend(held_line_warning(
+        &ledger,
+        nf_owner.as_deref(),
+        nf_site.as_deref(),
+    ));
     let line = ledger.add_finding(nf)?;
     // Read the new finding from the line just appended, never from the ledger's
     // ID-ordered map: a sibling or any non-maximal ID is not the last entry there.
@@ -438,6 +444,36 @@ pub fn add(ctx: &Ctx, a: AddArgs) -> Res<Value> {
         out["warnings"] = json!(warnings);
     }
     Ok(out)
+}
+
+/// A warning when `owner` is the holder a retention record of the Python holder chains names and
+/// `site` is none of the lines that holder keeps: a finding at one of them has a column of its
+/// own that was measured. Not a refusal.
+fn held_line_warning(ledger: &Ledger, owner: Option<&str>, site: Option<&str>) -> Option<String> {
+    let (owner, site) = (owner?, site?.trim());
+    let mut held: Vec<String> = Vec::new();
+    for rec in ledger.evidence() {
+        for entry in dla_core::holders::entries_owned_by(rec, owner) {
+            let lines = dla_core::holders::entry_sites(entry);
+            if lines.contains(&site) {
+                return None;
+            }
+            for l in lines {
+                if !held.iter().any(|h| h == l) {
+                    held.push(l.to_owned());
+                }
+            }
+        }
+    }
+    if held.is_empty() {
+        return None;
+    }
+    let shown: Vec<&str> = held.iter().take(3).map(String::as_str).collect();
+    Some(format!(
+        "--site {site} is none of the lines the holder {owner} keeps in the retention record ({}{}); a finding at one of them has a measured column of its own: dla ledger add ... --site <one of them> --owner {owner}",
+        shown.join(", "),
+        if held.len() > 3 { ", ..." } else { "" }
+    ))
 }
 
 /// A warning when `owner` names no holder in the growth-series or retention-path evidence

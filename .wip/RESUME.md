@@ -1853,3 +1853,33 @@ flat test-loop readings get only 9 second looks.
   its builder starts after R3 is integrated (same files).
 - Decision: no static rule for `raise <stored exception>` (noise on asyncio-style code); the
   measured holder chain covers it.
+
+## 02:45 UTC 2026-11-24
+
+- CI on main 28979b4 (run 45289556532): first attempt FAILED in "dynamic acceptance": fixture
+  jvm-pool-warmup "no rule-out on a non-leak fixture" (unbound alloc-test Inconclusive; F6 growth
+  in os.rss_anon left unresolved); the job took 91 min against 47 to 71 (slow runner). The run's
+  artifact cannot be downloaded here (blob host not allowed). `rerun_failed_jobs` -> success.
+  OPEN: the flake is not diagnosed; try jvm-pool-warmup under CPU load with frozen binaries.
+- release.yml triggered (ref main, publish true) at about 02:40; waiter prints the release
+  (task bis2n13ou). Verify tag v0.9.0-preview.6 and its assets, then tell the owner.
+- Holder evidence, builder rounds (same agent adde4cb6ee309af51):
+  R3 (nine corrections) done; R4 (py-holder-fix2-brief.md) done: PYTHONDONTWRITEBYTECODE=1 for
+  every Python harness process (the first process compiled the agent and read ~1500 frozen objects
+  high: this is why alloc_test frozen_garbage failed with the bigger agent), `ats` on a run step,
+  site of `next` never outside the project, bundle focus on the finding's own stacks.
+  R5 sent 02:40: R4 made the chains capture 4x slower on the real library (19.5 s -> 81.7 s, bound
+  hit); cause measured by stack samples: `_source_rel` runs two uncached realpath calls per
+  traceback for a library that runs from its source tree (editable install).
+- Builder was denied twice by the permission system (an interpreter under u72/pillow that my
+  brief had put off limits; a watcher script with rmtree). It stopped both times; I did not run
+  either for it. 3.12 runs are mine: check_cases ALL OK (3.13, 3.12); harness_capture_python 25
+  pass + the 2 known gc.freeze failures; py_site_columns 26, summarize_python 22, alloc_test 5,
+  pytest_loop 17 pass (R3 tree).
+- Real-library walk script: scratch u101/walk.py <frozen binary> <out dir> (binaries u101/dla-R2,
+  -R3, -R4; outputs u101/w3.out, w4.out). After R5: freeze dla-R5, walk again; expect heap about
+  20 s, five lines under the module global, `next` site a project line, the font bundle with its
+  own stack excerpt (R4 gives ImageFont.py:580, ImageDraw.py:508, :565), no finding item in the
+  final gate.
+- Then: own mutations, whole suite (3.13) + Python test files under 3.12, static bench, full
+  dynamic bench with frozen binaries, non-skip snapshot for CI, commit, version 0.9.0-preview.7.

@@ -596,6 +596,7 @@ _cap_final = False
 _cap_notes = []  # limitations found while starting the captures
 _tm_first = {}  # stack key -> size in the first allocation file
 _rel_cache = {}
+_source_cache = {}  # file name -> path in the source tree or None; the key None holds the resolved root
 _memray = {"tracker": None, "bin": None, "error": None, "started": False, "stopped": False}
 _resource = {"threads": False, "tasks_debug": False, "warnings": collections.Counter(), "warn_total": 0}
 
@@ -1278,15 +1279,22 @@ def _source_rel(filename):
     root = _env("DLA_SOURCE_ROOT")
     if root is None or not filename or filename.startswith("<"):
         return None
+    got = _source_cache.get(filename, 0)
+    if got != 0:
+        return got
+    out = None
     low = filename.replace("\\", "/")
-    if "/site-packages/" in low or "/dist-packages/" in low:
-        return None
-    root = os.path.realpath(root)
-    real = os.path.realpath(filename)
-    if not real.startswith(root + os.sep):
-        return None
-    rel = real[len(root) + 1 :].replace(os.sep, "/")
-    return None if rel.split("/", 1)[0] in (".dla", ".git") else rel
+    if "/site-packages/" not in low and "/dist-packages/" not in low:
+        resolved = _source_cache.get(None)
+        if resolved is None:
+            resolved = _source_cache[None] = os.path.realpath(root)  # the root once
+        real = os.path.realpath(filename)
+        if real.startswith(resolved + os.sep):
+            rel = real[len(resolved) + 1 :].replace(os.sep, "/")
+            out = None if rel.split("/", 1)[0] in (".dla", ".git") else rel
+    if len(_source_cache) < 20000:
+        _source_cache[filename] = out
+    return out
 
 
 def _block_file(filename):
@@ -1443,7 +1451,21 @@ def _heap_path(filename):
     return "<outside>/" + (filename.replace("\\", "/").rsplit("/", 1)[-1] or "?")
 
 
+_heap_places = {}  # (file name, line) -> the place written; bounded
+
+
 def _heap_file_line(filename, line):
+    key = (filename, line)
+    got = _heap_places.get(key)
+    if got is not None:
+        return got
+    got = _heap_file_line_uncached(filename, line)
+    if len(_heap_places) < 50000:
+        _heap_places[key] = got
+    return got
+
+
+def _heap_file_line_uncached(filename, line):
     shown = _heap_path(filename) if filename else "?"
     tail = f":{line}"
     if len(shown) + len(tail) > _HEAP_TEXT_CAP:
@@ -1875,21 +1897,41 @@ def _heap_remember(path, lvl, final, root, known, joint):
         run = None
         if after is not None and type(node) is types.TracebackType and type(after) is types.TracebackType:
             ahead = known[id(after)][3]
-            run = (ahead[0] + 1, ahead[1]) if ahead else (2, after)
+            mine = _heap_at(node)
+            ahead_ats = ahead[2] if ahead else ((_heap_at(after),) if _heap_at(after) else ())
+            run = (
+                ahead[0] + 1 if ahead else 2,
+                ahead[1] if ahead else after,
+                _heap_ats(((mine,) if mine else ()) + ahead_ats),
+            )
         if key not in known:
             known[key] = (after, max(final - lvl.get(key, 0), 0), root, run)
         after = node
 
 
-def _heap_add(items, first, second, count, last):
-    """Adds a run (`count` objects from `first` to `last`; `second` is the one after `first`) to
-    `items`, joined to the run before it when both are tracebacks."""
+_HEAP_ATS = 6  # distinct places a run of tracebacks lists, at most
+
+
+def _heap_ats(places):
+    """The distinct places of `places`, in the order met, at most `_HEAP_ATS` of them."""
+    seen = []
+    for place in places:
+        if place not in seen:
+            seen.append(place)
+            if len(seen) == _HEAP_ATS:
+                break
+    return tuple(seen)
+
+
+def _heap_add(items, first, second, count, last, ats=()):
+    """Adds a run (`count` objects from `first` to `last`; `second` is the one after `first`; `ats`
+    the places the run names) to `items`, joined to the run before it when both are tracebacks."""
     if items:
-        f0, s0, c0, l0 = items[-1]
+        f0, s0, c0, l0, a0 = items[-1]
         if type(l0) is types.TracebackType and type(first) is types.TracebackType:
-            items[-1] = (f0, s0 if c0 > 1 else first, c0 + count, last)
+            items[-1] = (f0, s0 if c0 > 1 else first, c0 + count, last, _heap_ats(a0 + ats))
             return
-    items.append((first, second, count, last))
+    items.append((first, second, count, last, ats))
 
 
 def _heap_items(path, joint, known):
@@ -1897,15 +1939,17 @@ def _heap_items(path, joint, known):
     after `joint` is read from the way that is remembered, a run at a time."""
     items = []
     for node in path:
-        _heap_add(items, node, None, 1, node)
+        at = _heap_at(node) if type(node) is types.TracebackType else None
+        _heap_add(items, node, None, 1, node, (at,) if at else ())
     node = joint
     while node is not None:
         after, _levels, _root, run = known[id(node)]
         if run:
-            _heap_add(items, node, after, run[0], run[1])
+            _heap_add(items, node, after, run[0], run[1], run[2])
             node = known[id(run[1])][0]
         else:
-            _heap_add(items, node, None, 1, node)
+            at = _heap_at(node) if type(node) is types.TracebackType else None
+            _heap_add(items, node, None, 1, node, (at,) if at else ())
             node = after
     return items
 
@@ -1942,7 +1986,7 @@ def _heap_chain(items, root, raw):
         rootd["key" if kind == "module-global" else "attribute"] = via[1:] if via and via.startswith(".") else via
     steps = []
     count = len(items)
-    for i, (first, _second, run, end) in enumerate(items):
+    for i, (first, _second, run, end, ats) in enumerate(items):
         if i + 1 < count:
             ahead = items[i + 1]
             owner = ahead[1] if ahead[2] > 1 else (items[i + 2][0] if i + 2 < count else None)
@@ -1959,6 +2003,8 @@ def _heap_chain(items, root, raw):
             step["at"] = at
         if run > 1:
             step["repeat"] = run  # a run of tracebacks is one step with a count
+            if ats:
+                step["ats"] = list(ats)  # the places the run names, the first is `at`
         steps.append(step)
     return rootd, steps
 
@@ -2001,6 +2047,8 @@ def _heap_groups(kept, relation, roots, own, deadline, raw, tally):
             for mine, other in zip(got["steps"], steps):
                 if other.get("repeat", 1) > mine.get("repeat", 1):
                     mine["repeat"] = other["repeat"]
+                    if "ats" in other:
+                        mine["ats"] = other["ats"]
     return sorted(groups.values(), key=lambda g: (-g["count"], json.dumps(g["steps"], default=str)))
 
 

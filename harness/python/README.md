@@ -17,6 +17,8 @@ cd <scratch project root>
 PYTHONPATH=<harness dir>[:<existing PYTHONPATH>] DLA_HARNESS_OUT=... python3 -m pkg.load --iterations N
 ```
 
+`dla harness run` sets `PYTHONDONTWRITEBYTECODE=1` for every process it starts (a value the environment already has is kept): the first process of a harness would compile the agent and the project's modules and keep more objects alive than the later ones that load the cache, so the first point of a series would read high, and a library run from its source tree would get `__pycache__` written into the project.
+
 The agent chain-imports the next `sitecustomize` found on `sys.path` (the project's, or the
 system's), skips `pip`/`venv`/`ensurepip`/`build` runs, starts tracemalloc (`DLA_TRACEMALLOC_FRAMES` frames: 10 when `--capture alloc` or `nonheap` is asked for, else 1, in command and driver mode alike: see "Allocation sites" for the depth) and, on
 3.12+, a `sys.monitoring` `PY_START` collector (each code object disables itself after its first
@@ -189,7 +191,7 @@ Values are not written: a dict key is shown as its type unless `DLA_RAW_VALUES` 
 otherwise. `dla summarize heap-graph` reads the file (`py-retain`): one holder per distinct root, with the lines it
 keeps and the chain with the most objects. Bounds, all constants in the agent: 12 sites, 40 kept objects per site, 40 steps from the object to the root, and a time bound for the whole
 capture of 60 s (`DLA_HEAP_SECS` changes it; checked between objects; what was not done is said in `limitations`).
-A walk that reaches an object whose way to a root is known already (every chain of a stored exception raised again and again runs through the same traceback list) stops there and takes the rest of that way, so the list is walked once; a run of tracebacks is kept as one item and rendered as one step. `at` names a file like the growing lines (relative to the project, in the copy and in the source tree of an editable install alike); a file outside the project is `<outside>/<file name>`. Everything the capture builds is freed before it returns.
+A step with `repeat` also lists the distinct places the run names (`ats`, at most 6, in the order met; `at` is the first). A walk that reaches an object whose way to a root is known already (every chain of a stored exception raised again and again runs through the same traceback list) stops there and takes the rest of that way, so the list is walked once; a run of tracebacks is kept as one item and rendered as one step. `at` names a file like the growing lines (relative to the project, in the copy and in the source tree of an editable install alike); a file outside the project is `<outside>/<file name>`. Everything the capture builds is freed before it returns.
 
 Cost (measured on a shared 4-core machine, another job using some of the cores, Python 3.13 and 3.12, tracemalloc
 tracing with 1 frame): about 17 s and about 110 MB (3.13) to 240 MB (3.12) of extra peak resident memory, 120 MB of

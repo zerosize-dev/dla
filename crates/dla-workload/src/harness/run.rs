@@ -1181,6 +1181,21 @@ impl PointEnv<'_> {
         if let Some(p) = &self.paths.source {
             set("DLA_SOURCE_ROOT", p.clone());
         }
+        // A Python process writes no bytecode cache: the first process of a harness would compile the
+        // agent and the project's modules and leave more objects alive than the later ones that
+        // load the cache (the first point of a series would read high), and a library run from
+        // its source tree would get `__pycache__` written into the user's project. A value the
+        // environment already has is kept.
+        if m.runtime == dla_core::runtime::Runtime::Python
+            && !m
+                .run
+                .env
+                .iter()
+                .any(|(k, _)| k == "PYTHONDONTWRITEBYTECODE")
+            && std::env::var_os("PYTHONDONTWRITEBYTECODE").is_none()
+        {
+            set("PYTHONDONTWRITEBYTECODE", "1".to_owned());
+        }
         set("DLA_ITER", self.n.to_string());
         set("DLA_TICK_MS", "100".to_owned());
         if let Some(p) = self.purge {

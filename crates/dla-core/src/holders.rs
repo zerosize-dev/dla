@@ -227,6 +227,18 @@ pub fn entries_with_type<'a>(record: &'a EvidenceRecord, ty: &str) -> Vec<&'a Va
         .collect()
 }
 
+/// The `holders` entries of a retention record that are the holder of `owner` and list lines
+/// (`sites`): the Python holder chains. Empty for a record of authority `static` and for another
+/// kind.
+pub fn entries_owned_by<'a>(record: &'a EvidenceRecord, owner: &str) -> Vec<&'a Value> {
+    if record.authority == Authority::Static || record.kind != EvidenceKind::RetentionPath {
+        return Vec::new();
+    }
+    list_keys(&record.result, "holders")
+        .filter(|e| !entry_sites(e).is_empty() && entry_names_owner(e, owner))
+        .collect()
+}
+
 /// True when the `holders` entry `entry` is the holder of `owner` (its key names the owner,
 /// exactly or as a shorter form).
 pub fn entry_is_owner(entry: &Value, owner: &str) -> bool {

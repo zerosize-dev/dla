@@ -8,7 +8,9 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
 - Command mode (3.8+; coverage needs 3.12+): `sitecustomize.py` first on `PYTHONPATH`, chain-
   imports the next `sitecustomize`, skips pip/venv/ensurepip/build runs, starts `tracemalloc` and,
   on 3.12+, a `sys.monitoring` coverage collector. Driver mode calls `checkpoint(units, last)` each
-  round; fill the hooks. A pytest-memray variant is skipped unless `pytest_memray` imports (a
+  round; fill the hooks. Every process runs with `PYTHONDONTWRITEBYTECODE=1` (a value the environment has
+  is kept), so no point compiles what a later one loads from a cache and no `__pycache__` is written into
+  the project. A pytest-memray variant is skipped unless `pytest_memray` imports (a
   recorded gap).
 - What the dump measures (after `gc.collect()` twice): `py.traced`, `py.traced_peak`,
   `py.gc_objects`, `py.gc_collections`, the `os.*` set, top-20 types by count with
@@ -80,7 +82,7 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   first and last dump (`first` is null for a file of one dump point), the types of the objects it keeps
   (`types`: the kept object of each chain and a step that repeats; the `py.type:<T>.count` columns of those
   types are the holder's too), the kept objects found and `path`, the chain with the most objects from a kept object to the
-  holder (`via` is how the next step refers to it, `at` a place in code, `repeat` a run of the same step).
+  holder (`via` is how the next step refers to it, `at` a place in code, `repeat` a run of the same step, `ats` the distinct places that run names).
   `next` prints the `dla ledger add ... --site <the place nearest the holder> --owner <module.name>` command
   for a holder that no finding names: add one finding there, and it accounts for every line the holder keeps
   (the final gate lists those lines as tied to that finding and no add command for them); then the route of
@@ -90,8 +92,8 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   the lines that have kept objects and no chain, with the reason (the time bound or another limit). A holder
   that is native (`unreferenced`: no Python container refers to the blocks, so the test runner, pytest or the
   tracer do not hold them) is explained by the extension function the line calls: read it for the reference
-  it keeps, and add the finding at the line. The bundle of a finding shows only the holder entries that hold its line
-  or are owned by its owner (`other_holders` says how many were left out), and a retention record stands in for
+  it keeps, and add the finding at the line. The finding `next` proposes is never at a place outside the project: it is at the first step from the holder that names a project line, preferring a line the holder keeps that grew most, and `dla ledger add` warns when its `--owner` is a holder of a record and its `--site` is none of the lines that holder keeps. The bundle of a finding shows only the holder entries that hold its line
+  or are owned by its owner (`other_holders` says how many were left out; an allocation-stack record is cut the same way to the stacks at the finding's line, `other_stacks`), and a retention record stands in for
   the stack only when such an entry has a chain: an `unreferenced` entry does not, so the stack summary is still
   required for a native line. Names of files are relative to the project in the copy and in the source tree of
   an editable install alike; a file outside the project is `<outside>/<name>`. Values are not written (a dict

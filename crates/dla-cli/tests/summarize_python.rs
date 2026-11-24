@@ -1131,3 +1131,53 @@ fn the_record_lists_the_types_a_holder_keeps_and_its_minor_sites() {
         "pkg/m.py:1"
     );
 }
+
+#[test]
+fn an_owner_the_record_names_with_a_site_it_does_not_keep_is_warned_about_and_not_refused() {
+    let p = Project::new();
+    let f = p.put("in/py-1.retain.json", RETAIN.as_bytes());
+    let v = summarize(&p, "heap-graph", "py-retain", &[f], &[]);
+    let e = v["evidence"][0].as_str().unwrap().to_owned();
+    let add = |site: &str| {
+        ok(
+            p.path(),
+            &[
+                "ledger",
+                "add",
+                "--origin",
+                "growth-series",
+                "--evidence",
+                &e,
+                "--site",
+                site,
+                "--owner",
+                "pkg.cms._native",
+                "--region",
+                "heap",
+                "--holder",
+                "static/global",
+            ],
+        )
+    };
+    let outside = add("pkg/driver.py:97");
+    assert_eq!(outside["state"], "candidate", "not refused: {outside}");
+    let w = outside["warnings"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{outside}"))
+        .iter()
+        .filter_map(|x| x.as_str())
+        .find(|x| x.contains("measured column"))
+        .unwrap_or_else(|| panic!("{outside}"));
+    assert!(
+        w.contains("pkg/cms.py:40") && w.contains("pkg/cms.py:52") && w.contains("measured column"),
+        "{w}"
+    );
+    // A line the holder keeps gets no such warning.
+    let held = add("pkg/cms.py:40");
+    assert!(
+        held["warnings"].as_array().is_none_or(|a| a
+            .iter()
+            .all(|x| !x.as_str().unwrap().contains("measured column"))),
+        "{held}"
+    );
+}

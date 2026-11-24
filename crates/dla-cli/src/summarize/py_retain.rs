@@ -134,6 +134,9 @@ struct StepIn {
     at: Option<String>,
     #[serde(default)]
     repeat: Option<u64>,
+    /// The distinct places a run of tracebacks names, in the order met (`at` is the first).
+    #[serde(default)]
+    ats: Vec<String>,
 }
 
 /// A holder holds a site (it ties the site's column) only when its chains carry at least this
@@ -207,18 +210,41 @@ impl HolderOut {
         self.paths.iter().max_by_key(|p| p.count)
     }
 
-    /// The site of a finding added for this holder: the `at` of the first step that has one,
-    /// from the root down, else the site that grew most.
+    /// The site of a finding added for this holder, never a place outside the project: from the
+    /// root side, the first step that names a project line in `at` or `ats`; of the lines of that
+    /// step the one the holder keeps that grew most, else the first; a chain with no project line
+    /// gives the line the holder keeps that grew most.
     fn finding_site(&self) -> Option<String> {
-        self.best()
-            .and_then(|p| p.steps.iter().rev().find_map(|s| s.at.clone()))
-            .or_else(|| {
-                self.sites
+        let grew = |line: &str| self.sites.iter().find(|s| s.site == line).map(Held::growth);
+        let from_chain = self.best().and_then(|p| {
+            p.steps.iter().rev().find_map(|st| {
+                let mut lines: Vec<&String> = Vec::new();
+                for l in st.at.iter().chain(&st.ats) {
+                    if is_project_line(l) && !lines.contains(&l) {
+                        lines.push(l);
+                    }
+                }
+                let held = lines
                     .iter()
-                    .max_by_key(|s| s.growth())
-                    .map(|s| s.site.clone())
+                    .filter_map(|l| grew(l).map(|g| (g, *l)))
+                    .max_by_key(|(g, _)| *g)
+                    .map(|(_, l)| l);
+                held.or_else(|| lines.first().copied()).cloned()
             })
+        });
+        from_chain.or_else(|| {
+            self.sites
+                .iter()
+                .max_by_key(|s| s.growth())
+                .map(|s| s.site.clone())
+        })
     }
+}
+
+/// True for a `file:line` that names a line of the project: not a place outside it
+/// (`<outside>/name:7`) and not a pseudo file (`<string>:3`).
+fn is_project_line(place: &str) -> bool {
+    !place.starts_with('<') && !place.starts_with('?') && !place.is_empty()
 }
 
 fn clip(s: &str, n: usize) -> String {
@@ -260,6 +286,7 @@ fn holders_of(f: &File, red: &super::redact::Redactor) -> (Vec<HolderOut>, u64) 
         via: s.via.as_deref().map(name),
         at: s.at.as_deref().map(name),
         repeat: s.repeat,
+        ats: s.ats.iter().map(|a| name(a)).collect(),
     };
     /// One group of chains of a site, before it is told which holder it belongs to.
     struct Piece {
@@ -405,6 +432,12 @@ fn steps_json(steps: &[StepIn]) -> Value {
                 }
                 if let Some(r) = s.repeat {
                     o.insert("repeat".into(), json!(r));
+                }
+                if !s.ats.is_empty() {
+                    o.insert(
+                        "ats".into(),
+                        json!(s.ats.iter().map(|a| clip(a, CLIP)).collect::<Vec<_>>()),
+                    );
                 }
                 Value::Object(o)
             })
@@ -1065,6 +1098,58 @@ mod tests {
         );
         let (h, _) = holders_of(&f, &red());
         assert_eq!(h[0].finding_site().as_deref(), Some("a.py:3"));
+    }
+
+    fn holder_with_chain(steps: &str, sites: &[(&str, u64)]) -> HolderOut {
+        let site_rows: Vec<String> = sites
+            .iter()
+            .map(|(s, last)| {
+                format!(
+                    r#"{{"site":"{s}","blocks_first":0,"blocks_last":{last},"found_tracked":10,"kept":10,
+                    "chains":[{{"count":10,"root":{{"kind":"module-global","module":"m","key":"g"}},"steps":[{steps}]}}]}}"#
+                )
+            })
+            .collect();
+        let f = file(&format!(
+            r#"{{"dla_pyretain":1,"sites":[{}]}}"#,
+            site_rows.join(",")
+        ));
+        holders_of(&f, &red()).0.remove(0)
+    }
+
+    #[test]
+    fn the_site_of_a_finding_is_never_a_place_outside_the_project() {
+        // The only `at` of the chain is the driver's, outside: the held line that grew most.
+        let h = holder_with_chain(
+            r#"{"type":"traceback","via":"__traceback__","at":"<outside>/dla_harness.py:97","repeat":9},{"type":"E","via":".ex"}"#,
+            &[("a.py:5", 10), ("a.py:9", 40)],
+        );
+        assert_eq!(h.finding_site().as_deref(), Some("a.py:9"));
+        // A pseudo file is no line either.
+        let h = holder_with_chain(
+            r#"{"type":"frame","via":"tb_frame","at":"<string>:1"},{"type":"E","via":".ex"}"#,
+            &[("a.py:5", 10)],
+        );
+        assert_eq!(h.finding_site().as_deref(), Some("a.py:5"));
+    }
+
+    #[test]
+    fn a_run_that_names_several_lines_gives_the_one_the_holder_keeps_that_grew_most() {
+        let steps = r#"{"type":"frame","via":"tb_frame","at":"a.py:90"},
+            {"type":"traceback","via":"__traceback__","at":"<outside>/dla_harness.py:97","repeat":9,
+             "ats":["<outside>/dla_harness.py:97","a.py:7","a.py:6","a.py:5"]},{"type":"E","via":".ex"}"#;
+        // From the root side the run is met first; of its lines the held one that grew most.
+        let h = holder_with_chain(steps, &[("a.py:5", 10), ("a.py:6", 30), ("a.py:8", 99)]);
+        assert_eq!(h.finding_site().as_deref(), Some("a.py:6"));
+        // None of them held: the first project line of the run.
+        let h = holder_with_chain(steps, &[("a.py:8", 99)]);
+        assert_eq!(h.finding_site().as_deref(), Some("a.py:7"));
+        // A run with no project line falls back to the frame nearer the object.
+        let h = holder_with_chain(
+            r#"{"type":"frame","via":"tb_frame","at":"a.py:90"},{"type":"traceback","via":"__traceback__","at":"<outside>/x.py:1","repeat":3,"ats":["<outside>/x.py:1"]},{"type":"E","via":".ex"}"#,
+            &[("a.py:8", 99)],
+        );
+        assert_eq!(h.finding_site().as_deref(), Some("a.py:90"));
     }
 
     #[test]

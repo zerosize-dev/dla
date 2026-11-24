@@ -821,7 +821,18 @@ fn focus_retention(v: &mut Value, subjects: &[&dla_core::Finding]) {
             }
         }
     }
+    let kept_total: u64 = mine
+        .iter()
+        .filter_map(|e| e.get("kept").and_then(Value::as_u64))
+        .sum();
     let Some(o) = v.as_object_mut() else { return };
+    // The totals are those of the entries left.
+    if o.get("kept").is_some_and(Value::is_u64) {
+        o.insert("kept".into(), json!(kept_total));
+    }
+    if o.get("sites").is_some_and(Value::is_u64) {
+        o.insert("sites".into(), json!(keep.len()));
+    }
     o.insert("holders".into(), Value::Array(mine));
     if !other.is_empty() {
         o.insert("other_holders".into(), json!(other.len()));
@@ -832,6 +843,42 @@ fn focus_retention(v: &mut Value, subjects: &[&dla_core::Finding]) {
                 .and_then(Value::as_str)
                 .is_none_or(|n| keep.contains(n))
         });
+    }
+}
+
+/// Cuts a copy of an allocation-stack record (its `result`, with `top`, or its raw file, with
+/// `stacks`) to the stacks whose first project frame is the line of `subjects`, before anything
+/// is scrubbed or any frame is collected, and says how many were left out (`other_stacks`). A
+/// finding with no line, and a record with no stack at that line, leave the record whole.
+fn focus_stacks(v: &mut Value, subjects: &[&dla_core::Finding]) {
+    let sites: Vec<&str> = subjects
+        .iter()
+        .filter_map(|f| f.site.as_deref())
+        .map(str::trim)
+        .collect();
+    let mine = |row: &Value| {
+        row.get("site")
+            .and_then(Value::as_str)
+            .is_some_and(|s| sites.contains(&s.trim()))
+    };
+    let matches = ["top", "stacks"]
+        .iter()
+        .filter_map(|k| v.get(*k).and_then(Value::as_array))
+        .any(|rows| rows.iter().any(mine));
+    if sites.is_empty() || !matches {
+        return;
+    }
+    let Some(o) = v.as_object_mut() else { return };
+    let mut left_out = 0usize;
+    for key in ["top", "stacks"] {
+        if let Some(Value::Array(rows)) = o.get_mut(key) {
+            let before = rows.len();
+            rows.retain(|r| mine(r));
+            left_out = left_out.max(before - rows.len());
+        }
+    }
+    if left_out > 0 {
+        o.insert("other_stacks".into(), json!(left_out));
     }
 }
 
@@ -1283,6 +1330,9 @@ fn build(
         if e.kind == EvidenceKind::RetentionPath {
             focus_retention(&mut result, &subjects);
         }
+        if e.kind == EvidenceKind::AllocStack {
+            focus_stacks(&mut result, &subjects);
+        }
         strip_forbidden(&mut result);
         // Allocation and retention records keep the site in their structured frame fields.
         let frames_exempt = matches!(
@@ -1320,6 +1370,11 @@ fn build(
                     && let Ok(mut doc) = serde_json::from_slice::<Value>(&bytes)
                 {
                     focus_retention(&mut doc, &subjects);
+                    bytes = to_pretty_json(&doc).into_bytes();
+                } else if e.kind == EvidenceKind::AllocStack
+                    && let Ok(mut doc) = serde_json::from_slice::<Value>(&bytes)
+                {
+                    focus_stacks(&mut doc, &subjects);
                     bytes = to_pretty_json(&doc).into_bytes();
                 }
                 let kept = bundle_bytes(&bytes, raw.ends_with(".json"), &needles, frames_exempt);
@@ -1489,6 +1544,55 @@ mod tests {
         let mut v = json!({"holders": [{"key": "static:a.B.c"}]});
         focus_retention(&mut v, &[&native]);
         assert_eq!(v, json!({"holders": [{"key": "static:a.B.c"}]}));
+    }
+
+    #[test]
+    fn each_finding_sees_only_its_own_stacks_of_a_record_with_stacks_of_two_lines() {
+        let rec = json!({"top": [
+            {"at": "m", "site": "a.py:15", "d_blocks": 880},
+            {"at": "m", "site": "b.py:6", "d_blocks": 880},
+            {"at": "m", "site": "a.py:15", "d_blocks": 2},
+            {"at": "d"}],
+            "stacks": [
+            {"site": "a.py:15", "frames": [{"function": "f", "file": "a.py", "line": 15}]},
+            {"site": "b.py:6", "frames": [{"function": "g", "file": "b.py", "line": 6}]}]});
+        let a = finding_at(None, Some("a.py:15"));
+        let b = finding_at(None, Some(" b.py:6 "));
+        let mut v = rec.clone();
+        focus_stacks(&mut v, &[&a]);
+        assert_eq!(v["top"].as_array().unwrap().len(), 2);
+        assert_eq!(v["stacks"].as_array().unwrap().len(), 1);
+        assert_eq!(v["other_stacks"], 2);
+        let mut frames = Vec::new();
+        frames_in_value(&v, &mut frames);
+        assert!(frames.iter().all(|(f, _)| f == "a.py"), "{frames:?}");
+        assert!(!v.to_string().contains("b.py"), "{v}");
+        let mut v = rec.clone();
+        focus_stacks(&mut v, &[&b]);
+        assert_eq!(v["top"].as_array().unwrap().len(), 1);
+        assert!(!v.to_string().contains("a.py"), "{v}");
+        // No stack at the finding's line, or no line: the record stays whole.
+        let mut v = rec.clone();
+        focus_stacks(&mut v, &[&finding_at(None, Some("c.py:1"))]);
+        assert_eq!(v, rec);
+        focus_stacks(&mut v, &[&finding_at(Some("m.g"), None)]);
+        assert_eq!(v, rec);
+    }
+
+    #[test]
+    fn the_totals_of_a_focused_retention_record_are_those_of_the_entries_left() {
+        let mut v = two_holders();
+        v["kept"] = json!(5);
+        v["sites"] = json!(4);
+        focus_retention(&mut v, &[&finding_at(None, Some("a.py:9"))]);
+        assert_eq!(v["kept"], 0);
+        assert_eq!(v["sites"], 1);
+        let mut v = two_holders();
+        v["kept"] = json!(5);
+        v["sites"] = json!(4);
+        focus_retention(&mut v, &[&finding_at(Some("m.g"), Some("a.py:1"))]);
+        assert_eq!(v["kept"], 5);
+        assert_eq!(v["sites"], 3, "two lines kept and one minor");
     }
 
     #[test]

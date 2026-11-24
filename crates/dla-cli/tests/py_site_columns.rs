@@ -2504,8 +2504,42 @@ fn a_module_object_that_re_raises_a_stored_exception_is_found_as_the_holder_of_t
     let b = ok(&r.project, &["bundle", &f]);
     let bundled = b["evidence"].as_array().unwrap();
     assert!(bundled.iter().any(|x| *x == record_id.as_str()), "{b}");
+    // The excerpts start with the frames of the finding's own stack, and the stack record is cut to
+    // the stacks at its line (the other lines of the capture are another finding's).
+    let first = b["excerpt_frames"][0].as_str().unwrap();
+    assert!(
+        first == "shop/registry.py:15" || first == "shop/registry.py:6",
+        "{b}"
+    );
     // The stack summary made before the finding existed counts for it: it is in the bundle.
     assert!(bundled.iter().any(|x| *x == stack_id.as_str()), "{b}");
+    let idx: Value = serde_json::from_slice(
+        &fs::read(
+            r.project
+                .join(b["dir"].as_str().unwrap())
+                .join("index.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let stack_rec = idx["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == stack_id.as_str())
+        .unwrap();
+    assert!(
+        stack_rec["result"]["other_stacks"].as_u64().unwrap() >= 1,
+        "{stack_rec}"
+    );
+    assert!(
+        stack_rec["result"]["top"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|t| t["site"].as_str().is_none_or(|x| x == "<redacted>")),
+        "{stack_rec}"
+    );
     let dir = r.project.join(b["dir"].as_str().unwrap());
     let index: Value = serde_json::from_slice(&fs::read(dir.join("index.json")).unwrap()).unwrap();
     let rec = index["evidence"]
