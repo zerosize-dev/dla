@@ -339,6 +339,7 @@ pub fn add_feature_gaps(
     features: &[String],
     no_default: bool,
     entry: bool,
+    workload: Option<&str>,
 ) -> HarnessFeatures {
     let mut cache: BTreeMap<PathBuf, Option<CrateFeatures>> = BTreeMap::new();
     for t in targets.iter_mut() {
@@ -372,7 +373,8 @@ pub fn add_feature_gaps(
     }
     let ids: Vec<String> = targets.iter().map(|t| t.id.to_string()).collect();
     out.command = format!(
-        "dla harness gen --lang rust --driver{} --features {} {}",
+        "dla harness gen --lang rust --driver{}{} --features {} {}",
+        workload.map_or_else(String::new, |w| format!(" --workload {w}")),
         if no_default {
             " --no-default-features"
         } else {

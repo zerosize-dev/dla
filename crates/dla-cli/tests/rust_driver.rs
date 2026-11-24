@@ -795,3 +795,93 @@ fn a_target_that_did_not_run_without_its_feature_is_told_the_feature_first_and_s
     let st = r.ok(&["run", "status"]);
     assert_eq!(st["queue"]["rust"]["pending"], 0, "{st}");
 }
+
+/// A workspace with no package at its root and two member library crates; the feature of `libm`
+/// is off by default and gates the function that fills its registry.
+fn workspace(dir: &Path) {
+    write(
+        dir,
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"libm\", \"tool\"]\nresolver = \"2\"\n",
+    );
+    write(
+        dir,
+        "libm/Cargo.toml",
+        "[package]\nname = \"libm\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[features]\nenable = []\n",
+    );
+    write(
+        dir,
+        "libm/src/lib.rs",
+        "use std::sync::Mutex;\n\nstatic REGISTRY: Mutex<Vec<String>> = Mutex::new(Vec::new());\n\n#[cfg(feature = \"enable\")]\nfn collect(key: &str) {\n    REGISTRY.lock().unwrap().push(key.to_owned());\n}\n\npub fn record(key: &str) {\n    #[cfg(feature = \"enable\")]\n    collect(key);\n    #[cfg(not(feature = \"enable\"))]\n    let _ = key;\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn records() {\n        super::record(\"a\");\n    }\n}\n",
+    );
+    write(
+        dir,
+        "tool/Cargo.toml",
+        "[package]\nname = \"tool\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    write(dir, "tool/src/lib.rs", "pub fn nothing() {}\n");
+}
+
+#[test]
+fn a_workspace_root_refuses_a_driver_and_names_the_member_crates() {
+    if !have_cargo() {
+        return;
+    }
+    let r = Run::of(workspace);
+    let o = r.run(&["harness", "gen", "--lang", "rust", "--driver", "--next"]);
+    assert_ne!(o.code, 0, "{}", o.text);
+    assert_eq!(o.json["error"]["code"], "driver-unavailable", "{}", o.text);
+    let msg = o.json["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("is a workspace with no package"), "{msg}");
+    assert!(!msg.contains("only binaries"), "{msg}");
+    let fix = o.json["error"]["fix"].as_str().unwrap();
+    assert!(
+        fix.starts_with(
+            "dla harness gen --lang rust --driver --workload rust:test:libm/Cargo.toml"
+        ),
+        "{fix}"
+    );
+    assert!(fix.contains("the others: tool"), "{fix}");
+}
+
+#[test]
+fn the_command_a_workspace_target_prints_runs_as_printed_and_reaches_the_target() {
+    if !have_cargo() || !have_llvm_tools() {
+        return;
+    }
+    let r = Run::of(workspace);
+    let target = r.id_at("libm/src/lib.rs:3");
+    let out = r.ok(&[
+        "harness",
+        "gen",
+        "--lang",
+        "rust",
+        "--driver",
+        "--next",
+        "--workload",
+        "rust:test:libm/Cargo.toml",
+    ]);
+    let line = out["_attention"][0].as_str().unwrap();
+    let printed = line.rsplit_once("regenerate it with ").unwrap().1;
+    assert_eq!(
+        printed,
+        format!(
+            "dla harness gen --lang rust --driver --workload rust:test:libm/Cargo.toml --features enable --probe {target}"
+        ),
+        "{line}"
+    );
+    // The same command from the file, for the queue and the trend.
+    let features: Value = serde_json::from_str(
+        &fs::read_to_string(r.run_dir.join("harness/H1/features.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(features["command"], printed, "{features}");
+    // Run as printed.
+    let args: Vec<&str> = printed.split_whitespace().skip(1).collect();
+    let out = r.ok(&args);
+    assert!(out.get("_attention").is_none(), "{out}");
+    r.fill("H2", "libm::record(&key.to_string());");
+    r.ok(&["harness", "run", "H2", "--mode", "both"]);
+    let trend = r.ok(&["trend", "S1"]);
+    assert_eq!(verdict(&trend, &target)["verdict"], "executed", "{trend}");
+}

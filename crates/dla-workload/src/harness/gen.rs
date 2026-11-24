@@ -1183,6 +1183,59 @@ fn join_rel(a: &str, b: &str) -> String {
     }
 }
 
+/// The member crates (at most five, workspace-relative) with a library target of the workspace
+/// whose manifest is at `cwd`; `None` when that manifest is not a workspace without a package.
+fn workspace_lib_members(work: &Path, cwd: &str) -> Option<Vec<String>> {
+    let dir = work.join(if cwd == "." { "" } else { cwd });
+    let manifest: toml::Table = fs::read_to_string(dir.join("Cargo.toml"))
+        .ok()?
+        .parse()
+        .ok()?;
+    if manifest.contains_key("package") {
+        return None;
+    }
+    let ws = manifest.get("workspace")?;
+    let mut out: Vec<String> = Vec::new();
+    for m in ws
+        .get("members")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(toml::Value::as_str)
+    {
+        // A member is a directory or `dir/*`.
+        let found: Vec<String> = match m.strip_suffix("/*") {
+            Some(base) => {
+                let mut v: Vec<String> = fs::read_dir(dir.join(base))
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Result::ok)
+                    .filter(|e| e.path().is_dir())
+                    .map(|e| format!("{base}/{}", e.file_name().to_string_lossy()))
+                    .collect();
+                v.sort();
+                v
+            }
+            None => vec![m.trim_end_matches('/').to_owned()],
+        };
+        for f in found {
+            let p = dir.join(&f);
+            let has_pkg = fs::read_to_string(p.join("Cargo.toml"))
+                .ok()
+                .and_then(|t| t.parse::<toml::Table>().ok())
+                .is_some_and(|t| {
+                    t.contains_key("package")
+                        && (p.join("src/lib.rs").is_file() || t.contains_key("lib"))
+                });
+            if has_pkg && !out.contains(&f) {
+                out.push(f);
+            }
+        }
+    }
+    out.truncate(5);
+    Some(out)
+}
+
 fn cargo_lib(work: &Path, cwd: &str) -> Option<String> {
     let dir = work.join(if cwd == "." { "" } else { cwd });
     let manifest: toml::Table = fs::read_to_string(dir.join("Cargo.toml"))
@@ -1543,6 +1596,25 @@ fn build_driver(d: &DriverCtx<'_>) -> Result<DriverBuild, Refusal> {
         Runtime::Rust => {
             let cwd = d.cwd;
             let Some(krate) = cargo_lib(d.work, cwd) else {
+                if let Some(members) = workspace_lib_members(d.work, cwd) {
+                    let fix = match members.split_first() {
+                        Some((first, rest)) => format!(
+                            "dla harness gen --lang rust --driver --workload rust:test:{first}/Cargo.toml   (a member crate with a library target{})",
+                            if rest.is_empty() {
+                                String::new()
+                            } else {
+                                format!("; the others: {}", rest.join(", "))
+                            }
+                        ),
+                        None => "dla harness gen --lang rust   (command mode; no member crate has a library target)".to_owned(),
+                    };
+                    return Err(refuse(
+                        DRIVER_UNAVAILABLE,
+                        "driver mode needs a crate with a library target (the driver imports it), and the manifest at the working directory is a workspace with no package",
+                        "--workload naming a member crate that has a library target",
+                        fix,
+                    ));
+                }
                 return Err(refuse(
                     DRIVER_UNAVAILABLE,
                     "driver mode needs a crate with a library target (the driver imports it), and this crate has only binaries",
@@ -2756,6 +2828,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             &opts.features,
             opts.no_default_features,
             manifest.is_entry_path(),
+            manifest.workload.as_deref(),
         );
         if !gaps.gaps.is_empty() {
             gaps.save(&hdir)
