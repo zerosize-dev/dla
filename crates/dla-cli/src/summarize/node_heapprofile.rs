@@ -14,9 +14,8 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::BTreeMap,
     fs,
-    path::{Component, Path, PathBuf},
+    path::Path,
 };
 
 use dla_core::{
@@ -24,7 +23,7 @@ use dla_core::{
     runtime::Runtime,
     series::SeriesRegion,
 };
-use dla_parsers::node::{heapprofile, sourcemap::SourceMap};
+use dla_parsers::node::{heapprofile, sourcemap::ScriptMaps};
 use serde_json::json;
 
 use super::{
@@ -36,58 +35,25 @@ use crate::fail::{Failure, Res};
 
 /// Largest profile file read.
 const MAX_BYTES: u64 = 256 << 20;
-/// Largest source map file read.
-const MAP_BYTES: u64 = 32 << 20;
-/// Most segments of a source map decoded.
-const MAP_SEGMENTS: usize = 2_000_000;
 
 /// The V8 heap profile reader.
 pub struct NodeHeapProfile;
 
-/// Removes `.` and `..` components without touching the disk.
-fn normalize(p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for c in p.components() {
-        match c {
-            Component::ParentDir => {
-                if !out.pop() {
-                    out.push("..");
-                }
-            }
-            Component::CurDir => {}
-            c => out.push(c.as_os_str()),
-        }
-    }
-    out
-}
-
 /// Source maps by script path, loaded once.
 #[derive(Default)]
 struct Maps {
-    by_script: RefCell<BTreeMap<String, Option<SourceMap>>>,
+    by_script: RefCell<ScriptMaps>,
     mapped: Cell<u64>,
 }
 
 impl Maps {
     fn lookup(&self, script: &str, line: u32, col: u32) -> Option<(String, u32)> {
-        let mut by = self.by_script.borrow_mut();
-        let map = by.entry(script.to_owned()).or_insert_with(|| {
-            let p = format!("{script}.map");
-            let meta = fs::metadata(&p).ok()?;
-            if !meta.is_file() || meta.len() > MAP_BYTES {
-                return None;
-            }
-            SourceMap::parse(&fs::read_to_string(&p).ok()?, MAP_SEGMENTS).ok()
-        });
-        let o = map.as_ref()?.lookup(line, col)?;
-        let dir = Path::new(script).parent().unwrap_or(Path::new(""));
-        let file = if Path::new(o.source).is_absolute() {
-            PathBuf::from(o.source)
-        } else {
-            normalize(&dir.join(o.source))
-        };
+        let (file, l) = self
+            .by_script
+            .borrow_mut()
+            .lookup(Path::new(script), line, col)?;
         self.mapped.set(self.mapped.get() + 1);
-        Some((file.to_string_lossy().replace('\\', "/"), o.line + 1))
+        Some((file.to_string_lossy().replace('\\', "/"), l + 1))
     }
 }
 
@@ -176,16 +142,6 @@ impl Adapter for NodeHeapProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn paths_are_normalized_without_the_disk() {
-        assert_eq!(
-            normalize(Path::new("/work/out/../src/a.ts")),
-            PathBuf::from("/work/src/a.ts")
-        );
-        assert_eq!(normalize(Path::new("./x/./y")), PathBuf::from("x/y"));
-        assert_eq!(normalize(Path::new("../a")), PathBuf::from("../a"));
-    }
 
     #[test]
     fn a_bundle_frame_maps_to_its_source() {

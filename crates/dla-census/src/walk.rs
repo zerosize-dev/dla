@@ -87,6 +87,107 @@ pub fn list_files_with(
     out
 }
 
+/// True for a TypeScript declaration file (`*.d.ts`, `*.d.mts`, `*.d.cts`): it holds types
+/// and no code that could hold anything.
+pub fn is_declaration_file(rel: &str) -> bool {
+    let lower = rel.to_ascii_lowercase();
+    [".d.ts", ".d.mts", ".d.cts"]
+        .iter()
+        .any(|e| lower.ends_with(e))
+}
+
+/// Resolves `.` and `..` in a `/`-separated path without touching the file system; `None`
+/// when the path leaves its root.
+fn normalize_slash(path: &str) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for c in path.split('/') {
+        match c {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            c => parts.push(c),
+        }
+    }
+    Some(parts.join("/"))
+}
+
+/// True for a JavaScript file that is the build output of sources of the project: it ends with a
+/// `sourceMappingURL` comment, the map it names is a file next to it, and the map lists at
+/// least one source (below its `sourceRoot`) that is a file of the project. The sources are
+/// read instead. A map that cannot be read, an inline map and a map whose sources are not in
+/// the project (a map of a vendored bundle) leave the file as it is.
+pub fn is_built_from_sources(root: &Path, rel: &str) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut f) = fs::File::open(root.join(rel)) else {
+        return false;
+    };
+    let Ok(len) = f.metadata().map(|m| m.len()) else {
+        return false;
+    };
+    let tail = len.min(1024);
+    let mut buf = vec![0u8; tail as usize];
+    if f.seek(SeekFrom::Start(len - tail)).is_err() || f.read_exact(&mut buf).is_err() {
+        return false;
+    }
+    let tail = String::from_utf8_lossy(&buf);
+    let Some(url) = tail
+        .lines()
+        .rev()
+        .find_map(|l| {
+            let l = l.trim();
+            l.strip_prefix("//# sourceMappingURL=")
+                .or_else(|| l.strip_prefix("//@ sourceMappingURL="))
+        })
+        .map(str::trim)
+    else {
+        return false;
+    };
+    if url.is_empty() || url.starts_with("data:") || url.contains("://") {
+        return false;
+    }
+    let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
+    let join = |base: &str, name: &str| {
+        if base.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{base}/{name}")
+        }
+    };
+    let Some(map_rel) = normalize_slash(&join(dir, url)) else {
+        return false;
+    };
+    let Ok(text) = fs::read_to_string(root.join(&map_rel)) else {
+        return false;
+    };
+    let Ok(map) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    let map_dir = map_rel.rsplit_once('/').map_or("", |(d, _)| d);
+    let source_root = map.get("sourceRoot").and_then(|v| v.as_str()).unwrap_or("");
+    let base = join(map_dir, source_root);
+    map.get("sources")
+        .and_then(|v| v.as_array())
+        .is_some_and(|sources| {
+            sources
+                .iter()
+                .filter_map(|s| s.as_str())
+                .filter(|s| !s.contains("://") && !s.starts_with('/'))
+                .filter_map(|s| normalize_slash(&join(&base, s)))
+                .any(|p| p != rel && root.join(&p).is_file())
+        })
+}
+
+/// What the Node census does not read: declaration files and the build output of sources it
+/// reads instead.
+fn is_node_derived(root: &Path, rel: &str) -> bool {
+    is_declaration_file(rel)
+        || (matches!(
+            Path::new(rel).extension().and_then(|e| e.to_str()),
+            Some("js" | "mjs" | "cjs")
+        ) && is_built_from_sources(root, rel))
+}
+
 /// True for files that hold tests rather than production code.
 pub fn is_test_path(rel: &str) -> bool {
     let lower = rel.to_ascii_lowercase();
@@ -136,7 +237,12 @@ pub fn count_out_of_scope(
         defaults,
     );
     rels.iter()
-        .filter(|r| !dla_core::paths::is_build_logic(r) && !in_scope(r) && !is_test_path(r))
+        .filter(|r| {
+            !dla_core::paths::is_build_logic(r)
+                && !in_scope(r)
+                && !is_test_path(r)
+                && !(runtime == Runtime::Node && is_node_derived(root, r))
+        })
         .count() as u64
 }
 
@@ -175,6 +281,11 @@ pub fn source_files_in(
         // Build logic is not part of the measured process: not read, not counted as out of
         // scope (it has its own count, `count_build_logic`).
         if dla_core::paths::is_build_logic(&rel) {
+            continue;
+        }
+        // Declaration files and the build output of sources that are read themselves: not
+        // candidates, not counted as out of scope.
+        if runtime == Runtime::Node && is_node_derived(root, &rel) {
             continue;
         }
         if !in_scope(&rel) {
@@ -260,6 +371,97 @@ mod tests {
             list_files_with(t.path(), false, &c, &back),
             ["app/_fast.c", "app/a.c", "app/notes.c", "vendor/llhttp/p.c"]
         );
+    }
+
+    fn node_shape(extra_map: &str) -> tempfile::TempDir {
+        let t = tempfile::tempdir().unwrap();
+        for (f, text) in [
+            (
+                "src/reg.ts",
+                "const L: any[] = [];\nexport function on(f: any) {\n  L.push(f);\n}\n",
+            ),
+            ("src/util.ts", "export const n = 1;\n"),
+            (
+                "lib/node/chunk-AB12.js",
+                "const L = [];\nfunction on(f) { L.push(f); }\nmodule.exports = { on };\n//# sourceMappingURL=chunk-AB12.js.map\n",
+            ),
+            ("lib/node/chunk-AB12.js.map", extra_map),
+            (
+                "lib/node/index.d.ts",
+                "export declare class A { x: number[]; }\n",
+            ),
+            (
+                "lib/node/index.d.mts",
+                "export declare class B { y: number[]; }\n",
+            ),
+            ("lib/plain.js", "const Q = [];\nmodule.exports = Q;\n"),
+        ] {
+            let p = t.path().join(f);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, text).unwrap();
+        }
+        t
+    }
+
+    #[test]
+    fn node_census_reads_sources_not_declarations_or_their_bundles() {
+        let t = node_shape(
+            r#"{"version":3,"sources":["../../src/reg.ts","../../src/util.ts"],"mappings":""}"#,
+        );
+        let read: Vec<String> = source_files(t.path(), Runtime::Node)
+            .into_iter()
+            .map(|f| f.rel)
+            .collect();
+        // Before: the bundle and both declaration files were read too (5 files for 2 sources).
+        assert_eq!(read, ["lib/plain.js", "src/reg.ts", "src/util.ts"]);
+        assert!(is_declaration_file("a/b.D.CTS") && !is_declaration_file("a/d.ts.js"));
+        let in_scope = |_: &str| false;
+        let defaults = Defaults::for_project(t.path(), &[]);
+        // Out-of-scope counting leaves them out too: the plain file and both sources count.
+        assert_eq!(
+            count_out_of_scope(t.path(), Runtime::Node, &in_scope, &defaults),
+            3
+        );
+    }
+
+    #[test]
+    fn a_bundle_whose_map_names_no_project_file_is_still_read() {
+        // A map of sources that are not in the project, an unreadable map and an inline map.
+        let t =
+            node_shape(r#"{"version":3,"sources":["../../node_modules/x/y.ts"],"mappings":""}"#);
+        let read: Vec<String> = source_files(t.path(), Runtime::Node)
+            .into_iter()
+            .map(|f| f.rel)
+            .collect();
+        assert!(
+            read.contains(&"lib/node/chunk-AB12.js".to_owned()),
+            "{read:?}"
+        );
+        assert!(
+            !read
+                .iter()
+                .any(|r| r.ends_with(".d.ts") || r.ends_with(".d.mts"))
+        );
+        fs::write(t.path().join("lib/node/chunk-AB12.js.map"), "not json").unwrap();
+        assert!(!is_built_from_sources(t.path(), "lib/node/chunk-AB12.js"));
+        fs::write(
+            t.path().join("lib/node/chunk-AB12.js"),
+            "x();\n//# sourceMappingURL=data:application/json;base64,e30=\n",
+        )
+        .unwrap();
+        assert!(!is_built_from_sources(t.path(), "lib/node/chunk-AB12.js"));
+        // A sourceRoot is honoured.
+        fs::write(
+            t.path().join("lib/node/chunk-AB12.js"),
+            "x();\n//# sourceMappingURL=chunk-AB12.js.map\n",
+        )
+        .unwrap();
+        fs::write(
+            t.path().join("lib/node/chunk-AB12.js.map"),
+            r#"{"version":3,"sourceRoot":"../..","sources":["src/reg.ts"],"mappings":""}"#,
+        )
+        .unwrap();
+        assert!(is_built_from_sources(t.path(), "lib/node/chunk-AB12.js"));
     }
 
     #[test]

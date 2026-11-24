@@ -64,6 +64,9 @@ pub struct Scan {
     pub tests_only: BTreeSet<String>,
     /// Harnesses (`H3`) some retention record was read from.
     pub harnesses: BTreeSet<String>,
+    /// Harnesses (`H3`) with a summarized capture of any tool: a retention record or an
+    /// allocation-stack record whose source lies under `harness/<H>/`.
+    pub summarized: BTreeSet<String>,
 }
 
 /// The harness a file under `harness/<H>/...` belongs to.
@@ -128,6 +131,15 @@ pub fn scan(view: &RunView) -> Scan {
 pub fn scan_in(ledger: &Ledger, run_dir: Option<&Path>) -> Scan {
     let mut out = Scan::default();
     for rec in ledger.evidence() {
+        if matches!(
+            rec.kind,
+            EvidenceKind::RetentionPath | EvidenceKind::AllocStack
+        ) && rec.authority != Authority::Static
+            && let Source::Artifact { path, .. } = &rec.source
+            && let Some(h) = harness_of_path(path)
+        {
+            out.summarized.insert(h.to_owned());
+        }
         if rec.kind != EvidenceKind::RetentionPath
             || rec.authority == Authority::Static
             || rec.tool.name != TOOL

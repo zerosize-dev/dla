@@ -2719,3 +2719,31 @@ flat test-loop readings get only 9 second looks.
   tree holds R3 + R4 (in snapshot bb8fd30) PLUS N's edits in progress: the second commit is made
   from the tree of bb8fd30 with commit-snapshot-tree.sh, never from the working tree. Snapshots
   while N works carry [skip ci].
+
+## 18:10 UTC 2026-11-24 (clock about 18:05): builder N reported; Node fix checked on the real project
+
+- N built all four parts: (1) scratch.rs: a Node copy from the git list also takes the
+  git-ignored directories that package.json names (main, module, bin, exports, files) and links
+  node_modules (CopyReport build_output_kept, node_modules_linked); (2) census walk.rs: no
+  *.d.ts/.d.mts/.d.cts, no bundle whose source map names a project file; (3) preload: sites
+  mapped to the original position with module.SourceMap (built position kept in a top-level
+  `built_sites`), coverage mapped in cover.rs with the decoder of dla-parsers, heap profile
+  frames through a shared ScriptMaps; heap snapshot holders carry no position and stay built
+  names; (4) gate item `residual_capture` and refusal `capture-not-summarized` for a heap
+  residual above threshold whose harness has no summarized capture (JVM, Node, Go, Python).
+  New tests node_built.rs, residual_capture.rs; no existing test changed.
+- Frozen: u112/dla-N1 (sha aaeb471f44d3), u112/dla-bench-N1.
+- Real project (u113/interceptors, dla-N1, no manual copy or link): census 87 candidates, all
+  under src/ (251 with lib and declarations before), MockHttpSocket candidates at .ts lines
+  (requestParser :117, responseParser :127, constructor :139, passthrough :206 and :276,
+  respondWith :389); `harness gen` build_output_kept 136, node_modules_linked 1; the
+  mock-request unit runs; trend passes node.listeners@src/interceptors/ClientRequest/
+  MockHttpSocket.ts:353, :389 (candidate F30), :659, agents.ts:36 (+2), index.ts:90 (+4),
+  Socket/MockSocket.ts:22 (+2), utils/handleRequest.ts:103 (candidate F85), node.heap_total
+  +28.6 KB per unit. The heap-graph summary still names two closures by the bundle's script name.
+  Run directory deleted.
+- Local suite on main + R3 + R4 + N running: task b3oc9brk6.
+- CI: main 546b74c (waiter bikgtj12t), snapshot bb8fd30 = R3 + R4 (waiter bohvq6bo1).
+- Then: commit 2 from bb8fd30 (message 24); snapshot of the N tree WITH CI; commit 3 (message 25
+  to write: the four Node parts and the real-project check); version 0.9.0-preview.8; second
+  blind round (task 106).

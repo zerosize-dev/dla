@@ -130,6 +130,9 @@ pub mod codes {
     pub const TIME_LEFT: &str = "time-left";
     /// A finding a passed growth column points at was closed without an alloc-test bound to it.
     pub const GROWTH_NOT_MEASURED: &str = "growth-not-measured";
+    /// The open item of a heap residual above its threshold was closed unresolved while its
+    /// harness has no summarized capture.
+    pub const CAPTURE_NOT_SUMMARIZED: &str = "capture-not-summarized";
     /// A finding whose newest alloc-test favors leak was closed unresolved: it is confirmed or
     /// refuted, never closed.
     pub const LEAK_FAVORED: &str = "leak-favored";

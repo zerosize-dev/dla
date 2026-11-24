@@ -2968,6 +2968,15 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         if skipped_sources > 0 {
             m.insert("out_of_scope".into(), json!(skipped_sources));
         }
+        if copied.build_output_kept > 0 {
+            m.insert("build_output_kept".into(), json!(copied.build_output_kept));
+        }
+        if copied.node_modules_linked > 0 {
+            m.insert(
+                "node_modules_linked".into(),
+                json!(copied.node_modules_linked),
+            );
+        }
         m.retain(|_, v| !v.is_null());
     }
     let mut ledger = ctx.ledger()?;

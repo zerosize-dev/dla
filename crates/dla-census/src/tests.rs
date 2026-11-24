@@ -247,3 +247,39 @@ fn no_scope_reports_no_out_of_scope_field() {
     let out = census(&ctx, Runtime::Python).unwrap();
     assert!(out.summary.get("out_of_scope").is_none());
 }
+
+/// The shape of a Node library written in TypeScript: two sources, a bundle built from them
+/// with a source map, a declaration file of the build output. The sources hold the candidates;
+/// the bundle and the declaration file do not repeat them.
+#[test]
+fn node_census_counts_sources_once_not_their_bundle_or_declarations() {
+    let map = r#"{"version":3,"sources":["../src/reg.ts","../src/cache.ts"],"mappings":""}"#;
+    let (_d, ctx) = project(&[
+        (
+            "src/reg.ts",
+            "const L: Array<() => void> = [];\nexport function on(f: () => void) {\n  L.push(f);\n}\n",
+        ),
+        (
+            "src/cache.ts",
+            "const seen = new Map<string, number>();\nexport function put(k: string) {\n  seen.set(k, 1);\n}\n",
+        ),
+        (
+            "lib/index.js",
+            "const L = [];\nfunction on(f) { L.push(f); }\nconst seen = new Map();\nfunction put(k) { seen.set(k, 1); }\nmodule.exports = { on, put };\n//# sourceMappingURL=index.js.map\n",
+        ),
+        ("lib/index.js.map", map),
+        (
+            "lib/index.d.ts",
+            "export declare class Hub {\n  private cache: Map<string, number>;\n  private static all: Array<Hub>;\n  static handlers: Set<() => void>;\n}\nexport declare const registry: Map<string, number>;\n",
+        ),
+    ]);
+    let out = census(&ctx, Runtime::Node).unwrap();
+    let ledger = ctx.ledger().unwrap();
+    let mut sites: Vec<String> = ledger.findings().filter_map(|f| f.site.clone()).collect();
+    sites.sort();
+    assert!(
+        sites.iter().all(|s| s.starts_with("src/")),
+        "candidates outside the sources: {sites:?}"
+    );
+    assert_eq!(out.candidates, 2, "{sites:?}");
+}

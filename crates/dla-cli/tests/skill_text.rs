@@ -1068,3 +1068,31 @@ fn the_rust_texts_say_a_feature_gating_code_inside_functions_needs_to_be_on() {
         "VERIFY.md has no row for the feature-gated code"
     );
 }
+
+#[test]
+fn the_node_texts_say_how_a_built_typescript_library_is_run_and_measured() {
+    let node =
+        fs::read_to_string(root().join("skills/detect-leak-anywhere/references/node.md")).unwrap();
+    for want in [
+        "the work copy of a git project holds the build output that git ignores when a `package.json`",
+        "`node_modules` beside such a `package.json` is a symbolic link to the project's own",
+        "declaration files (`*.d.ts`, `*.d.mts`, `*.d.cts`)",
+        "are at the original position, `src/a/b.ts:139` instead of `lib/node/chunk-AB12.js:1076`",
+        "the record keeps the built position in `built_sites`",
+        "`dla ledger resolve <O> --as unresolved` is refused (`capture-not-summarized`)",
+    ] {
+        assert!(node.contains(want), "node.md lacks: {want}");
+    }
+    let readme = fs::read_to_string(root().join("harness/node/README.md")).unwrap();
+    for want in [
+        "## A project that is built before it runs",
+        "`build_output_kept` in the `harness gen` output",
+        "node's own `module.SourceMap`",
+        "so the records of a plain JavaScript project are the same as before",
+    ] {
+        assert!(
+            readme.contains(want),
+            "harness/node/README.md lacks: {want}"
+        );
+    }
+}

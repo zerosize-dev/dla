@@ -171,7 +171,7 @@ pub fn actions(all: &[Missing]) -> Actions {
     }
     let rank = |m: &Missing| match m.kind.as_str() {
         // What a measurement showed and nothing yet acts on leads everything, the queue included.
-        HOLDER_KIND | CAPTURE_KIND => 0,
+        HOLDER_KIND | CAPTURE_KIND | RESIDUAL_CAPTURE_KIND => 0,
         "queue" => 1,
         "growth" => 2,
         "finding" if m.fix.contains("alloc-test") => 2,
@@ -1221,6 +1221,104 @@ pub const HOLDER_KIND: &str = "measured_holder";
 /// Kind of the item for a series of growing lines whose harness has no retention record.
 pub const CAPTURE_KIND: &str = "measured_capture";
 
+/// Kind of the item for a heap residual above its threshold whose harness has no summarized
+/// capture.
+pub const RESIDUAL_CAPTURE_KIND: &str = "residual_capture";
+
+/// True for a runtime whose harness takes `--capture` (the agents of the JVM, Node, Go and
+/// Python write captures; the others have none).
+pub fn supports_capture(rt: crate::runtime::Runtime) -> bool {
+    use crate::runtime::Runtime;
+    matches!(
+        rt,
+        Runtime::Jvm | Runtime::Node | Runtime::Go | Runtime::Python
+    )
+}
+
+/// The heap residual rows above their threshold, with an open item nobody resolved, of the
+/// series of one harness that has no summarized capture and whose runtime supports `--capture`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UncapturedResidual {
+    /// The harness (`H1`).
+    pub harness: String,
+    /// The mode its series was measured in, as `dla harness run --mode` spells it.
+    pub mode: String,
+    /// The series (`S1`) of those rows.
+    pub series: Vec<String>,
+    /// Their open items (`O1`).
+    pub items: Vec<String>,
+}
+
+impl UncapturedResidual {
+    /// The command that takes the capture; the `dla summarize` commands come from its output.
+    pub fn fix(&self) -> String {
+        format!(
+            "dla harness run {} --mode {} --capture alloc,heap, then the `dla summarize` commands it prints",
+            self.harness, self.mode
+        )
+    }
+}
+
+/// The over-threshold heap residual rows whose harness has no summarized capture, one entry per
+/// harness. A harness has one when the run holds a retention or allocation-stack record whose
+/// source lies under `harness/<H>/` ([`crate::measured_holders::Scan::summarized`]).
+pub fn uncaptured_residuals(view: &RunView) -> Vec<UncapturedResidual> {
+    let (Some(cov), Some(run_dir)) = (&view.coverage, view.run_dir.as_deref()) else {
+        return Vec::new();
+    };
+    let scan = view.measured_holders();
+    let mut out: Vec<UncapturedResidual> = Vec::new();
+    for r in cov
+        .residual
+        .iter()
+        .filter(|r| r.region == Region::Heap && r.residual > r.threshold)
+    {
+        let (Some(id), Some(series)) = (&r.open_item, &r.series) else {
+            continue;
+        };
+        if residual_item_resolved(view, id, &r.region.to_string()) {
+            continue;
+        }
+        let Some(harness) = view.series_harness.get(series) else {
+            continue;
+        };
+        let Ok(file) = crate::series::SeriesFile::load(run_dir, series) else {
+            continue;
+        };
+        if !file.source.runtime.is_some_and(supports_capture) || scan.summarized.contains(harness) {
+            continue;
+        }
+        let mode = file
+            .source
+            .mode
+            .map_or_else(|| "fresh".to_owned(), |m| m.as_str().to_owned());
+        match out.iter_mut().find(|u| u.harness == *harness) {
+            Some(u) => {
+                if !u.series.contains(series) {
+                    u.series.push(series.clone());
+                }
+                if !u.items.contains(&id.to_string()) {
+                    u.items.push(id.to_string());
+                }
+            }
+            None => out.push(UncapturedResidual {
+                harness: harness.clone(),
+                mode,
+                series: vec![series.clone()],
+                items: vec![id.to_string()],
+            }),
+        }
+    }
+    out
+}
+
+/// The entry of [`uncaptured_residuals`] that has the open item `id`.
+pub fn uncaptured_residual_of(view: &RunView, id: &str) -> Option<UncapturedResidual> {
+    uncaptured_residuals(view)
+        .into_iter()
+        .find(|u| u.items.iter().any(|i| i == id))
+}
+
 /// Why a growing allocation-site line that is tied to no finding is not an item of its own.
 enum Deferred {
     /// A holder of the project that no finding covers keeps it: the holder has the item.
@@ -1314,6 +1412,25 @@ pub fn measured_lead(view: &RunView) -> Vec<Missing> {
             fix: format!(
                 "dla harness run {h} --mode {mode} --capture alloc,heap, then the two dla summarize commands it prints"
             ),
+        });
+    }
+    // One item per harness for the heap residual rows over their threshold: the open item of such
+    // a row is not left unresolved before the harness that showed the growth has a summarized
+    // capture.
+    for u in uncaptured_residuals(view) {
+        out.push(Missing {
+            kind: RESIDUAL_CAPTURE_KIND.to_owned(),
+            id: format!("{}:residual-capture", u.harness),
+            description: format!(
+                "{} heap residual row{} of {} over the threshold ({}) and {} has no summarized capture (no retention or allocation-stack record under harness/{}/)",
+                u.items.len(),
+                if u.items.len() == 1 { "" } else { "s" },
+                u.series.join(", "),
+                u.items.join(", "),
+                u.harness,
+                u.harness
+            ),
+            fix: u.fix(),
         });
     }
     out

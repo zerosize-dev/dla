@@ -392,9 +392,31 @@ fn node_functions(cov_dir: &Path, work: &Path) -> BTreeSet<(String, String)> {
         .collect()
 }
 
+/// The file of the work copy (`/`-separated, relative) and the 1-based line that the zero-based
+/// generated position of the script `rel` maps to, when the script has a source map whose source
+/// is a file of the work copy outside `node_modules`.
+fn original_in_work(
+    maps: &mut dla_parsers::node::sourcemap::ScriptMaps,
+    work: &Path,
+    rel: &str,
+    line: u32,
+    col: u32,
+) -> Option<(String, u32)> {
+    let (file, l) = maps.lookup(&work.join(rel), line, col)?;
+    let source = relative_to(work, file.to_str()?)?;
+    if source.starts_with("node_modules/")
+        || source.contains("/node_modules/")
+        || !work.join(&source).is_file()
+    {
+        return None;
+    }
+    Some((source, l + 1))
+}
+
 /// [`node_functions`] with the 1-based line each function starts at.
 fn node_function_lines(cov_dir: &Path, work: &Path) -> BTreeSet<(String, String, u32)> {
     let mut out = BTreeSet::new();
+    let mut maps = dla_parsers::node::sourcemap::ScriptMaps::default();
     let Ok(rd) = fs::read_dir(cov_dir) else {
         return out;
     };
@@ -428,6 +450,8 @@ fn node_function_lines(cov_dir: &Path, work: &Path) -> BTreeSet<(String, String,
                 continue;
             }
             let source = fs::read_to_string(work.join(&rel)).unwrap_or_default();
+            // A script with a source map reports its functions at the original position when
+            // the map's source is a file of the project.
             for f in script
                 .get("functions")
                 .and_then(Value::as_array)
@@ -450,12 +474,21 @@ fn node_function_lines(cov_dir: &Path, work: &Path) -> BTreeSet<(String, String,
                         .and_then(|r| r.get("startOffset"))
                         .and_then(Value::as_u64)
                         .unwrap_or(0) as usize;
-                    let line = source.chars().take(offset).filter(|c| *c == '\n').count() + 1;
-                    out.insert((
-                        rel.clone(),
-                        name.to_owned(),
-                        u32::try_from(line).unwrap_or(u32::MAX),
-                    ));
+                    let before: String = source.chars().take(offset).collect();
+                    let line = before.matches('\n').count() + 1;
+                    let line = u32::try_from(line).unwrap_or(u32::MAX);
+                    let col = before.rsplit('\n').next().map_or(0, |l| l.chars().count());
+                    if let Some((file, l)) = original_in_work(
+                        &mut maps,
+                        work,
+                        &rel,
+                        line - 1,
+                        u32::try_from(col).unwrap_or(u32::MAX),
+                    ) {
+                        out.insert((file, name.to_owned(), l));
+                        continue;
+                    }
+                    out.insert((rel.clone(), name.to_owned(), line));
                 }
             }
         }
@@ -1580,6 +1613,81 @@ mod tests {
             &work,
         );
         assert_eq!(ex.entries.len(), 1);
+    }
+
+    #[test]
+    fn node_functions_of_a_bundle_are_reported_at_their_source_position() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().canonicalize().unwrap();
+        let cov = work.join("cov");
+        for (f, text) in [
+            ("cov/.keep", ""),
+            (
+                "src/reg.ts",
+                "const L: any[] = [];\nexport function on(f: any) {\n  L.push(f);\n}\n",
+            ),
+            (
+                "lib/index.js",
+                "const L = [];\nfunction on(f) { L.push(f); }\nmodule.exports = { on };\n//# sourceMappingURL=index.js.map\n",
+            ),
+            (
+                "lib/index.js.map",
+                r#"{"version":3,"sources":["../src/reg.ts"],"mappings":";AACA"}"#,
+            ),
+            ("lib/plain.js", "function plain() {}\nplain();\n"),
+        ] {
+            let p = work.join(f);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, text).unwrap();
+        }
+        let shown = work.to_string_lossy().replace('\\', "/");
+        let shown = shown.strip_prefix("//?/").unwrap_or(&shown).to_owned();
+        let url = |f: &str| {
+            if shown.starts_with('/') {
+                format!("file://{shown}/{f}")
+            } else {
+                format!("file:///{shown}/{f}")
+            }
+        };
+        // `on` starts at offset 14 (line 2 of the bundle), `plain` at offset 0.
+        fs::write(
+            cov.join("coverage-1.json"),
+            json!({"result":[
+                {"url":url("lib/index.js"),"functions":[
+                    {"functionName":"on","ranges":[{"startOffset":14,"count":3}]}]},
+                {"url":url("lib/plain.js"),"functions":[
+                    {"functionName":"plain","ranges":[{"startOffset":0,"count":1}]}]}]})
+            .to_string(),
+        )
+        .unwrap();
+        let fns = node_function_lines(&cov, &work);
+        assert!(
+            fns.contains(&("src/reg.ts".to_owned(), "on".to_owned(), 2)),
+            "{fns:?}"
+        );
+        assert!(!fns.iter().any(|(f, _, _)| f == "lib/index.js"), "{fns:?}");
+        // A script without a map keeps its built position.
+        assert!(
+            fns.contains(&("lib/plain.js".to_owned(), "plain".to_owned(), 1)),
+            "{fns:?}"
+        );
+        let ex = exercised(
+            Runtime::Node,
+            &d(&["src/reg.ts::on", "src/reg.ts::off"]),
+            &[],
+            &work,
+            &cov,
+            &work,
+        );
+        assert_eq!(ex.entries.len(), 1);
+        let rec = executed_record(Runtime::Node, &[], &work, &cov, &work);
+        let listed: Vec<_> = rec["functions"].as_array().unwrap().iter().collect();
+        assert!(
+            listed
+                .iter()
+                .any(|f| f["file"] == "src/reg.ts" && f["name"] == "on" && f["line"] == 2),
+            "{rec}"
+        );
     }
 
     #[test]
