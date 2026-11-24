@@ -1893,3 +1893,25 @@ flat test-loop readings get only 9 second looks.
   19.5 s -> 81.7 s regression of R4 on the editable-install library); (2) the stack-site clause
   moves out of `holders::names_holder` (it let a bare allocation stack count as retention for
   `strong` and for an observed explanation) into `labels::names_finding` and the label rule.
+
+## 03:40 UTC 2026-11-24
+
+- R5 tree (snapshot 16ca204): real-library walk with frozen u101/dla-R5 is CLEAN (out u101/w5.out):
+  heap capture 19.5 s; holders = module global (5 lines) + native entry for the font line; `next`
+  proposes project lines; both findings go sibling/test/alloc-test (no second capture)/refute/
+  confirm; bundle of the holder finding excerpts its four lines, bundle of the font finding
+  excerpts ImageFont.py:580, ImageDraw.py:508, :565 with the stack record and the focused
+  native entry; final gate has no finding item.
+- My checks on that tree (scratch u104): fmt, clippy, schema ok; whole suite 3424 passed, 1 FAILED:
+  dla-core tests/m6_rules.rs `an_alloc_stack_record_counts_for_the_findings_its_stated_ties_name_only`
+  (R5 put the stack-site clause into `labels::names_finding`, which the label rule uses; the old
+  rule: a label counts stated ties only). 3.12: only the 2 known gc.freeze failures. Static bench
+  64 pass. My mutations R1..R9 (u104/mut2.py, muts.sh): all nine caught.
+- R6 sent 03:40: `names_finding` back to strict; new predicate (stated tie, or an untied growing
+  row at the finding's line) for bundle, stacks_check and the alloc-test offer only; label refusal
+  names the literal summarize command with --finding.
+- After R6: freeze binaries (dla + dla-bench), walk again (u101/walk.py), m6_rules + whole suite,
+  full dynamic bench (`dla-bench dynamic --dla-bin <frozen> --parallel 3 --json F`, about 58 min,
+  baseline 63/64 pass + 1 xfail), non-skip snapshot for CI, commit message 21, commit, push main
+  and dev. Then builder W (work-trim-brief.md), then pillow-11, then 0.9.0-preview.7.
+- Disk 7.4 GB free with target/ built (debug). `cargo clean` before a real plugin run.
