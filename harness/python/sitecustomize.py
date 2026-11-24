@@ -1431,8 +1431,20 @@ def _heap_type(obj):
         return "?"
 
 
+def _heap_path(filename):
+    """The name of a file in a chain: relative to the project when it is a file of it, in the
+    scratch copy or in the source tree it was copied from (the rule of the growing lines), else
+    `<outside>/` and the file name, never an absolute path."""
+    if filename.startswith("<"):
+        return filename
+    rel = _project_rel(filename) or _source_rel(filename)
+    if rel is not None:
+        return rel
+    return "<outside>/" + (filename.replace("\\", "/").rsplit("/", 1)[-1] or "?")
+
+
 def _heap_file_line(filename, line):
-    shown = _shown_path(filename) if filename else "?"
+    shown = _heap_path(filename) if filename else "?"
     tail = f":{line}"
     if len(shown) + len(tail) > _HEAP_TEXT_CAP:
         shown = "..." + shown[len(shown) - (_HEAP_TEXT_CAP - len(tail) - 3) :]  # the line stays whole

@@ -536,7 +536,7 @@ fn holders_hint(ctx: &Ctx, series: &dla_core::SeriesFile, next: &[String]) -> Op
         return None;
     }
     Some(format!(
-        "a py.blocks@ line says where the objects were made, not who keeps them: run `dla harness run {h} --mode {} --capture heap` and the `dla summarize heap-graph` command it prints; add the finding at the holder, not one per line",
+        "a py.blocks@ line says where the objects were made, not who keeps them: run `dla harness run {h} --mode {} --capture alloc,heap` and the two `dla summarize` commands it prints (stacks and holders); add the finding at the holder, not one per line",
         mode_name(series)
     ))
 }

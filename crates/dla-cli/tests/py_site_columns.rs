@@ -1224,13 +1224,16 @@ fn a_finding_at_a_growing_line_reaches_the_verifier_with_its_stack() {
 }
 
 #[test]
-fn a_capture_that_no_stack_of_the_line_came_out_of_is_said_in_the_bundle() {
+fn the_whole_route_from_the_trend_to_the_bundle_needs_one_capture_and_ends_with_the_stack_in_it() {
     if !have_python() {
         return;
     }
     let r = prepared();
-    // A real capture of H1 and a real summary of it, made before any finding exists at the
-    // line: the stack record names no finding.
+    // The trend leads to the capture; one run of it prints both summarize commands.
+    let t = r.trend();
+    let hint = t["holders_hint"].as_str().unwrap();
+    assert!(hint.contains("--capture alloc,heap"), "{hint}");
+    let growth = evidence_of(&Run::next_of(&t, ADD_PREFIX).unwrap());
     let cap = ok(
         &r.project,
         &[
@@ -1240,30 +1243,242 @@ fn a_capture_that_no_stack_of_the_line_came_out_of_is_said_in_the_bundle() {
             "--mode",
             "fresh",
             "--capture",
-            "alloc",
+            "alloc,heap",
         ],
     );
-    let cmd = cap["summary"]["summarize"]
+    let printed: Vec<&str> = cap["summary"]["summarize"]
         .as_array()
         .unwrap_or_else(|| panic!("{cap}"))
         .iter()
         .filter_map(Value::as_str)
-        .find(|c| c.starts_with("dla summarize alloc-stack-diff "))
-        .unwrap();
-    let args: Vec<&str> = cmd.split_whitespace().skip(1).collect();
-    ok(&r.project, &args);
-    let (f, e, _) = leak_at_the_line(&r);
-    ok(&r.project, &["ledger", "confirm", &f, "--evidence", &e]);
-    let b = ok(&r.project, &["bundle", &f]);
-    assert_eq!(b["excerpt"], false, "{b}");
-    let note = b["stacks_note"].as_str().unwrap();
+        .collect();
+    // Both summaries are made before the finding exists: the stack record names none.
+    let mut stack = String::new();
+    let mut heap = Value::Null;
+    for c in &printed {
+        let v = ok(&r.project, &args_of(c));
+        if c.starts_with("dla summarize alloc-stack-diff ") {
+            stack = v["evidence"][0].as_str().unwrap().to_owned();
+        } else {
+            heap = v;
+        }
+    }
     assert!(
-        note.contains("an allocation capture of H1 was summarized and no growing stack ends at"),
-        "{note}"
+        !stack.is_empty() && heap["next"][0].is_string(),
+        "{printed:?} {heap}"
     );
+    // The finding is added with the command the holder summary printed.
+    let add = heap["next"][0].as_str().unwrap();
+    assert!(
+        add.starts_with(ADD_PREFIX) && add.contains(&format!("--site {SITE}")),
+        "{add}"
+    );
+    let f = ok(&r.project, &args_of(add))["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &r.project,
+        &[
+            "ledger",
+            "add",
+            "--sibling-of",
+            &f,
+            "--origin",
+            "hypothesis",
+            "--hypothesis",
+            "N-WARM",
+            "--refute-if",
+            "growth continues over the extra cycles",
+            "--evidence",
+            &growth,
+        ],
+    );
+    let workload = r
+        .ledger()
+        .iter()
+        .filter(|v| v["kind"] == "workload")
+        .filter_map(|v| v["evidence_id"].as_str().map(str::to_owned))
+        .next_back()
+        .unwrap();
+    ok(&r.project, &["ledger", "test", &f, "--evidence", &workload]);
+    let a = ok(&r.project, &["alloc-test", "H1", "--finding", &f]);
+    assert_eq!(a["favors"], "leak", "{a}");
+    // The stack summary made before the finding counts for it: no second capture is offered.
+    assert!(a.get("stacks_hint").is_none(), "{a}");
+    assert!(
+        next_lines(&a)
+            .iter()
+            .all(|n| !n.contains("--capture") && !n.starts_with('#')),
+        "{:?}",
+        next_lines(&a)
+    );
+    ok(
+        &r.project,
+        &[
+            "ledger",
+            "refute",
+            &format!("{f}.n1"),
+            "--evidence",
+            a["evidence"].as_str().unwrap(),
+        ],
+    );
+    ok(
+        &r.project,
+        &["ledger", "confirm", &f, "--evidence", &growth],
+    );
+    let b = ok(&r.project, &["bundle", &f]);
+    assert_eq!(b["excerpt"], true, "{b}");
+    assert!(
+        b["excerpt_frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x == SITE),
+        "{b}"
+    );
+    let bundled = b["evidence"].as_array().unwrap();
+    assert!(bundled.iter().any(|x| *x == stack.as_str()), "{b}");
+    let retention = heap["evidence"][0].as_str().unwrap();
+    assert!(bundled.iter().any(|x| *x == retention), "{b}");
     let dir = r.project.join(b["dir"].as_str().unwrap());
     let index: Value = serde_json::from_slice(&fs::read(dir.join("index.json")).unwrap()).unwrap();
-    assert_eq!(index["stacks_note"], note, "{index}");
+    assert!(index.get("stacks_note").is_none(), "{index}");
+}
+
+#[test]
+fn a_retention_record_whose_holder_has_no_chain_does_not_stand_in_for_the_stack() {
+    if !have_python() {
+        return;
+    }
+    let r = prepared();
+    let cap = ok(
+        &r.project,
+        &[
+            "harness",
+            "run",
+            "H1",
+            "--mode",
+            "fresh",
+            "--capture",
+            "alloc,heap",
+        ],
+    );
+    let printed: Vec<&str> = cap["summary"]["summarize"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{cap}"))
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    let heap = printed
+        .iter()
+        .find(|c| c.starts_with("dla summarize heap-graph "))
+        .unwrap();
+    let stacks = printed
+        .iter()
+        .find(|c| c.starts_with("dla summarize alloc-stack-diff "))
+        .unwrap();
+    // Only the holder summary is run: the line is held from native code (an unreferenced entry,
+    // no path), so the bundle would show the verifier neither the line nor the call.
+    ok(&r.project, &args_of(heap));
+    let (f, e, _) = leak_at_the_line(&r);
+    ok(&r.project, &["ledger", "confirm", &f, "--evidence", &e]);
+    let refused = dla(&r.project, &["bundle", &f]);
+    assert_eq!(
+        refused.json["error"]["code"], "stacks-not-captured",
+        "{}",
+        refused.text
+    );
+    let fix = refused.json["error"]["fix"].as_str().unwrap();
+    assert!(
+        fix.starts_with(stacks) && !fix.contains("dla summarize heap-graph"),
+        "{fix}"
+    );
+    // With the stack summary it is written.
+    ok(&r.project, &args_of(stacks));
+    let b = ok(&r.project, &["bundle", &f]);
+    assert_eq!(b["excerpt"], true, "{b}");
+}
+
+#[test]
+fn a_retention_record_whose_holder_has_a_chain_stands_in_for_the_stack() {
+    if !have_python() {
+        return;
+    }
+    let r = prepared_reraise();
+    r.trend();
+    // One capture run for the chains (the stacks are not captured at all).
+    let cap = ok(
+        &r.project,
+        &[
+            "harness",
+            "run",
+            "H1",
+            "--mode",
+            "fresh",
+            "--capture",
+            "heap",
+        ],
+    );
+    let cmd = cap["summary"]["summarize"][0].as_str().unwrap();
+    let s = ok(&r.project, &args_of(cmd));
+    let add = s["next"][0].as_str().unwrap();
+    let f = ok(&r.project, &args_of(add))["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The route to a confirmed finding (the bundle check applies to those).
+    let growth = r
+        .ledger()
+        .iter()
+        .filter(|v| v["kind"] == "unit-count-series" || v["kind"] == "growth-series")
+        .filter_map(|v| v["evidence_id"].as_str().map(str::to_owned))
+        .next_back()
+        .unwrap();
+    ok(
+        &r.project,
+        &[
+            "ledger",
+            "add",
+            "--sibling-of",
+            &f,
+            "--origin",
+            "hypothesis",
+            "--hypothesis",
+            "N-WARM",
+            "--refute-if",
+            "growth continues over the extra cycles",
+            "--evidence",
+            &growth,
+        ],
+    );
+    let workload = r
+        .ledger()
+        .iter()
+        .filter(|v| v["kind"] == "workload")
+        .filter_map(|v| v["evidence_id"].as_str().map(str::to_owned))
+        .next_back()
+        .unwrap();
+    ok(&r.project, &["ledger", "test", &f, "--evidence", &workload]);
+    let a = ok(&r.project, &["alloc-test", "H1", "--finding", &f]);
+    assert_eq!(a["favors"], "leak", "{a}");
+    ok(
+        &r.project,
+        &[
+            "ledger",
+            "refute",
+            &format!("{f}.n1"),
+            "--evidence",
+            a["evidence"].as_str().unwrap(),
+        ],
+    );
+    ok(
+        &r.project,
+        &["ledger", "confirm", &f, "--evidence", &growth],
+    );
+    let b = dla(&r.project, &["bundle", &f]);
+    assert_eq!(b.code, 0, "{}", b.text);
+    assert_eq!(b.json["excerpt"], true, "{}", b.text);
 }
 
 /// A prepared run whose series S1 has a flat step in the site column: from the middle point on,
@@ -2119,8 +2334,8 @@ fn a_module_object_that_re_raises_a_stored_exception_is_found_as_the_holder_of_t
     let hint = t["holders_hint"].as_str().unwrap_or_else(|| panic!("{t}"));
     assert!(
         hint.contains("not who keeps them")
-            && hint.contains("`dla harness run H1 --mode fresh --capture heap`")
-            && hint.contains("`dla summarize heap-graph`")
+            && hint.contains("`dla harness run H1 --mode fresh --capture alloc,heap`")
+            && hint.contains("the two `dla summarize` commands it prints")
             && hint.contains("not one per line"),
         "{hint}"
     );
@@ -2138,17 +2353,29 @@ fn a_module_object_that_re_raises_a_stored_exception_is_found_as_the_holder_of_t
             "--mode",
             "fresh",
             "--capture",
-            "heap",
+            "alloc,heap",
         ],
     );
-    let cmd = cap["summary"]["summarize"]
+    let printed: Vec<&str> = cap["summary"]["summarize"]
         .as_array()
         .unwrap_or_else(|| panic!("{cap}"))
         .iter()
         .filter_map(Value::as_str)
+        .collect();
+    let cmd = *printed
+        .iter()
         .find(|c| c.starts_with("dla summarize heap-graph "))
         .unwrap_or_else(|| panic!("{cap}"));
     assert!(cmd.ends_with("py-1.retain.json"), "{cmd}");
+    // The stacks are summarized too, before any finding exists (the order the hint leads to).
+    let stacks_cmd = printed
+        .iter()
+        .find(|c| c.starts_with("dla summarize alloc-stack-diff "))
+        .unwrap_or_else(|| panic!("{cap}"));
+    let stack_id = ok(&r.project, &args_of(stacks_cmd))["evidence"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
     // A harness that has the capture gets no hint for it.
     assert!(r.trend().get("holders_hint").is_none());
     let args: Vec<&str> = cmd.split_whitespace().skip(1).collect();
@@ -2232,6 +2459,31 @@ fn a_module_object_that_re_raises_a_stored_exception_is_found_as_the_holder_of_t
             .any(|m| m["id"].as_str().unwrap().ends_with(VICTIM_COLUMN)),
         "{gate:?}"
     );
+    // No item of the final gate asks for a finding at any column: the lines and the types of
+    // the chain are the holder's, and what is left is the whole process.
+    let asks: Vec<&Value> = gate
+        .iter()
+        .filter(|m| {
+            m["fix"]
+                .as_str()
+                .is_some_and(|x| x.contains("dla ledger add --origin"))
+                || m["description"]
+                    .as_str()
+                    .is_some_and(|x| x.contains("tied to no finding"))
+        })
+        .collect();
+    assert!(asks.is_empty(), "{asks:?}");
+    let types: Vec<&Value> = gate
+        .iter()
+        .filter(|m| m["id"].as_str().is_some_and(|i| i.contains("py.type:")))
+        .collect();
+    assert!(
+        !types.is_empty()
+            && types
+                .iter()
+                .all(|m| m["fix"].as_str().unwrap().contains(&f)),
+        "{gate:?}"
+    );
     // A second summary of the same capture states the tie in the record itself.
     let again = ok(&r.project, &args_of(cmd));
     let second = r
@@ -2252,6 +2504,8 @@ fn a_module_object_that_re_raises_a_stored_exception_is_found_as_the_holder_of_t
     let b = ok(&r.project, &["bundle", &f]);
     let bundled = b["evidence"].as_array().unwrap();
     assert!(bundled.iter().any(|x| *x == record_id.as_str()), "{b}");
+    // The stack summary made before the finding existed counts for it: it is in the bundle.
+    assert!(bundled.iter().any(|x| *x == stack_id.as_str()), "{b}");
     let dir = r.project.join(b["dir"].as_str().unwrap());
     let index: Value = serde_json::from_slice(&fs::read(dir.join("index.json")).unwrap()).unwrap();
     let rec = index["evidence"]
@@ -2289,65 +2543,4 @@ fn a_module_object_that_re_raises_a_stored_exception_is_found_as_the_holder_of_t
 
 fn args_of(cmd: &str) -> Vec<&str> {
     cmd.split_whitespace().skip(1).collect()
-}
-
-#[test]
-fn a_capture_with_one_of_its_two_summarize_commands_run_lists_the_other_in_the_refusal() {
-    if !have_python() {
-        return;
-    }
-    let r = prepared();
-    let cap = ok(
-        &r.project,
-        &[
-            "harness",
-            "run",
-            "H1",
-            "--mode",
-            "fresh",
-            "--capture",
-            "alloc,heap",
-        ],
-    );
-    let printed: Vec<&str> = cap["summary"]["summarize"]
-        .as_array()
-        .unwrap_or_else(|| panic!("{cap}"))
-        .iter()
-        .filter_map(Value::as_str)
-        .collect();
-    // The stacks are summarized before any finding exists at the line: the record names none.
-    let stacks = printed
-        .iter()
-        .find(|c| c.starts_with("dla summarize alloc-stack-diff "))
-        .unwrap();
-    ok(&r.project, &args_of(stacks));
-    let (f, e, _) = leak_at_the_line(&r);
-    ok(&r.project, &["ledger", "confirm", &f, "--evidence", &e]);
-    let refused = dla(&r.project, &["bundle", &f]);
-    assert_eq!(
-        refused.json["error"]["code"], "stacks-not-captured",
-        "{}",
-        refused.text
-    );
-    assert!(
-        refused.json["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("only partly summarized"),
-        "{}",
-        refused.text
-    );
-    let fix = refused.json["error"]["fix"].as_str().unwrap();
-    let heap = printed
-        .iter()
-        .find(|c| c.starts_with("dla summarize heap-graph "))
-        .unwrap();
-    assert!(
-        fix.starts_with(heap) && !fix.contains("dla summarize alloc-stack-diff"),
-        "{fix}"
-    );
-    // Run it: the retention record names the finding by its line, and the bundle is written.
-    ok(&r.project, &args_of(heap));
-    let b = ok(&r.project, &["bundle", &f]);
-    assert_eq!(b["excerpt"], true, "{b}");
 }

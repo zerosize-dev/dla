@@ -1196,6 +1196,12 @@ fn driven(raw_values: bool) -> Driven {
 
 /// Runs the driver of `d` with `capture` and returns the outcome's run directory listing.
 fn run_driven(d: &Driven, capture: &str) {
+    run_driven_with(d, capture, "import held", "_state['held'].keep(i)", None);
+}
+
+/// [`run_driven`] with the import line of the setup hook, the unit hook and a directory of the
+/// project's source tree that is on the path but not in the scratch copy (an editable install).
+fn run_driven_with(d: &Driven, capture: &str, imports: &str, unit: &str, extra: Option<&Path>) {
     use dla_core::{
         harness::{AgentKind, CommandSpec, HarnessManifest, HarnessMode},
         runtime::Runtime,
@@ -1203,7 +1209,7 @@ fn run_driven(d: &Driven, capture: &str) {
     };
     let (work, agent) = (d.hdir.join("work"), d.hdir.join("agent"));
     let setup = format!(
-        "import os, held\n    _state['held'] = held\n    open({:?}, 'w').write(os.environ.get('DLA_RAW_VALUES', 'unset'))",
+        "import os, held\n    {imports}\n    _state['held'] = held\n    open({:?}, 'w').write(os.environ.get('DLA_RAW_VALUES', 'unset'))",
         d.hdir.join("raw-env.txt").to_string_lossy()
     );
     let tmpl = fs::read_to_string(agent.join("dla_harness.py")).unwrap();
@@ -1218,7 +1224,7 @@ fn run_driven(d: &Driven, capture: &str) {
         )
         .replace(
             "raise NotImplementedError(\"DLA-HOOK unit has not been filled in\")",
-            "_state['held'].keep(i)",
+            unit,
         );
     fs::create_dir_all(d.hdir.join("driver")).unwrap();
     fs::write(d.hdir.join("driver/dla_harness.py"), &driver).unwrap();
@@ -1242,7 +1248,10 @@ fn run_driven(d: &Driven, capture: &str) {
             cwd: ".".into(),
             env: vec![(
                 "PYTHONPATH".to_owned(),
-                format!("{}:{}", agent.display(), work.display()),
+                match extra {
+                    Some(e) => format!("{}:{}:{}", agent.display(), work.display(), e.display()),
+                    None => format!("{}:{}", agent.display(), work.display()),
+                },
             )],
         },
         iter_arg: Some("{n}".into()),
@@ -1460,7 +1469,7 @@ fn a_chain_every_kept_object_runs_through_is_walked_once() {
             s["site"]
                 .as_str()
                 .is_some_and(|x| x.starts_with("reraise_big.py:"))
-                && s["kept"].as_u64().unwrap() > 0
+                && s["kept"].as_u64().unwrap() >= 40
         })
         .collect();
     assert!(lines.len() >= 6, "{doc}");
@@ -1493,4 +1502,71 @@ fn a_chain_every_kept_object_runs_through_is_walked_once() {
         .max()
         .unwrap();
     assert!(longest > 10_000, "{longest}");
+}
+
+#[test]
+fn a_step_is_named_like_the_growing_lines_in_the_copy_in_the_source_tree_and_never_by_an_absolute_path()
+ {
+    if !have_python() {
+        return;
+    }
+    let d = driven(false);
+    // A module of the project's source tree that the scratch copy does not hold (an editable
+    // install runs from there): it keeps a function and a bound method of a standard library
+    // object per call, in a module list.
+    let src = d.ctx.project.join("lib");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(
+        src.join("editable.py"),
+        "import textwrap\n\nKEPT = []\n\n\ndef keep(i):\n    f = lambda: i\n    KEPT.append(f)\n    KEPT.append(textwrap.TextWrapper().fill)\n",
+    )
+    .unwrap();
+    run_driven_with(
+        &d,
+        "heap",
+        "import editable\n    _state['editable'] = editable",
+        "_state['held'].keep(i)\n    _state['editable'].keep(i)",
+        Some(&src),
+    );
+    let doc = json(&retain_file(&d));
+    let steps: Vec<(String, String)> = doc["sites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|s| s["chains"].as_array().unwrap())
+        .flat_map(|c| c["steps"].as_array().unwrap())
+        .filter_map(|st| {
+            Some((
+                st["type"].as_str()?.to_owned(),
+                st["at"].as_str()?.to_owned(),
+            ))
+        })
+        .collect();
+    let sites: Vec<&str> = doc["sites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|s| s["site"].as_str())
+        .collect();
+    assert!(
+        sites.iter().any(|s| s.starts_with("lib/editable.py:")),
+        "{sites:?}"
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|(t, at)| t == "function" && at.starts_with("lib/editable.py:")),
+        "{steps:?}"
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|(t, at)| t == "method" && at.starts_with("<outside>/textwrap.py:")),
+        "{steps:?}"
+    );
+    let text = doc.to_string();
+    assert!(
+        !text.contains(d.ctx.project.to_string_lossy().as_ref()) && !text.contains("\"/"),
+        "an absolute path in the file: {text}"
+    );
 }

@@ -1027,3 +1027,107 @@ fn auto_reads_a_holder_chains_file_and_a_values_name_is_a_shape() {
         );
     }
 }
+
+#[test]
+fn a_file_of_one_dump_point_is_read_and_the_record_says_growth_was_not_computed() {
+    let p = Project::new();
+    let one = r#"{"dla_pyretain":1,"frames":1,"sites":[
+ {"site":"pkg/a.py:3","blocks_first":null,"blocks_last":50,"found_tracked":40,"found_untracked":0,"kept":40,
+  "chains":[{"count":40,"root":{"kind":"module-global","module":"pkg.a","key":"_reg"},"steps":[{"type":"pkg.a.E","via":"[0]"},{"type":"list","via":"._reg"}]}]}],
+ "limitations":[]}"#;
+    let f = p.put("in/py-1.retain.json", one.as_bytes());
+    let v = summarize(&p, "heap-graph", "py-retain", &[f], &[]);
+    let rec = retention(&p).pop().unwrap();
+    let h = holder(&rec, "static:pkg.a._reg");
+    assert!(h["sites"][0]["first"].is_null(), "{h}");
+    assert_eq!(h["sites"][0]["last"], 50);
+    assert!(
+        rec["limitations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l.as_str().unwrap().contains("growth was not computed")),
+        "{rec}"
+    );
+    // The holder still gets its command and its ties work as with two dump points.
+    assert!(
+        v["next"][0]
+            .as_str()
+            .unwrap()
+            .contains("--owner pkg.a._reg"),
+        "{v}"
+    );
+}
+
+#[test]
+fn sites_with_kept_objects_and_no_chain_are_counted_with_the_reason_of_the_file() {
+    let p = Project::new();
+    let cut = r#"{"dla_pyretain":1,"frames":1,"sites":[
+ {"site":"pkg/a.py:3","blocks_first":0,"blocks_last":50,"found_tracked":40,"found_untracked":0,"kept":40,
+  "chains":[{"count":40,"root":{"kind":"module-global","module":"pkg.a","key":"_reg"},"steps":[{"type":"int"}]}]},
+ {"site":"pkg/a.py:4","blocks_first":0,"blocks_last":50,"found_tracked":40,"found_untracked":0,"kept":40,"chains":[]},
+ {"site":"pkg/a.py:5","blocks_first":0,"blocks_last":50,"found_tracked":40,"found_untracked":0,"kept":40,"chains":[]}],
+ "limitations":["the time bound (60 s) stopped the walk: 80 kept objects have no chain"]}"#;
+    let f = p.put("in/py-1.retain.json", cut.as_bytes());
+    let v = summarize(&p, "heap-graph", "py-retain", &[f], &[]);
+    assert_eq!(v["no_chain_sites"], 2, "{v}");
+    assert!(
+        v["no_chain_why"].as_str().unwrap().contains("time bound"),
+        "{v}"
+    );
+    let rec = retention(&p).pop().unwrap();
+    assert_eq!(rec["result"]["no_chain"]["sites"], 2);
+    assert!(
+        rec["result"]["no_chain"]["why"]
+            .as_str()
+            .unwrap()
+            .contains("time bound"),
+        "{rec}"
+    );
+    assert!(
+        rec["limitations"].as_array().unwrap().iter().any(|l| l
+            .as_str()
+            .unwrap()
+            .contains("2 site(s) have kept objects and no chain")),
+        "{rec}"
+    );
+}
+
+#[test]
+fn the_record_lists_the_types_a_holder_keeps_and_its_minor_sites() {
+    let p = Project::new();
+    let f = p.put("in/py-1.retain.json", RETAIN.as_bytes());
+    summarize(&p, "heap-graph", "py-retain", &[f], &[]);
+    let rec = retention(&p).pop().unwrap();
+    let g = holder(&rec, "static:pkg.cms._native");
+    let types: Vec<&str> = g["types"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t.as_str())
+        .collect();
+    // The kept object of each chain and the step that repeats; not the links in between.
+    assert!(
+        types.contains(&"traceback") && types.contains(&"frame"),
+        "{types:?}"
+    );
+    assert!(
+        !types.contains(&"ImportError") && !types.contains(&"pkg._util.Deferred"),
+        "{types:?}"
+    );
+    // A site where a holder keeps a few of the objects sampled is a minor one.
+    let minor = r#"{"dla_pyretain":1,"frames":1,"sites":[
+ {"site":"pkg/m.py:1","blocks_first":0,"blocks_last":50,"found_tracked":40,"found_untracked":0,"kept":40,
+  "chains":[{"count":36,"root":{"kind":"module-global","module":"pkg.m","key":"big"},"steps":[{"type":"int"}]},
+            {"count":4,"root":{"kind":"module-global","module":"pkg.m","key":"small"},"steps":[{"type":"int"}]}]}],"limitations":[]}"#;
+    let f = p.put("in/second.retain.json", minor.as_bytes());
+    summarize(&p, "heap-graph", "py-retain", &[f], &[]);
+    let rec = retention(&p).pop().unwrap();
+    let small = holder(&rec, "static:pkg.m.small");
+    assert_eq!(small["sites"].as_array().unwrap().len(), 0, "{small}");
+    assert_eq!(small["minor_sites"][0], "pkg/m.py:1");
+    assert_eq!(
+        holder(&rec, "static:pkg.m.big")["sites"][0]["site"],
+        "pkg/m.py:1"
+    );
+}

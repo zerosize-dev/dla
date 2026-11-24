@@ -749,6 +749,92 @@ fn made_from(
         })
 }
 
+/// The finding and, for a sibling, its root: the findings a record may name.
+fn subjects_of<'a>(
+    ledger: &'a dla_core::Ledger,
+    f: &'a dla_core::Finding,
+) -> Vec<&'a dla_core::Finding> {
+    let mut v = vec![f];
+    if let Some(root) = f.parent.as_ref().and_then(|p| ledger.finding(p)) {
+        v.push(root);
+    }
+    v
+}
+
+/// True for a holder entry of the Python holder chains (it lists `sites`) that holds a line of
+/// `subjects` or is owned by one of them.
+fn entry_is_mine(e: &Value, subjects: &[&dla_core::Finding]) -> bool {
+    let held = dla_core::holders::entry_sites(e);
+    subjects.iter().any(|f| {
+        f.site.as_deref().is_some_and(|s| held.contains(&s.trim()))
+            || f.owner
+                .as_deref()
+                .is_some_and(|o| dla_core::holders::entry_is_owner(e, o))
+    })
+}
+
+/// Whether a retention record stands in for the stack: a record that is not of the Python holder
+/// chains does; one that is does only when a holder entry that holds the finding's line (or is
+/// owned by its owner) has a `path` and is not `unreferenced`: an entry of objects that nothing refers
+/// to shows the type and no way to the line.
+fn retention_lifts(result: &Value, subjects: &[&dla_core::Finding]) -> bool {
+    let Some(list) = result.get("holders").and_then(Value::as_array) else {
+        return true;
+    };
+    if !list.iter().any(|e| e.get("sites").is_some()) {
+        return true;
+    }
+    list.iter().any(|e| {
+        entry_is_mine(e, subjects)
+            && e.get("unreferenced").is_none()
+            && e.get("path")
+                .or_else(|| e.get("paths"))
+                .and_then(Value::as_array)
+                .is_some_and(|p| !p.is_empty())
+    })
+}
+
+/// Cuts a copy of a retention record (its `result` or its raw file) of the Python holder chains to
+/// the holder entries that hold a line of `subjects` or are owned by them, before anything is
+/// scrubbed or any frame is collected, and says how many were left out (`other_holders`). The
+/// lines of the raw file's site list that no remaining entry holds go too. A record that names no
+/// entry of the finding is left as it is.
+fn focus_retention(v: &mut Value, subjects: &[&dla_core::Finding]) {
+    let Some(list) = v.get("holders").and_then(Value::as_array) else {
+        return;
+    };
+    if !list.iter().any(|e| e.get("sites").is_some())
+        || !list.iter().any(|e| entry_is_mine(e, subjects))
+    {
+        return;
+    }
+    let (mine, other): (Vec<Value>, Vec<Value>) = list
+        .iter()
+        .cloned()
+        .partition(|e| entry_is_mine(e, subjects));
+    let mut keep: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for e in &mine {
+        for key in ["sites", "minor_sites"] {
+            for s in e.get(key).and_then(Value::as_array).into_iter().flatten() {
+                let name = s.as_str().or_else(|| s.get("site").and_then(Value::as_str));
+                keep.extend(name.map(str::to_owned));
+            }
+        }
+    }
+    let Some(o) = v.as_object_mut() else { return };
+    o.insert("holders".into(), Value::Array(mine));
+    if !other.is_empty() {
+        o.insert("other_holders".into(), json!(other.len()));
+    }
+    if let Some(Value::Array(sites)) = o.get_mut("sites") {
+        sites.retain(|s| {
+            s.get("site")
+                .and_then(Value::as_str)
+                .is_none_or(|n| keep.contains(n))
+        });
+    }
+}
+
 /// The check of a bundle with no stack: `Err(stacks-not-captured)` when the growth is a count of
 /// blocks at one line, the bundle would hold no allocation or retention evidence, the runtime
 /// captures stacks and either no capture run of a harness that grew the column is recorded or
@@ -770,10 +856,15 @@ fn stacks_check(
         || !matches!(f.state, FindingState::Confirmed | FindingState::Strong)
         || ids.iter().any(|e| {
             view.ledger.evidence_by_id(e).is_some_and(|r| {
-                matches!(
-                    r.kind.class(),
-                    EvidenceClass::Allocation | EvidenceClass::Retention
-                )
+                match r.kind.class() {
+                    EvidenceClass::Allocation => true,
+                    // A retention record shows the verifier the line and the call into an
+                    // extension only when the holder of the finding's line has a chain.
+                    EvidenceClass::Retention => {
+                        retention_lifts(&r.result, &subjects_of(&view.ledger, f))
+                    }
+                    _ => false,
+                }
             })
         })
     {
@@ -1000,6 +1091,8 @@ fn harness_words(
             HarnessAbout::Target | HarnessAbout::EntryPath | HarnessAbout::Probe
         ) {
             "a driver made for this finding"
+        } else if m.targets.is_empty() && m.probes.is_empty() {
+            "a driver with no target"
         } else {
             "a driver for other targets"
         }
@@ -1183,6 +1276,13 @@ fn build(
             continue;
         };
         let mut result = e.result.clone();
+        let subjects = ledger
+            .finding(id)
+            .map(|f| subjects_of(ledger, f))
+            .unwrap_or_default();
+        if e.kind == EvidenceKind::RetentionPath {
+            focus_retention(&mut result, &subjects);
+        }
         strip_forbidden(&mut result);
         // Allocation and retention records keep the site in their structured frame fields.
         let frames_exempt = matches!(
@@ -1215,7 +1315,13 @@ fn build(
             } else if fs::metadata(&src).is_ok_and(|m| m.len() > MAX_COPY_BYTES) {
                 omitted.push(format!("{eid}: {raw} is over {MAX_COPY_BYTES} bytes"));
             } else {
-                let bytes = fs::read(&src).map_err(|e| io_fail(&src, e))?;
+                let mut bytes = fs::read(&src).map_err(|e| io_fail(&src, e))?;
+                if e.kind == EvidenceKind::RetentionPath
+                    && let Ok(mut doc) = serde_json::from_slice::<Value>(&bytes)
+                {
+                    focus_retention(&mut doc, &subjects);
+                    bytes = to_pretty_json(&doc).into_bytes();
+                }
                 let kept = bundle_bytes(&bytes, raw.ends_with(".json"), &needles, frames_exempt);
                 frames_in_bytes(&kept, &mut here);
                 write(&name, &kept)?;
@@ -1289,6 +1395,102 @@ fn build(
 mod tests {
     use super::*;
 
+    fn finding_at(owner: Option<&str>, site: Option<&str>) -> dla_core::Finding {
+        let mut f = dla_core::Finding::candidate(
+            FindingId::new(1),
+            dla_core::Origin::parse("growth-series").unwrap(),
+            vec![EvidenceId::new(1)],
+        );
+        f.owner = owner.map(str::to_owned);
+        f.site = site.map(str::to_owned);
+        f
+    }
+
+    /// A record of two holders: a module global with a chain that keeps lines a.py:1 and a.py:2,
+    /// and the native entry of a.py:9, which has no chain.
+    fn two_holders() -> Value {
+        json!({"file": "x", "sites": [
+            {"site": "a.py:1"}, {"site": "a.py:2"}, {"site": "a.py:9"}, {"site": "a.py:7"}],
+            "holders": [
+            {"key": "static:m.g", "kept": 5,
+             "sites": [{"site": "a.py:1", "first": 1, "last": 9}, {"site": "a.py:2", "first": 1, "last": 9}],
+             "minor_sites": [{"site": "a.py:7"}],
+             "paths": [{"site": "a.py:1", "count": 5, "path": [{"type": "list", "at": "a.py:3"}]}],
+             "path": [{"type": "list", "at": "a.py:3"}]},
+            {"key": "a.py:9", "kept": 0, "unreferenced": "x",
+             "sites": [{"site": "a.py:9", "first": 1, "last": 9}]}]})
+    }
+
+    #[test]
+    fn a_retention_record_lifts_the_stack_only_when_the_holder_of_the_line_has_a_chain() {
+        let rec = two_holders();
+        let native = finding_at(None, Some("a.py:9"));
+        let global = finding_at(Some("m.g"), Some("a.py:1"));
+        assert!(
+            !retention_lifts(&rec, &[&native]),
+            "an unreferenced entry has no path"
+        );
+        // An entry of objects nothing refers to has the type as a one-step path and still no way
+        // to the line.
+        let with_path = json!({"holders": [{"key": "a.py:9", "unreferenced": "x",
+            "sites": [{"site": "a.py:9"}], "path": [{"type": "list"}]}]});
+        assert!(!retention_lifts(&with_path, &[&native]));
+        assert!(retention_lifts(&rec, &[&global]));
+        assert!(retention_lifts(&rec, &[&finding_at(None, Some("a.py:2"))]));
+        // Another adapter's record (no `sites` in its entries) counts as before.
+        assert!(retention_lifts(
+            &json!({"holders": [{"key": "static:a.B.c"}]}),
+            &[&native]
+        ));
+        // A record that names no entry of the finding does not lift the requirement.
+        assert!(!retention_lifts(
+            &rec,
+            &[&finding_at(None, Some("a.py:40"))]
+        ));
+    }
+
+    #[test]
+    fn each_finding_sees_only_its_own_holder_of_a_record_with_two() {
+        let native = finding_at(None, Some("a.py:9"));
+        let mut v = two_holders();
+        focus_retention(&mut v, &[&native]);
+        let keys: Vec<&str> = v["holders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["key"].as_str().unwrap())
+            .collect();
+        assert_eq!(keys, ["a.py:9"]);
+        assert_eq!(v["other_holders"], 1);
+        let sites: Vec<&str> = v["sites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["site"].as_str().unwrap())
+            .collect();
+        assert_eq!(sites, ["a.py:9"], "no line of the other holder is left");
+        assert!(!v.to_string().contains("a.py:3"), "{v}");
+        let mut v = two_holders();
+        focus_retention(&mut v, &[&finding_at(Some("m.g"), Some("a.py:1"))]);
+        assert_eq!(v["holders"].as_array().unwrap().len(), 1);
+        assert_eq!(v["holders"][0]["key"], "static:m.g");
+        let sites: Vec<&str> = v["sites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["site"].as_str().unwrap())
+            .collect();
+        assert_eq!(sites, ["a.py:1", "a.py:2", "a.py:7"]);
+        assert!(!v.to_string().contains("a.py:9"), "{v}");
+        // A record that names no entry of the finding, or an entry of no chains, is left alone.
+        let mut v = two_holders();
+        focus_retention(&mut v, &[&finding_at(None, Some("a.py:40"))]);
+        assert_eq!(v, two_holders());
+        let mut v = json!({"holders": [{"key": "static:a.B.c"}]});
+        focus_retention(&mut v, &[&native]);
+        assert_eq!(v, json!({"holders": [{"key": "static:a.B.c"}]}));
+    }
+
     #[test]
     fn a_harness_is_told_in_plain_words_without_a_finding_or_a_site() {
         use dla_core::grown::HarnessAbout;
@@ -1313,8 +1515,11 @@ mod tests {
         );
         assert_eq!(
             harness_words(&m("driver", &[]), &column),
-            "a driver for other targets"
+            "a driver with no target"
         );
+        let mut other = m("driver", &[]);
+        other.targets = vec!["F9".parse().unwrap()];
+        assert_eq!(harness_words(&other, &column), "a driver for other targets");
         assert_eq!(
             harness_words(&m("driver", &["pytest-loop"]), &column),
             "the project's own tests in a loop"

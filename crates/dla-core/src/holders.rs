@@ -15,7 +15,8 @@
 //! * `dla-py-retain` `retention-path`: `holders[].key` (`static:<module>.<name>`,
 //!   `stack:<function>@<file:line>`, or the site for a holder in native code) and
 //!   `holders[].sites[].site`, the lines whose objects the holder keeps.
-//! * `alloc-stack`: `top[].root` (the root holder of a sampled path, JFR OldObjectSample).
+//! * `alloc-stack`: `top[].root` (the root holder of a sampled path, JFR OldObjectSample) and
+//!   `top[].site` (the first project frame of a growing stack: the finding at that line).
 //!
 //! The layout decides, never the tool name, so a record of a new tool with one of these
 //! layouts is read the same way.
@@ -203,6 +204,29 @@ pub fn entries_holding<'a>(record: &'a EvidenceRecord, site: &str) -> Vec<&'a Va
         .collect()
 }
 
+/// The types of the objects a `holders` entry keeps (`types`, the type of each kept object and of
+/// each step that repeats): the `py.type:<T>.count` columns it accounts for.
+pub fn entry_types(entry: &Value) -> Vec<&str> {
+    entry
+        .get("types")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect()
+}
+
+/// The `holders` entries of a retention record that list the type `ty` among the objects they
+/// keep. Empty for a record of authority `static` and for another kind.
+pub fn entries_with_type<'a>(record: &'a EvidenceRecord, ty: &str) -> Vec<&'a Value> {
+    if record.authority == Authority::Static || record.kind != EvidenceKind::RetentionPath {
+        return Vec::new();
+    }
+    list_keys(&record.result, "holders")
+        .filter(|e| entry_types(e).contains(&ty))
+        .collect()
+}
+
 /// True when the `holders` entry `entry` is the holder of `owner` (its key names the owner,
 /// exactly or as a shorter form).
 pub fn entry_is_owner(entry: &Value, owner: &str) -> bool {
@@ -321,14 +345,26 @@ pub fn names_holder(record: &EvidenceRecord, finding: &Finding) -> bool {
             }
             vgdb_names(r, finding)
         }
-        EvidenceKind::AllocStack => finding.owner.as_deref().is_some_and(|owner| {
-            list_keys(r, "top").any(|row| {
-                row.get("root")
-                    .and_then(Value::as_str)
-                    .and_then(key_owner)
-                    .is_some_and(|k| owners_match(&k, owner))
+        EvidenceKind::AllocStack => {
+            finding.owner.as_deref().is_some_and(|owner| {
+                list_keys(r, "top").any(|row| {
+                    row.get("root")
+                        .and_then(Value::as_str)
+                        .and_then(key_owner)
+                        .is_some_and(|k| owners_match(&k, owner))
+                })
             })
-        }),
+                // A growing stack whose first project frame is the finding's line: a summary made
+                // before the finding was added counts for it once it exists.
+                || ((finding.owner.is_none() || record.tool.name.starts_with("py-"))
+                    && finding.site.as_deref().is_some_and(|site| {
+                    list_keys(r, "top").any(|row| {
+                        row.get("site")
+                            .and_then(Value::as_str)
+                            .is_some_and(|s| s.trim() == site.trim())
+                    })
+                }))
+        }
         _ => false,
     }
 }
@@ -719,6 +755,20 @@ mod tests {
             &bare,
             &finding(Some("shop.Cache.entries"), Some("src/A.java:9"))
         ));
+        // A finding with no owner at the line a growing stack starts at (a summary made before the
+        // finding existed): the stack is its own.
+        assert!(names_holder(&bare, &finding(None, Some(" src/A.java:9 "))));
+        assert!(!names_holder(&bare, &finding(None, Some("src/A.java:10"))));
+        // A Python stack at the line names a finding that has an owner too: the owner of a Python
+        // holder is found from the chains, not from the stack.
+        let py = rec(
+            EvidenceKind::AllocStack,
+            Authority::Live,
+            "py-tracemalloc",
+            json!({"mode": "single", "top": [{"at": "a", "site": "a.py:9"}]}),
+        );
+        assert!(names_holder(&py, &finding(Some("m.g"), Some("a.py:9"))));
+        assert!(!names_holder(&py, &finding(Some("m.g"), Some("a.py:8"))));
     }
 
     #[test]

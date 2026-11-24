@@ -398,7 +398,7 @@ under the run directory and need tier 1.
   - Python: `--capture histogram,alloc,nonheap,heap` (type counts, tracemalloc stacks and memray when the
     program's interpreter has it, threads, tasks, ResourceWarning sites, and with `heap` the holder chains
     of the objects made at the lines that grew, read by `heap-graph`). `alloc` and `heap` slow the points
-    that take them; a growing `py.blocks@` line is explained by `--capture alloc,heap`.
+    that take them; a growing `py.blocks@` line is explained by `--capture alloc,heap` (one run, two summarize commands).
   - Rust and native, program started directly: `--tool valgrind` (memcheck XML plus the vgdb chain
     files) or `--tool heaptrack` (`heaptrack_print` report and a first-to-last diff) instead of a
     measured series. A wrapper (make, sh) gets no vgdb chain. A missing tool refuses with

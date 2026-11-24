@@ -69,22 +69,33 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   were made, not who keeps them, and in a loop over the project's tests several lines often grow because one
   holder keeps them all (a module-level object that stores an exception and raises that same object again keeps
   every raising frame and its locals through the growing traceback). The route is a growing line, then who
-  holds it, then one finding at the holder. Run `dla harness run H --mode <m> --capture heap` as soon as a trend
-  lists growing lines that no finding is at (the trend says so in `holders_hint`) and the `dla summarize
-  heap-graph` command that run prints. Its record lists the holders: `static:<module>.<name>` is a module
+  holds it, then one finding at the holder. Run `dla harness run H --mode <m> --capture alloc,heap` as soon as a trend
+  lists growing lines that no finding is at (the trend says so in `holders_hint`) and the two `dla summarize`
+  commands that run prints (`alloc-stack-diff` for the stacks, `heap-graph` for the holders): one capture serves
+  both, and a stack summary made before the finding was added counts for the finding once it exists. Its record lists the holders: `static:<module>.<name>` is a module
   global or a class attribute (static/global), `stack:<function>@<file:line>` a function frame
   (blocked-stack), and a holder keyed by a bare `file:line` with `unreferenced` is held from native code or
-  by a reference lost there. Each holder lists the lines it keeps with their block counts at the first and
-  last dump, the kept objects found and `path`, the chain with the most objects from a kept object to the
+  by a reference lost there. Each holder lists the lines it keeps (`sites`: it keeps at least a quarter of the
+  objects sampled for the line; the others are `minor_sites` and tie nothing) with their block counts at the
+  first and last dump (`first` is null for a file of one dump point), the types of the objects it keeps
+  (`types`: the kept object of each chain and a step that repeats; the `py.type:<T>.count` columns of those
+  types are the holder's too), the kept objects found and `path`, the chain with the most objects from a kept object to the
   holder (`via` is how the next step refers to it, `at` a place in code, `repeat` a run of the same step).
   `next` prints the `dla ledger add ... --site <the place nearest the holder> --owner <module.name>` command
   for a holder that no finding names: add one finding there, and it accounts for every line the holder keeps
   (the final gate lists those lines as tied to that finding and no add command for them); then the route of
-  the finding as above. When one holder keeps several of the lines, never add a finding per line. A holder
+  the finding as above. When one holder keeps several of the lines, never add a finding per line. A line whose
+  block growth is far larger than the objects found for it (under a tenth, for a growth of 20 blocks or more)
+  also has the native entry, and a record that says `no_chain` (the command output says `no_chain_sites`) names
+  the lines that have kept objects and no chain, with the reason (the time bound or another limit). A holder
   that is native (`unreferenced`: no Python container refers to the blocks, so the test runner, pytest or the
   tracer do not hold them) is explained by the extension function the line calls: read it for the reference
-  it keeps, and add the finding at the line. Values are not written (a dict key is shown as its type) unless
-  the run's consent allows raw values.
+  it keeps, and add the finding at the line. The bundle of a finding shows only the holder entries that hold its line
+  or are owned by its owner (`other_holders` says how many were left out), and a retention record stands in for
+  the stack only when such an entry has a chain: an `unreferenced` entry does not, so the stack summary is still
+  required for a native line. Names of files are relative to the project in the copy and in the source tree of
+  an editable install alike; a file outside the project is `<outside>/<name>`. Values are not written (a dict
+  key is shown as its type) unless the run's consent allows raw values.
 - A table at module level that the project fills at import time through a registration function (plugin
   modules call it, or a wrapper of it, at their top level), and that a driver grows by calling that function
   or its wrapper with new keys, is reported as grown by the registration function itself, not as reproduced

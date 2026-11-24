@@ -81,7 +81,7 @@ struct SiteIn {
     #[serde(default)]
     site: String,
     #[serde(default)]
-    blocks_first: u64,
+    blocks_first: Option<u64>,
     #[serde(default)]
     blocks_last: u64,
     #[serde(default)]
@@ -136,11 +136,24 @@ struct StepIn {
     repeat: Option<u64>,
 }
 
+/// A holder holds a site (it ties the site's column) only when its chains carry at least this
+/// share of the objects sampled for the site, a quarter; below it the site is a minor one.
+const MAJOR_SHARE: f64 = 0.25;
+/// A site whose block growth is at least this many blocks can be told to belong to native code.
+const THIN_MIN_GROWTH: u64 = 20;
+/// A site for which the objects found are fewer than this share of its block growth, a tenth,
+/// belongs to native code as well: the Python holders of the few objects found are minor.
+const THIN_SHARE: f64 = 0.1;
+/// Types a holder lists in the evidence record.
+const RECORD_TYPES: usize = 6;
+/// Minor sites a holder lists in the evidence record.
+const RECORD_MINOR: usize = 4;
+
 /// One site a holder holds.
 #[derive(Debug, Clone)]
 struct Held {
     site: String,
-    first: u64,
+    first: Option<u64>,
     last: u64,
     tracked: u64,
     untracked: u64,
@@ -163,13 +176,32 @@ struct HolderOut {
     /// `module.name`, the form the tie rule uses; `None` for a stack or a native holder.
     owner: Option<String>,
     sites: Vec<Held>,
+    /// Sites where the holder keeps a small part of the objects sampled: no tie, no command.
+    minor: Vec<Held>,
+    /// The types of the objects it keeps (the kept object of each chain and a step that repeats),
+    /// with the number of objects.
+    types: BTreeMap<String, u64>,
     kept: u64,
     paths: Vec<PathRow>,
     /// No Python container refers to the blocks or objects of this holder.
     unreferenced: bool,
 }
 
+impl Held {
+    /// Blocks gained between the dump points; the last count when there was one dump point.
+    fn growth(&self) -> u64 {
+        self.last.saturating_sub(self.first.unwrap_or(0))
+    }
+}
+
 impl HolderOut {
+    /// The types it keeps, most frequent first.
+    fn types_sorted(&self) -> Vec<(&str, u64)> {
+        let mut v: Vec<(&str, u64)> = self.types.iter().map(|(k, n)| (k.as_str(), *n)).collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        v
+    }
+
     /// The chain with the most objects.
     fn best(&self) -> Option<&PathRow> {
         self.paths.iter().max_by_key(|p| p.count)
@@ -183,7 +215,7 @@ impl HolderOut {
             .or_else(|| {
                 self.sites
                     .iter()
-                    .max_by_key(|s| s.last.saturating_sub(s.first))
+                    .max_by_key(|s| s.growth())
                     .map(|s| s.site.clone())
             })
     }
@@ -229,7 +261,21 @@ fn holders_of(f: &File, red: &super::redact::Redactor) -> (Vec<HolderOut>, u64) 
         at: s.at.as_deref().map(name),
         repeat: s.repeat,
     };
+    /// One group of chains of a site, before it is told which holder it belongs to.
+    struct Piece {
+        key: String,
+        kind: FindingHolder,
+        owner: Option<String>,
+        unreferenced: bool,
+        count: u64,
+        steps: Vec<StepIn>,
+    }
     for site in &f.sites {
+        let found = site.found_tracked + site.found_untracked;
+        let growth = site
+            .blocks_first
+            .map_or(0, |b| site.blocks_last.saturating_sub(b));
+        let thin = growth >= THIN_MIN_GROWTH && (found as f64) < THIN_SHARE * growth as f64;
         let held = Held {
             site: name(&site.site),
             first: site.blocks_first,
@@ -238,97 +284,107 @@ fn holders_of(f: &File, red: &super::redact::Redactor) -> (Vec<HolderOut>, u64) 
             untracked: site.found_untracked,
             kept: 0,
         };
-        let mut add = |key: String,
-                       kind: FindingHolder,
-                       owner: Option<String>,
-                       unreferenced: bool,
-                       count: u64,
-                       steps: Vec<StepIn>| {
-            let h = by_key.entry(key.clone()).or_insert_with(|| HolderOut {
-                key,
-                kind,
-                owner,
-                sites: Vec::new(),
-                kept: 0,
-                paths: Vec::new(),
-                unreferenced,
-            });
-            h.kept += count;
-            match h.sites.iter_mut().find(|s| s.site == held.site) {
-                Some(s) => s.kept += count,
-                None => h.sites.push(Held {
-                    kept: count,
-                    ..held.clone()
-                }),
-            }
-            if !steps.is_empty() {
-                h.paths.push(PathRow {
-                    site: held.site.clone(),
-                    count,
-                    steps,
-                });
-            }
+        let native = |count: u64, steps: Vec<StepIn>| Piece {
+            key: held.site.clone(),
+            kind: FindingHolder::NativeHandleGlobalRef,
+            owner: None,
+            unreferenced: true,
+            count,
+            steps,
         };
+        let mut pieces: Vec<Piece> = Vec::new();
         if site.note.is_some() && site.chains.is_empty() {
-            add(
-                held.site.clone(),
-                FindingHolder::NativeHandleGlobalRef,
-                None,
-                true,
-                0,
-                Vec::new(),
-            );
-            continue;
+            pieces.push(native(0, Vec::new()));
         }
         for c in &site.chains {
             let steps: Vec<StepIn> = c.steps.iter().map(step).collect();
+            let piece = |key: String, kind, owner: Option<String>| Piece {
+                key,
+                kind,
+                owner,
+                unreferenced: false,
+                count: c.count,
+                steps: steps.clone(),
+            };
             match c.root.kind.as_str() {
                 "module-global" => {
                     let owner = name(&format!("{}.{}", c.root.module, c.root.key));
-                    add(
+                    pieces.push(piece(
                         format!("static:{owner}"),
                         FindingHolder::StaticGlobal,
                         Some(owner),
-                        false,
-                        c.count,
-                        steps,
-                    );
+                    ));
                 }
                 "class-attribute" => {
                     let owner = name(&format!("{}.{}", c.root.class_name, c.root.attribute));
-                    add(
+                    pieces.push(piece(
                         format!("static:{owner}"),
                         FindingHolder::StaticGlobal,
                         Some(owner),
-                        false,
-                        c.count,
-                        steps,
-                    );
+                    ));
                 }
-                "frame" => add(
+                "frame" => pieces.push(piece(
                     format!("stack:{}@{}", name(&c.root.function), name(&c.root.at)),
                     FindingHolder::BlockedStack,
                     None,
-                    false,
-                    c.count,
-                    steps,
-                ),
-                "no-referrer" => add(
-                    held.site.clone(),
-                    FindingHolder::NativeHandleGlobalRef,
-                    None,
-                    true,
-                    c.count,
-                    steps,
-                ),
+                )),
+                "no-referrer" => pieces.push(native(c.count, steps.clone())),
                 _ => unrooted += c.count,
+            }
+        }
+        // A site that belongs to native code as much as to anything: its own native entry too.
+        if thin && !pieces.iter().any(|p| p.key == held.site) {
+            pieces.push(native(0, Vec::new()));
+        }
+        // What each holder keeps of the objects sampled for this site.
+        let mut share: BTreeMap<String, u64> = BTreeMap::new();
+        for p in &pieces {
+            *share.entry(p.key.clone()).or_default() += p.count;
+        }
+        for p in pieces {
+            let total = share[&p.key];
+            let native_entry = p.unreferenced;
+            let major = native_entry
+                || (!thin && site.kept > 0 && (total as f64) >= MAJOR_SHARE * site.kept as f64);
+            let h = by_key.entry(p.key.clone()).or_insert_with(|| HolderOut {
+                key: p.key.clone(),
+                kind: p.kind,
+                owner: p.owner.clone(),
+                sites: Vec::new(),
+                minor: Vec::new(),
+                types: BTreeMap::new(),
+                kept: 0,
+                paths: Vec::new(),
+                unreferenced: p.unreferenced,
+            });
+            h.kept += p.count;
+            let list = if major { &mut h.sites } else { &mut h.minor };
+            match list.iter_mut().find(|s| s.site == held.site) {
+                Some(s) => s.kept += p.count,
+                None => list.push(Held {
+                    kept: p.count,
+                    ..held.clone()
+                }),
+            }
+            if let Some(first) = p.steps.first() {
+                *h.types.entry(first.ty.clone()).or_default() += p.count;
+            }
+            for st in p.steps.iter().skip(1).filter(|st| st.repeat.is_some()) {
+                *h.types.entry(st.ty.clone()).or_default() += p.count;
+            }
+            if !p.steps.is_empty() {
+                h.paths.push(PathRow {
+                    site: held.site.clone(),
+                    count: p.count,
+                    steps: p.steps,
+                });
             }
         }
     }
     let mut v: Vec<HolderOut> = by_key.into_values().collect();
     for h in &mut v {
-        h.sites
-            .sort_by_key(|s| std::cmp::Reverse(s.last.saturating_sub(s.first)));
+        h.sites.sort_by_key(|s| std::cmp::Reverse(s.growth()));
+        h.minor.sort_by_key(|s| std::cmp::Reverse(s.growth()));
     }
     v.sort_by(|a, b| b.kept.cmp(&a.kept).then_with(|| a.key.cmp(&b.key)));
     (v, unrooted)
@@ -393,7 +449,7 @@ fn short_steps(steps: &[StepIn], n: usize) -> Vec<StepIn> {
 }
 
 /// The holder as the evidence record shows it.
-fn record_entry(h: &HolderOut, sites: usize, steps: usize) -> Value {
+fn record_entry(h: &HolderOut, sites: usize, steps: usize, types: usize) -> Value {
     let mut o = Map::new();
     o.insert("key".into(), json!(clip(&h.key, CLIP)));
     o.insert("holder_kind".into(), json!(h.kind));
@@ -410,6 +466,30 @@ fn record_entry(h: &HolderOut, sites: usize, steps: usize) -> Value {
     );
     if h.sites.len() > sites {
         o.insert("more_sites".into(), json!(h.sites.len() - sites));
+    }
+    if !h.minor.is_empty() {
+        o.insert(
+            "minor_sites".into(),
+            json!(
+                h.minor
+                    .iter()
+                    .take(RECORD_MINOR.min(types))
+                    .map(|s| clip(&s.site, CLIP))
+                    .collect::<Vec<_>>()
+            ),
+        );
+    }
+    let tys = h.types_sorted();
+    if !tys.is_empty() && types > 0 {
+        o.insert(
+            "types".into(),
+            json!(
+                tys.iter()
+                    .take(types)
+                    .map(|(t, _)| clip(t, CLIP))
+                    .collect::<Vec<_>>()
+            ),
+        );
     }
     if h.unreferenced {
         o.insert("unreferenced".into(), json!(UNREFERENCED));
@@ -442,6 +522,31 @@ fn raw_entry(h: &HolderOut) -> Value {
                     "found_untracked": s.untracked,
                     "kept": s.kept,
                 }))
+                .collect::<Vec<_>>()
+        ),
+    );
+    o.insert(
+        "minor_sites".into(),
+        json!(
+            h.minor
+                .iter()
+                .map(|s| json!({
+                    "site": s.site,
+                    "first": s.first,
+                    "last": s.last,
+                    "found_tracked": s.tracked,
+                    "found_untracked": s.untracked,
+                    "kept": s.kept,
+                }))
+                .collect::<Vec<_>>()
+        ),
+    );
+    o.insert(
+        "types".into(),
+        json!(
+            h.types_sorted()
+                .iter()
+                .map(|(t, n)| json!({"type": t, "objects": n}))
                 .collect::<Vec<_>>()
         ),
     );
@@ -626,6 +731,8 @@ fn retain(ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
     let mut all_unrooted = 0u64;
     let mut unreferenced_sites = 0usize;
     let mut files: Vec<Value> = Vec::new();
+    let mut no_chain_total = 0usize;
+    let mut no_chain_reason: Option<String> = None;
     for (i, f) in inputs.iter().zip(&parsed) {
         let (holders, unrooted) = holders_of(f, red);
         all_unrooted += unrooted;
@@ -651,6 +758,32 @@ fn retain(ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
                 "{unrooted} kept object(s) ended at the depth limit or reached no root, so they name no holder"
             ));
         }
+        if f.sites.iter().any(|s| s.blocks_first.is_none()) {
+            limitations.push(
+                "the file has one dump point (blocks_first is null): growth was not computed, and the sites are the largest ones at that point".to_owned(),
+            );
+        }
+        // Sites that have kept objects and no chain: the walk did not finish.
+        let no_chain = f
+            .sites
+            .iter()
+            .filter(|s| s.kept > 0 && s.chains.is_empty())
+            .count();
+        let no_chain_why = f
+            .limitations
+            .iter()
+            .find(|l| l.contains("have no chain") || l.contains("stopped the scan"))
+            .map_or_else(
+                || "no reason is given in the file".to_owned(),
+                |l| clip(l, 160),
+            );
+        if no_chain > 0 {
+            limitations.push(format!(
+                "{no_chain} site(s) have kept objects and no chain: {no_chain_why}"
+            ));
+        }
+        no_chain_total += no_chain;
+        no_chain_reason.get_or_insert_with(|| no_chain_why.clone());
         let raw_value = json!({
             "id": id,
             "tool": TOOL,
@@ -702,40 +835,54 @@ fn retain(ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
         // Holders the findings name go first, then by kept objects.
         let mut order: Vec<usize> = (0..holders.len()).collect();
         order.sort_by_key(|&k| (ties[k].tie.is_none(), std::cmp::Reverse(holders[k].kept)));
-        let build = |n: usize, sites: usize, steps: usize, with_ties: bool| -> Value {
-            let mut base = Map::new();
-            base.insert("file".into(), json!(clip(i.shown(), 80)));
-            base.insert("sites".into(), json!(f.sites.len()));
-            base.insert(
-                "kept".into(),
-                json!(holders.iter().map(|h| h.kept).sum::<u64>()),
-            );
-            base.insert(
-                "holders".into(),
-                json!(
-                    order
-                        .iter()
-                        .take(n)
-                        .map(|&k| record_entry(&holders[k], sites, steps))
-                        .collect::<Vec<_>>()
-                ),
-            );
-            if holders.len() > n {
-                base.insert("more".into(), json!(holders.len() - n));
-            }
-            if with_ties && !stated.is_empty() {
-                base.insert("finding".into(), json!(cited[0]));
-                base.insert("candidates".into(), json!(cited));
-                base.insert("ties".into(), json!(stated));
-            }
-            Value::Object(base)
-        };
-        let (mut n, mut sites, mut steps, mut with_ties) =
-            (holders.len(), RECORD_SITES, RECORD_STEPS, true);
-        let mut result = build(n, sites, steps, with_ties);
+        let build =
+            |n: usize, sites: usize, steps: usize, types: usize, with_ties: bool| -> Value {
+                let mut base = Map::new();
+                base.insert("file".into(), json!(clip(i.shown(), 80)));
+                base.insert("sites".into(), json!(f.sites.len()));
+                base.insert(
+                    "kept".into(),
+                    json!(holders.iter().map(|h| h.kept).sum::<u64>()),
+                );
+                base.insert(
+                    "holders".into(),
+                    json!(
+                        order
+                            .iter()
+                            .take(n)
+                            .map(|&k| record_entry(&holders[k], sites, steps, types))
+                            .collect::<Vec<_>>()
+                    ),
+                );
+                if holders.len() > n {
+                    base.insert("more".into(), json!(holders.len() - n));
+                }
+                if no_chain > 0 {
+                    base.insert(
+                        "no_chain".into(),
+                        json!({"sites": no_chain, "why": clip(&no_chain_why, 100)}),
+                    );
+                }
+                if with_ties && !stated.is_empty() {
+                    base.insert("finding".into(), json!(cited[0]));
+                    base.insert("candidates".into(), json!(cited));
+                    base.insert("ties".into(), json!(stated));
+                }
+                Value::Object(base)
+            };
+        let (mut n, mut sites, mut steps, mut types, mut with_ties) = (
+            holders.len(),
+            RECORD_SITES,
+            RECORD_STEPS,
+            RECORD_TYPES,
+            true,
+        );
+        let mut result = build(n, sites, steps, types, with_ties);
         while dla_core::evidence::result_size(&result) > emit::RESULT_BUDGET {
             if steps > 4 {
                 steps = 4;
+            } else if types > 3 {
+                types = 3;
             } else if sites > 2 {
                 sites = 2;
             } else if n > 1 {
@@ -744,10 +891,12 @@ fn retain(ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
                 sites = 1;
             } else if with_ties {
                 with_ties = false;
+            } else if types > 0 {
+                types = 0;
             } else {
                 break;
             }
-            result = build(n, sites, steps, with_ties);
+            result = build(n, sites, steps, types, with_ties);
         }
         let mut spec = EvidenceSpec::new(
             EvidenceKind::RetentionPath,
@@ -808,7 +957,10 @@ fn retain(ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
                     }
                 }
                 None => {
-                    if shown_holders.len() < SHOWN_HOLDERS && next.len() < SHOWN_NEXT {
+                    if shown_holders.len() < SHOWN_HOLDERS
+                        && next.len() < SHOWN_NEXT
+                        && !h.sites.is_empty()
+                    {
                         next.push(add_command(h, &evidence));
                     }
                 }
@@ -832,6 +984,10 @@ fn retain(ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
     }
     if all_unrooted > 0 {
         body.insert("unrooted".into(), json!(all_unrooted));
+    }
+    if no_chain_total > 0 {
+        body.insert("no_chain_sites".into(), json!(no_chain_total));
+        body.insert("no_chain_why".into(), json!(no_chain_reason));
     }
     body.insert("next".into(), json!(next));
     body.insert("redaction".into(), json!(red.mode()));
@@ -894,7 +1050,7 @@ mod tests {
     #[test]
     fn the_finding_site_is_the_step_nearest_the_root_that_has_one() {
         let f = file(
-            r#"{"dla_pyretain":1,"sites":[{"site":"a.py:3","blocks_first":0,"blocks_last":9,"chains":[
+            r#"{"dla_pyretain":1,"sites":[{"site":"a.py:3","blocks_first":0,"blocks_last":9,"kept":5,"chains":[
             {"count":5,"root":{"kind":"module-global","module":"m","key":"_n"},"steps":[
               {"type":"X","via":"tb_frame","at":"a.py:3"},
               {"type":"traceback","via":"__traceback__","at":"a.py:14","repeat":7},
@@ -904,7 +1060,7 @@ mod tests {
         let (h, _) = holders_of(&f, &red());
         assert_eq!(h[0].finding_site().as_deref(), Some("a.py:14"));
         let f = file(
-            r#"{"dla_pyretain":1,"sites":[{"site":"a.py:3","blocks_first":0,"blocks_last":9,"chains":[
+            r#"{"dla_pyretain":1,"sites":[{"site":"a.py:3","blocks_first":0,"blocks_last":9,"kept":5,"chains":[
             {"count":5,"root":{"kind":"module-global","module":"m","key":"_n"},"steps":[{"type":"X","via":".a"}]}]}]}"#,
         );
         let (h, _) = holders_of(&f, &red());
@@ -929,6 +1085,108 @@ mod tests {
         assert!(s.iter().any(|s| s.ty == "T3"), "{s:?}");
         let names: Vec<&str> = s.iter().map(|s| s.ty.as_str()).collect();
         assert_eq!(names, ["T0", "...", "T3", "...", "T8", "T9", "T10", "T11"]);
+    }
+
+    /// One site of `kept` sampled objects, `found` of them found, growing from `first` to `last`,
+    /// with the chains `(root key, count)` of module globals.
+    fn site_json(
+        site: &str,
+        first: u64,
+        last: u64,
+        found: u64,
+        kept: u64,
+        chains: &[(&str, u64)],
+    ) -> String {
+        let chains: Vec<String> = chains
+            .iter()
+            .map(|(k, n)| {
+                format!(
+                    r#"{{"count":{n},"root":{{"kind":"module-global","module":"m","key":"{k}"}},"steps":[{{"type":"int","via":".n"}}]}}"#
+                )
+            })
+            .collect();
+        format!(
+            r#"{{"site":"{site}","blocks_first":{first},"blocks_last":{last},"found_tracked":{found},"found_untracked":0,"kept":{kept},"chains":[{}]}}"#,
+            chains.join(",")
+        )
+    }
+
+    fn holders_for(sites: &[String]) -> Vec<HolderOut> {
+        let f = file(&format!(
+            r#"{{"dla_pyretain":1,"sites":[{}]}}"#,
+            sites.join(",")
+        ));
+        holders_of(&f, &red()).0
+    }
+
+    #[test]
+    fn a_holder_holds_a_site_only_with_a_quarter_of_the_objects_sampled_for_it() {
+        // 40 objects sampled: 10 (exactly a quarter) hold the site, 9 do not.
+        let h = holders_for(&[site_json(
+            "a.py:1",
+            0,
+            100,
+            40,
+            40,
+            &[("big", 31), ("edge", 9)],
+        )]);
+        let by = |k: &str| h.iter().find(|h| h.key == format!("static:m.{k}")).unwrap();
+        assert_eq!(by("big").sites.len(), 1);
+        assert!(by("edge").sites.is_empty() && by("edge").minor.len() == 1);
+        let h = holders_for(&[site_json(
+            "a.py:1",
+            0,
+            100,
+            40,
+            40,
+            &[("big", 30), ("edge", 10)],
+        )]);
+        let by = |k: &str| h.iter().find(|h| h.key == format!("static:m.{k}")).unwrap();
+        assert_eq!(by("edge").sites.len(), 1, "a quarter holds the site");
+        assert!(by("edge").minor.is_empty());
+    }
+
+    #[test]
+    fn a_site_with_few_objects_found_for_its_growth_is_native_as_well() {
+        // Growth 1000: 99 objects found is under a tenth, 100 is not.
+        let few = holders_for(&[site_json("a.py:1", 0, 1000, 99, 40, &[("g", 40)])]);
+        let g = few.iter().find(|h| h.key == "static:m.g").unwrap();
+        assert!(g.sites.is_empty() && g.minor.len() == 1, "{g:?}");
+        let native = few.iter().find(|h| h.key == "a.py:1").unwrap();
+        assert!(native.unreferenced && native.sites.len() == 1);
+        let enough = holders_for(&[site_json("a.py:1", 0, 1000, 100, 40, &[("g", 40)])]);
+        assert!(enough.iter().all(|h| h.key != "a.py:1"));
+        assert_eq!(enough[0].sites.len(), 1);
+        // A growth under 20 blocks says nothing about the share found.
+        let small = holders_for(&[site_json("a.py:1", 0, 19, 1, 1, &[("g", 1)])]);
+        assert!(small.iter().all(|h| h.key != "a.py:1"));
+    }
+
+    #[test]
+    fn a_holder_lists_the_types_of_what_it_keeps_not_the_links_of_its_chains() {
+        let f = file(
+            r#"{"dla_pyretain":1,"sites":[{"site":"a.py:1","blocks_first":0,"blocks_last":9,"kept":6,"chains":[
+            {"count":4,"root":{"kind":"module-global","module":"m","key":"g"},"steps":[
+              {"type":"list"},{"type":"frame","via":"tb_frame","at":"a.py:2"},{"type":"dict","via":".d"},
+              {"type":"traceback","via":"__traceback__","repeat":90},{"type":"ImportError","via":".ex"}]},
+            {"count":2,"root":{"kind":"module-global","module":"m","key":"g"},"steps":[
+              {"type":"m.Payload"},{"type":"dict","via":".d"}]}]}]}"#,
+        );
+        let h = holders_of(&f, &red()).0;
+        let t: Vec<(&str, u64)> = h[0].types_sorted();
+        assert_eq!(t, [("list", 4), ("traceback", 4), ("m.Payload", 2)]);
+    }
+
+    #[test]
+    fn one_dump_point_is_read_and_says_growth_was_not_computed() {
+        let f = file(
+            r#"{"dla_pyretain":1,"sites":[{"site":"a.py:1","blocks_first":null,"blocks_last":50,"found_tracked":5,"kept":5,"chains":[
+            {"count":5,"root":{"kind":"module-global","module":"m","key":"g"},"steps":[{"type":"int"}]}]}]}"#,
+        );
+        let h = holders_of(&f, &red()).0;
+        assert_eq!(h[0].sites[0].first, None);
+        assert_eq!(h[0].sites[0].growth(), 50);
+        assert_eq!(h[0].finding_site().as_deref(), Some("a.py:1"));
     }
 
     #[test]
