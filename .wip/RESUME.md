@@ -2096,3 +2096,42 @@ flat test-loop readings get only 9 second looks.
   then logstash (--warm-m2) + Jetty.
 - After each run: keep small files in /root/dla-real/<name>-keep, delete the run directory by
   literal path. Score only after ALL runs: then read answer-key.md.
+
+## 09:36 UTC 2026-11-24: blind run otel-go ended after 9 minutes; blind Node run started
+
+- blind-otel-go: exit 0, 520 s, 81 turns, cost 1.47. Report INCOMPLETE (2 open), 7 min of a 3 h
+  budget used; 11 harness runs; queue 17 of 136 ranked targeted, 119 not targeted. Findings line:
+  confirmed 0; confirmed but disputed by the verifier 3 (two slices of a test-helper span
+  recorder, and a record that grew only because the model's unit kept adding to it; the model
+  itself says none is a leak: "The ledger required me to confirm it, but I would not call it a
+  leak"). THE MODEL STOPPED BY ITSELF: "Closing these items needs one hand-written driver per
+  batch, and I didn't have a faster way to do that", then three stop messages against the stop
+  hook ("I won't loop on the same refused step"). Also seen: H9 REDUCED RECORD (a point lost
+  sections), an entry-path harness that read unknown. Kept: /root/dla-real/blind-otel-go-keep
+  (run.json, transcript, report, state, ledgers, gate). Run directory deleted.
+  Score entry (key NOT read yet): nothing reported that the run itself calls a leak.
+- blind-interceptors started 09:34 (run 20261124-093424-bd1f), waiter running. blind-otel-python
+  still going (started 09:25).
+- Next after one of them ends: fastrace; then logstash (--warm-m2 u107/logstash-try/m2); Jetty.
+
+## 10:36 UTC 2026-11-24: blind Node run ended, no leak confirmed; blind Rust run started; CI flake
+
+- CI on main for b896d8c (version commit): run 45363801429 FAILED in clippy and test
+  (macos-latest): dla-workload lib test
+  harness::scratch::tests::a_harness_whose_lock_is_held_is_not_thinned_and_one_in_use_is_filled_first
+  at scratch.rs:1602 (after drop(guard), thin_harness was not Done). Passed on macOS in runs
+  45339326235 and 45350380373 on the same code. Failed job re-run queued (waiter bseg2xwjo, logs
+  u107/ci-main-23-rerun). Task 103 holds the hypothesis (a child forked by another test keeps
+  the open file description and so the lock until exec) and the fix; no cargo while blind runs go.
+  Publish preview.7 only after the re-run is green.
+- blind-interceptors: exit 0, 3552 s, 102 turns, cost 1.88. COMPLETE, "no leak confirmed".
+  93 harness runs, 185 series, 2 captures, 56 min of 3 h. Queue 172 of 172 targeted in 86
+  harnesses: executed 43, no coverage data 5, NOT REACHED 124 (drivers load the built bundle
+  lib/, candidates are lines of the TypeScript source src/). Residual: heap growth unattributed
+  and above threshold on 178 of 370 rows (S1 264 bytes/iteration on the "mock-respond" drivers),
+  left as unresolved open items O1, O2: measured growth never tied to a holder.
+  Kept: /root/dla-real/blind-interceptors-keep. Run directory deleted.
+  Score entry (key NOT read yet): nothing confirmed.
+- blind-fastrace started 10:33 (run 20261124-103359-0c40), waiter running. blind-otel-python
+  still going (started 09:25; waiter bsqrpquxa ends about 11:22: restart it then).
+- Next: logstash (--warm-m2 u107/logstash-try/m2), then Jetty 12.0.31 (clone the tag first).
