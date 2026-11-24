@@ -1,10 +1,7 @@
-//! `dla run abort`: stop what the run started, undo what it attached, mark it aborted.
+//! `dla run abort`: stop what the run started, undo what it attached, mark it aborted. The
+//! stopping itself is shared with `dla run stop` (`stop_processes`), which leaves the run open.
 
-use std::{
-    path::{Component, Path},
-    thread::sleep,
-    time::{Duration, Instant},
-};
+use std::path::{Component, Path};
 
 use chrono::{DateTime, Utc};
 use clap::Args;
@@ -28,8 +25,8 @@ pub struct AbortArgs {
     reason: Option<String>,
 }
 
-/// Grace between SIGTERM and SIGKILL, and the wait after each signal.
-const GRACE: Duration = Duration::from_secs(2);
+/// What `dla run abort` prints about the run it ended.
+const ENDED: &str = "this run is over: it is marked aborted for good and nothing more counts in it; dla run init starts a new run (dla run stop stops what a cut command left and keeps the run open)";
 
 /// What happened to one record.
 enum Fate {
@@ -46,30 +43,11 @@ fn key(p: &ProcessRecord) -> Key {
     (p.pid, p.start_time.clone(), p.started_at)
 }
 
-fn wait_gone(pid: u32, limit: Duration) -> bool {
-    let start = Instant::now();
-    while proc::is_alive(pid) {
-        if start.elapsed() >= limit {
-            return false;
-        }
-        sleep(Duration::from_millis(50));
-    }
-    true
-}
-
 /// SIGTERM to the group, a grace period, SIGKILL; the identity was verified before.
 fn stop_started(pid: u32) -> Fate {
-    let term = proc::kill_group(pid, "TERM") || proc::kill_pid(pid, "TERM");
-    if term && wait_gone(pid, GRACE) {
-        return Fate::Killed;
-    }
-    let kill = proc::kill_group(pid, "KILL") || proc::kill_pid(pid, "KILL");
-    if wait_gone(pid, GRACE) {
-        Fate::Killed
-    } else if kill {
-        Fate::Failed(format!("pid {pid} survived SIGKILL"))
-    } else {
-        Fate::Failed(format!("could not signal pid {pid}"))
+    match proc::stop_started(pid) {
+        Ok(()) => Fate::Killed,
+        Err(why) => Fate::Failed(why),
     }
 }
 
@@ -207,7 +185,7 @@ fn run_cleanup(run_dir: &Path, p: &ProcessRecord, process_gone: bool) -> Fate {
     }
 }
 
-fn handle(run_dir: &Path, p: &ProcessRecord) -> Fate {
+fn handle(run_dir: &Path, p: &ProcessRecord, verb: &str) -> Fate {
     match p.role {
         ProcessRole::Attached => {
             // With a recorded start time the target must still be that process;
@@ -221,7 +199,7 @@ fn handle(run_dir: &Path, p: &ProcessRecord) -> Fate {
         ProcessRole::Started => {
             let live = dla_sample::os::process_start_time(p.pid);
             if !proc::is_alive(p.pid) {
-                Fate::Gone("process was already gone at abort".to_owned())
+                Fate::Gone(format!("process was already gone at {verb}"))
             } else if proc::identity_matches(p, live.as_deref()) {
                 stop_started(p.pid)
             } else {
@@ -242,21 +220,46 @@ fn same_project(recorded: &str, project: &Path) -> bool {
     canon(Path::new(recorded)) == canon(project)
 }
 
-/// Runs `dla run abort`.
-pub fn run(ctx: &Ctx, project: &Path, a: AbortArgs) -> Res<Value> {
-    if let Some(w) = &ctx.worker {
-        return Err(Failure::refuse(
-            dla_core::error::codes::INVALID_VALUE,
-            format!("run abort is a core command and this call carries --worker {w}"),
-            "a call without --worker",
-            format!("dla --run {} run abort", ctx.run_id),
-        ));
+/// What stopping the run's processes did, to be applied to `state.json` by the caller.
+pub(super) struct Stopped {
+    pub killed: u64,
+    pub cleaned: u64,
+    pub gone: u64,
+    pub skipped: u64,
+    pub failed: u64,
+    /// At most three, kept for the output.
+    pub notes: Vec<String>,
+    done: Vec<(Key, Option<String>)>,
+}
+
+impl Stopped {
+    /// Marks the records this call stopped, in `st`, as stopped at `stamp`; a note is kept on a
+    /// record whose process was already gone, under the name of the command (`verb`).
+    pub(super) fn apply(&self, st: &mut RunState, stamp: DateTime<Utc>, verb: &str) {
+        for p in st.processes.iter_mut().filter(|p| p.stopped_at.is_none()) {
+            if let Some((_, note)) = self.done.iter().find(|(k, _)| *k == key(p)) {
+                p.stopped_at = Some(stamp);
+                if let Some(n) = note {
+                    p.cleanup.push(format!("note {verb}: {n}"));
+                }
+            }
+        }
     }
-    // Snapshot, then act without holding the run lock (a stop takes seconds), then
-    // apply the outcome to the then-current state in one locked update.
+}
+
+/// Stops the processes the run started and undoes what it attached (the records of `only`'s
+/// worker alone when given), without touching the run's status. `state.json` can come from a
+/// cloned repository: it must be this project's run before anything it names is executed or
+/// deleted.
+pub(super) fn stop_processes(
+    ctx: &Ctx,
+    project: &Path,
+    only: Option<&str>,
+    verb: &str,
+) -> Res<Stopped> {
+    // Snapshot, then act without holding the run lock (a stop takes seconds); the caller applies
+    // the outcome to the then-current state in one locked update.
     let snapshot = RunState::load(&ctx.run_dir)?;
-    // `state.json` can come from a cloned repository: it must be this project's run
-    // before anything it names is executed or deleted.
     if !same_project(&snapshot.project_root, project) {
         return Err(Failure::refuse(
             dla_core::error::codes::INVALID_VALUE,
@@ -270,46 +273,59 @@ pub fn run(ctx: &Ctx, project: &Path, a: AbortArgs) -> Res<Value> {
             "dla run init",
         ));
     }
-    let (mut killed, mut cleaned, mut gone, mut failed) = (0u64, 0u64, 0u64, 0u64);
-    let mut skipped = 0u64;
-    let mut notes: Vec<String> = Vec::new();
-    let mut done: Vec<(Key, Option<String>)> = Vec::new();
+    let mut out = Stopped {
+        killed: 0,
+        cleaned: 0,
+        gone: 0,
+        skipped: 0,
+        failed: 0,
+        notes: Vec::new(),
+        done: Vec::new(),
+    };
     for p in &snapshot.processes {
-        if p.stopped_at.is_some() {
-            skipped += 1;
+        if p.stopped_at.is_some() || only.is_some_and(|w| p.worker.as_deref() != Some(w)) {
+            out.skipped += u64::from(p.stopped_at.is_some());
             continue;
         }
-        match handle(&ctx.run_dir, p) {
+        match handle(&ctx.run_dir, p, verb) {
             Fate::Killed => {
-                killed += 1;
-                done.push((key(p), None));
+                out.killed += 1;
+                out.done.push((key(p), None));
             }
             Fate::Cleaned => {
-                cleaned += 1;
-                done.push((key(p), None));
+                out.cleaned += 1;
+                out.done.push((key(p), None));
             }
             Fate::Gone(note) => {
-                gone += 1;
-                notes.push(format!("pid {}: {note}", p.pid));
-                done.push((key(p), Some(note)));
+                out.gone += 1;
+                out.notes.push(format!("pid {}: {note}", p.pid));
+                out.done.push((key(p), Some(note)));
             }
             Fate::Failed(why) => {
-                failed += 1;
-                notes.push(format!("pid {}: {why}", p.pid));
+                out.failed += 1;
+                out.notes.push(format!("pid {}: {why}", p.pid));
             }
         }
     }
+    out.notes.truncate(3);
+    Ok(out)
+}
+
+/// Runs `dla run abort`.
+pub fn run(ctx: &Ctx, project: &Path, a: AbortArgs) -> Res<Value> {
+    if let Some(w) = &ctx.worker {
+        return Err(Failure::refuse(
+            dla_core::error::codes::INVALID_VALUE,
+            format!("run abort is a core command and this call carries --worker {w}"),
+            "a call without --worker",
+            format!("dla --run {} run abort", ctx.run_id),
+        ));
+    }
+    let stopped = stop_processes(ctx, project, None, "abort")?;
     let given = a.reason.filter(|r| !r.trim().is_empty());
     let stamp = now_utc();
     let status = RunState::update(&ctx.run_dir, |st| {
-        for p in st.processes.iter_mut().filter(|p| p.stopped_at.is_none()) {
-            if let Some((_, note)) = done.iter().find(|(k, _)| *k == key(p)) {
-                p.stopped_at = Some(stamp);
-                if let Some(n) = note {
-                    p.cleanup.push(format!("note abort: {n}"));
-                }
-            }
-        }
+        stopped.apply(st, stamp, "abort");
         // A repeated abort without a new reason keeps the first one.
         let keep = st.status == RunStatus::Aborted && given.is_none();
         st.status = RunStatus::Aborted;
@@ -323,17 +339,17 @@ pub fn run(ctx: &Ctx, project: &Path, a: AbortArgs) -> Res<Value> {
         Ok((st.status, st.incomplete_reason.clone().unwrap_or_default()))
     })?;
     let (status, reason) = status;
-    notes.truncate(3);
     Ok(json!({
-        "ok": failed == 0,
+        "ok": stopped.failed == 0,
         "run_id": ctx.run_id,
+        "message": ENDED,
         "status": status.as_str(),
         "reason": reason,
-        "killed": killed,
-        "cleaned": cleaned,
-        "gone": gone,
-        "skipped": skipped,
-        "failed": failed,
-        "notes": notes,
+        "killed": stopped.killed,
+        "cleaned": stopped.cleaned,
+        "gone": stopped.gone,
+        "skipped": stopped.skipped,
+        "failed": stopped.failed,
+        "notes": stopped.notes,
     }))
 }

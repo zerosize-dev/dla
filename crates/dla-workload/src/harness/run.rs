@@ -72,7 +72,7 @@ use super::{
     capture::{self, AgentNotes, CaptureSet, NativeTool},
     cover::{self, CoverageOutcome},
     dumps::{self, DumpFile, Rec},
-    harness_dir, lines,
+    harness_dir, limit, lines,
     pace::{self, Pace},
     pymemray, scratch,
     symbolize::{Sites, symbolize},
@@ -243,6 +243,17 @@ pub struct RunOutput {
     pub dependency_env: BTreeMap<String, String>,
     /// Of those, the names that were unset here and taken from the last run of the harness.
     pub env_reused: Vec<String>,
+    /// What a test-loop process was given of the command's time (`DLA_COMMAND_SECS`).
+    pub time_plan: Option<limit::Plan>,
+    /// One sentence per process an earlier command of this harness left running that this
+    /// command stopped (or could not stop).
+    pub left_stopped: Vec<String>,
+    /// The run asked for a capture the runtime writes.
+    pub capture_run: bool,
+    /// A series of this harness with enough points for the gate existed before this run.
+    pub earlier_full_series: bool,
+    /// The `dla summarize` commands that read this run's captures, most useful first.
+    pub capture_commands: Vec<String>,
 }
 
 fn failed(why: impl Into<String>, missing: impl Into<String>, fix: impl Into<String>) -> Refusal {
@@ -1464,6 +1475,8 @@ struct ModeRun {
     captures: Vec<CaptureFile>,
     /// Why this mode stopped before its plan (the run deadline).
     partial: Vec<String>,
+    /// The time the process of a test loop was given.
+    plan: Option<limit::Plan>,
 }
 
 /// The time the run may still use: the nearest deadline less a reserve for the work that
@@ -1684,6 +1697,25 @@ fn too_long(
 }
 
 /// Whether this run asks the agent of the harness's runtime for raw captures.
+/// Whether a series of `manifest` with at least as many measured points as the gate needs
+/// exists already (a run made with `--capture` after it is for the capture, not for the series).
+fn earlier_full_series(ctx: &ToolCtx, manifest: &HarnessManifest) -> bool {
+    use dla_core::series::{SERIES_DIR, SeriesFile};
+    let need = dla_stats::GateThresholds::default().min_points as usize;
+    let Ok(rd) = fs::read_dir(ctx.run_dir.join(SERIES_DIR)) else {
+        return false;
+    };
+    rd.flatten().any(|e| {
+        let name = e.file_name().to_string_lossy().into_owned();
+        name.strip_suffix(".json")
+            .and_then(|id| SeriesFile::load(&ctx.run_dir, id).ok())
+            .is_some_and(|s| {
+                s.source.harness.as_deref() == Some(manifest.id.as_str())
+                    && s.points.len().saturating_sub(s.warmup as usize) >= need
+            })
+    })
+}
+
 fn capture_active(manifest: &HarnessManifest, opts: &RunOptions) -> bool {
     !opts.capture.is_empty() && !capture::supported(manifest.runtime).is_empty()
 }
@@ -2096,12 +2128,36 @@ fn run_driver_mode(
     allow: Option<&Allowance>,
     pace: &mut Pace,
     first_process: bool,
+    started: Instant,
+    modes_left: usize,
 ) -> Result<ModeRun, Refusal> {
     let rounds = opts.iterations.unwrap_or(manifest.iterations) + opts.extra;
     let total_rounds = manifest.warmup + rounds;
     // One process runs all rounds, so the pace is the whole run's: an earlier series of
     // this harness, or the mode that just ran.
     let planned = manifest.step.saturating_mul(u64::from(total_rounds)) as f64;
+    let capturing = capture_active(manifest, opts);
+    let dumps_wanted = opts.capture_dumps.unwrap_or(capture::DEFAULT_DUMPS);
+    // A test loop ends by itself within the command's time: its process gets what is left of
+    // `DLA_COMMAND_SECS` after the start-up and reading time and the capture (see `limit`).
+    let mut plan: Option<limit::Plan> = manifest.is_test_loop().then(|| {
+        limit::Plan::of(
+            started,
+            modes_left,
+            &if capturing {
+                opts.capture
+            } else {
+                CaptureSet::default()
+            },
+            dumps_wanted,
+            manifest.runtime == dla_core::runtime::Runtime::Python,
+            timeout,
+            None,
+        )
+    });
+    let timeout = plan
+        .as_ref()
+        .map_or(timeout, |p| Duration::from_secs(p.process));
     let (timeout, capped) = match allow {
         Some(a) => {
             let estimate = driver_estimate(manifest, pace.predict(planned), timeout);
@@ -2124,8 +2180,16 @@ fn run_driver_mode(
         None => (timeout, false),
     };
     let label = format!("p1-{}", mode.as_str());
-    let capturing = capture_active(manifest, opts);
-    let dumps_wanted = opts.capture_dumps.unwrap_or(capture::DEFAULT_DUMPS);
+    // The run's own deadline may have cut the process further: the loop gets the cut limit
+    // minus what the capture needs.
+    if let Some(p) = plan.as_mut() {
+        p.process = timeout.as_secs();
+        p.loop_secs = p
+            .process
+            .saturating_sub(p.capture)
+            .max(p.process / 3)
+            .max(1);
+    }
     let pe = PointEnv {
         manifest,
         paths,
@@ -2145,7 +2209,7 @@ fn run_driver_mode(
     clear_phase(&dump);
     clear_stale_capture_files(paths, &label, capturing);
     let command = manifest.run.argv.join(" ");
-    let attribution: Vec<(&str, String)> = match &opts.attribute {
+    let mut attribution: Vec<(&str, String)> = match &opts.attribute {
         Some(a) if manifest.is_test_loop() => {
             let out = paths
                 .hdir
@@ -2162,10 +2226,15 @@ fn run_driver_mode(
         }
         _ => Vec::new(),
     };
+    if let Some(p) = &plan {
+        // The loop fits its rounds into this, not into the time before the kill.
+        attribution.push(("DLA_TIME_LIMIT_SECS", p.loop_secs.to_string()));
+    }
     let spec = pe.exec_spec(timeout, &command, &attribution);
     let res = exec(ctx, &spec)?;
     let mut run = ModeRun {
         processes: 1,
+        plan,
         ..ModeRun::default()
     };
     let log_rel = paths.rel(ctx, &spec.log);
@@ -2916,6 +2985,7 @@ pub fn run_points(
     opts: &RunOptions,
 ) -> Result<RunOutput, Refusal> {
     ctx.require_tier(1, "dla harness run")?;
+    let command_started = Instant::now();
     // The kinds this runtime's agent does not write are dropped here and named below.
     let masked = RunOptions {
         capture: opts
@@ -2932,7 +3002,16 @@ pub fn run_points(
     let reuse = dla_core::harness::dependency_env_to_reuse(&ctx.run_dir, &manifest.id);
     let mut dependency_env = dla_core::harness::current_dependency_env();
     dependency_env.extend(reuse.iter().cloned());
+    // A command that was cut left its measured process running: it goes before this one starts.
+    let left_stopped = if opts.tool.is_none() && manifest.mode == HarnessMode::Driver {
+        limit::stop_leftovers(ctx, manifest)
+    } else {
+        Vec::new()
+    };
     let mut out = RunOutput {
+        left_stopped,
+        capture_run: capture_active(manifest, opts) && opts.tool.is_none(),
+        earlier_full_series: earlier_full_series(ctx, manifest),
         gaps: manifest.gaps.clone(),
         env_reused: reuse.iter().map(|(k, _)| k.clone()).collect(),
         dependency_env,
@@ -3046,7 +3125,8 @@ pub fn run_points(
     let mut harness_failed: Option<Refusal> = None;
     let allow = Allowance::of(ctx);
     let mut carried = Pace::new();
-    for mode in modes {
+    let n_modes = modes.len();
+    for (at, mode) in modes.into_iter().enumerate() {
         let mut pace = seed_pace(ctx, manifest, opts, mode);
         if pace.is_empty() {
             pace = carried.clone();
@@ -3073,9 +3153,14 @@ pub fn run_points(
                 allow.as_ref(),
                 &mut pace,
                 out.processes == 0,
+                command_started,
+                n_modes - at,
             )?
         };
         out.partial.extend(run.partial.iter().cloned());
+        if run.plan.is_some() {
+            out.time_plan = run.plan.clone();
+        }
         if !command_mode {
             carried = pace;
         }
@@ -3663,7 +3748,7 @@ fn run_loaded(
             ));
         }
     }
-    let out = run_points(ctx, &manifest, opts)?;
+    let mut out = run_points(ctx, &manifest, opts)?;
     // A start-up agent the build step added to the loop's JVM (a mocking library that would
     // otherwise attach to the running JVM): said once in the run output and in the manifest.
     let startup_agent = fs::read_to_string(
@@ -3728,6 +3813,11 @@ fn run_loaded(
         fs::write(&path, text).map_err(|e| io_refusal(&path, e))?;
     }
 
+    out.capture_commands = commands
+        .iter()
+        .filter(|c| c.starts_with("dla summarize"))
+        .cloned()
+        .collect();
     // Full result in a file; the evidence carries a bounded summary of it.
     let full = json!({
         "harness": manifest.id,
@@ -3951,6 +4041,9 @@ fn run_loaded(
         |s| format!("dla trend {s}"),
     );
     summary["next"] = json!(next);
+    if let Some(plan) = &out.time_plan {
+        summary["ends_by_itself"] = json!(plan.ends_by_itself());
+    }
     if !out.env_reused.is_empty() {
         summary["env_reused"] = json!(out.env_reused);
     }
@@ -4010,9 +4103,45 @@ pub fn attention_lines(
             160,
         ));
     }
+    for l in &out.left_stopped {
+        lines.push(clip(&format!("LEFTOVER STOPPED: {l}"), 160));
+    }
+    if let Some(l) = out
+        .time_plan
+        .as_ref()
+        .and_then(|p| p.attention(&out.limitations))
+    {
+        lines.push(clip(&l, 160));
+    }
     let need = dla_stats::GateThresholds::default().min_points;
     let measured = out.points.saturating_sub(manifest.warmup);
-    if out.tool.is_none() && !out.series.is_empty() && measured < need {
+    if out.capture_run
+        && out.earlier_full_series
+        && out.tool.is_none()
+        && !out.series.is_empty()
+        && (measured < need || out.points < planned)
+    {
+        // The series of this harness exists already: this run was for the capture, and what it
+        // gives is read with the summarize commands.
+        let names: Vec<String> = out
+            .capture_commands
+            .iter()
+            .take(2)
+            .map(|c| c.split(' ').take(3).collect::<Vec<_>>().join(" "))
+            .collect();
+        lines.push(clip(
+            &format!(
+                "THIS RUN WAS FOR THE CAPTURE: the series of {} exists already; read the capture with {}",
+                manifest.id,
+                if names.is_empty() {
+                    "the dla summarize commands listed".to_owned()
+                } else {
+                    names.join(" and ")
+                }
+            ),
+            160,
+        ));
+    } else if out.tool.is_none() && !out.series.is_empty() && measured < need {
         let cut = out.points < planned;
         let mode = out.modes.first().map_or("fresh", |m| m.as_str());
         lines.push(clip(

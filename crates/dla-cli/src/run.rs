@@ -1,8 +1,10 @@
-//! `dla run init`, `dla run status`, `dla run extend`, `dla run dispatch` and `dla run abort`.
+//! `dla run init`, `dla run status`, `dla run extend`, `dla run dispatch`, `dla run stop` and
+//! `dla run abort`.
 
 mod abort;
 mod extend;
 mod reseal;
+mod stop;
 mod workers;
 
 use clap::{Args, Subcommand};
@@ -37,7 +39,9 @@ pub enum RunCmd {
     Extend(extend::ExtendArgs),
     /// Register one worker per runtime with its share of the remaining budget (core only).
     Dispatch(workers::DispatchArgs),
-    /// Stop the processes the run started, undo what it attached, and mark the run aborted (core only).
+    /// Stop the processes the run started and undo what it attached; the run stays open and goes on. Use it for what a command that was cut (a timeout) left running.
+    Stop(stop::StopArgs),
+    /// Ends the run for good: it is marked aborted, the gate and the queue count it as over and nothing more can be recorded in it that counts. Also stops the processes the run started and undoes what it attached (core only). To stop only what a cut command left, use `dla run stop`.
     Abort(abort::AbortArgs),
     /// Record an audit line and seal the protected run files again after an out-of-band change (core only).
     Reseal(reseal::ResealArgs),
@@ -292,6 +296,7 @@ pub fn dispatch(
         RunCmd::Status => run_status(&ctx()?),
         RunCmd::Extend(a) => extend::run(&ctx()?, &project_root(project_arg)?, &a),
         RunCmd::Dispatch(a) => workers::dispatch(&ctx()?, a),
+        RunCmd::Stop(a) => stop::run(&ctx()?, &project_root(project_arg)?, a),
         RunCmd::Abort(a) => abort::run(&ctx()?, &project_root(project_arg)?, a),
         RunCmd::Reseal(a) => reseal::run(&ctx()?, a),
     }
