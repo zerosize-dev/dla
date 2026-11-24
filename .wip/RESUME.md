@@ -2701,3 +2701,13 @@ flat test-loop readings get only 9 second looks.
   `unsafe extern`; the pinned channel in a failed build's message; checked on the real library
   with its pinned 1.80.0). Then version 0.9.0-preview.8 (previews are pre-authorized), builder N,
   second blind round.
+
+## 17:30 UTC 2026-11-24 (clock checked 17:28): local run green on main + R3 + R4; CI snapshot
+
+- u115/suite.sh on the working tree (main 546b74c + R3 + R4): fmt, clippy, schema clean; whole
+  suite 3505 passed, 0 failed, 5 ignored; Python files under 3.12: only the two known gc.freeze
+  failures; static acceptance 64 pass; agent tests pass. 2.8 GB free.
+- Commit message for the second commit: wip-notes/commit-message-24.txt.
+- Snapshot of this tree pushed WITHOUT [skip ci] (see the next line of the log); when green:
+  `bash wip-notes/commit-snapshot-tree.sh <sha> wip-notes/commit-message-24.txt`, push main and
+  dev, then the version commit 0.9.0-preview.8 and the release.
