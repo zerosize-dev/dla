@@ -284,32 +284,30 @@ fn test_column(
             min_rise,
         )
     });
-    // A column of a region no purge gives back is judged on its plateau alone, whatever the
-    // purge kind and its reading (kept in the result, marked as not applying).
-    let purge = purge.map(|p| {
-        if pick::purge_does_not_apply(name) {
-            p.not_applicable()
-        } else {
-            p
-        }
-    });
     let gc = (!counter)
         .then(|| series.column_index(&format!("{name}.pre_gc")))
         .flatten()
         .and_then(|pre| judge::gc(&series.post_warmup(pre), &points, reference));
+    // A column whose purge reading cannot tell growth from retention: a retained purge never
+    // contradicts its plateau (the reading stays in the result); against an undecided or
+    // continuing plateau it counts as for any column.
+    let contradicts = !((pick::PURGE_CANNOT_CONTRADICT.contains(&name)
+        || pick::purge_cannot_release(name))
+        && plateau.verdict == PlateauVerdict::Plateau);
     // A purge that kept the growth says the growth is not headroom, not that it goes on: the
     // plateau stands when the main window's rises, scaled to the extra window, say another
     // would have shown (gauges only; a counter keeps its own rule).
-    let kept = plateau.verdict == PlateauVerdict::Plateau
+    let kept = contradicts
+        && plateau.verdict == PlateauVerdict::Plateau
         && purge
             .as_ref()
-            .is_some_and(|p| p.applies && p.verdict == PurgeVerdict::Retained);
+            .is_some_and(|p| p.verdict == PurgeVerdict::Retained);
     let rises = (kept && !counter)
         .then(|| judge::rises(main, extra, warm_end(series, idx), plateau.noise?))
         .flatten();
     let (favors, supports) = judge::combine(
         plateau.verdict,
-        purge.as_ref(),
+        purge.as_ref().filter(|_| contradicts),
         gc,
         rises.map(|r| r.expected),
     );
@@ -1477,218 +1475,6 @@ fn lines_of_finding(ledger: &Ledger, finding: &Finding, trends: &[&TrendReport])
     out
 }
 
-/// Most times the extra window is lengthened to reach the expected rises (a longer one is left
-/// to a person: `--extra`).
-const MAX_WIDEN: u32 = 8;
-
-/// The extra window that would decide a measurement whose only open question is the length of
-/// that window: its verdict is inconclusive, no point was lost to the deadline, and a deciding
-/// plateau was held back against a purge that kept the growth for want of expected rises
-/// (see [`judge::combine`]). `None` when it is not so, or the window would be over
-/// [`MAX_WIDEN`] times the one run.
-fn wider_window(
-    results: &[ColumnResult],
-    picked: &pick::Picked,
-    partial: &[String],
-    extra: u32,
-) -> Option<u32> {
-    if !partial.is_empty() || decide(results, picked).0 != Favors::Inconclusive {
-        return None;
-    }
-    let n = results
-        .iter()
-        .filter(|r| match &picked.primary {
-            Some(p) => &r.name == p,
-            None => r.voting,
-        })
-        .filter(|r| r.favors == Favors::Inconclusive)
-        .filter_map(|r| r.points_needed)
-        .max()?;
-    (n > extra && n <= extra.saturating_mul(MAX_WIDEN)).then_some(n)
-}
-
-/// Whether `n` extra points fit the time left, going by the `secs` the run of `extra` points
-/// took (an overestimate where the run also held the main window) and the reserve every run
-/// keeps for what follows its points. No deadline known: it fits.
-fn window_fits(tc: &ToolCtx, secs: f64, extra: u32, n: u32) -> bool {
-    let Some((left, _)) = tc.time_left() else {
-        return true;
-    };
-    let left = left.as_secs_f64();
-    let need = secs * f64::from(n) / f64::from(extra.max(1));
-    need + dla_workload::harness::pace::reserve_secs(left) <= left
-}
-
-/// What one measurement of an alloc-test holds: the series, its trend, and every column tested.
-struct Measured {
-    attribution: Option<Map<String, Value>>,
-    env_reused: Vec<String>,
-    exemption: Option<Exemption>,
-    limitations: Vec<String>,
-    partial: Vec<String>,
-    picked: pick::Picked,
-    results: Vec<ColumnResult>,
-    series: SeriesFile,
-    trend: TrendReport,
-    all_trends: Vec<TrendReport>,
-    /// Seconds the points took.
-    secs: f64,
-}
-
-/// Runs the points of an alloc-test with an extra window of `extra` points, joins them to the
-/// main window of an earlier series where one is reused, and tests the columns.
-fn measure(
-    tc: &ToolCtx,
-    manifest: &HarnessManifest,
-    a: &AllocTestArgs,
-    ledger: &Ledger,
-    bound: Option<&Finding>,
-    purge_kind: &Option<String>,
-    extra: u32,
-) -> Res<Measured> {
-    let began = std::time::Instant::now();
-    // Command mode: a complete harness series of the same mode already holds the main
-    // window, so only the extra points are run and the two are joined.
-    let reuse = (manifest.mode == HarnessMode::Command)
-        .then(|| complete_series(&tc.run_dir, manifest, key_mode(manifest)))
-        .flatten();
-    let opts = RunOptions {
-        modes: vec![key_mode(manifest)],
-        iterations: Some(manifest.iterations),
-        extra,
-        purge: purge_kind.clone(),
-        source_kind: SeriesSourceKind::AllocTest,
-        first_point: reuse
-            .as_ref()
-            .map_or(1, |_| manifest.warmup + manifest.iterations + 1),
-        attribute: attribution_target(manifest, bound),
-        // Python: the agent counts how often the lines of the finding run, so that a line on a
-        // branch the unit does not take is told from a line that ran and kept nothing.
-        lines: match (&bound, manifest.runtime) {
-            (Some(f), Runtime::Python) => {
-                let earlier = TrendReport::load_all(&tc.run_dir);
-                let refs: Vec<&TrendReport> = earlier.iter().collect();
-                lines_of_finding(ledger, f, &refs)
-            }
-            _ => Vec::new(),
-        },
-        ..RunOptions::default()
-    };
-    let out = run_points(tc, manifest, &opts)?;
-    // The loop wrote its per-class figures to `harness/<H>/attribution-<F>.json`, the place the
-    // trigger and the bundle read.
-    let attributed = opts.attribute.as_ref().and_then(|t| {
-        dla_core::testloop::Attributed::parse(
-            &fs::read_to_string(&tc.run_dir.join(format!(
-                "{}/{}/{}",
-                dla_core::harness::HARNESS_DIR,
-                a.harness,
-                dla_core::testloop::attribution_file(&t.finding)
-            )))
-            .ok()?,
-        )
-    });
-    let attribution = attributed.as_ref().map(attribution_summary);
-    let partial: Vec<String> = out.partial.clone();
-    let env_reused: Vec<String> = out.env_reused.clone();
-    let series_id = out.series.first().cloned().ok_or_else(|| {
-        Failure::refuse(
-            "harness-failed",
-            format!("harness {} produced no series", a.harness),
-            "at least one measured point",
-            format!("dla harness run {}", a.harness),
-        )
-    })?;
-    let mut series = SeriesFile::load(&tc.run_dir, &series_id)?;
-    if let Some(prev) = &reuse {
-        series = join_series(prev, &series);
-        series.id = tc.next_series_id();
-        series.save(&tc.run_dir)?;
-    }
-
-    // Columns.
-    let previous = pick::latest_trend(&tc.run_dir, &a.harness);
-    let all_trends = TrendReport::load_all(&tc.run_dir);
-    let all_refs: Vec<&TrendReport> = all_trends.iter().collect();
-    let picked = pick::pick_in(
-        &series,
-        ledger,
-        bound,
-        &a.columns,
-        previous.as_ref(),
-        &all_refs,
-        &a.harness,
-    )?;
-    let trend = trend_of(tc, ledger, &series, previous.as_ref())?;
-    let event = purge_event(&series);
-    let mut limitations: Vec<String> = series.limitations.clone();
-    limitations.extend(out.gaps.iter().cloned());
-    limitations.extend(picked.note.clone());
-    if opts.attribute.is_some() && attribution.is_none() {
-        limitations.push(
-            "which test class feeds the holder was not measured: the loop wrote no attribution file (see the run log)"
-                .to_owned(),
-        );
-    }
-    match (&purge_kind, &event) {
-        (None, _) => {
-            limitations.push("purge disabled (--purge none): the purge test was not run".into())
-        }
-        (Some(k), None) => limitations.push(format!(
-            "purge {k} produced no before/after reading: the purge test was not run"
-        )),
-        (Some(_), Some(e)) if e.before.is_empty() || e.after.is_empty() => limitations.push(
-            "the purge event carries no before/after readings: the purge test was not run".into(),
-        ),
-        _ => {}
-    }
-    let iterations = manifest.iterations as usize;
-    // A series that did not show the growth counts against it only on a harness that is neither the
-    // one the finding was raised on nor an entry-path harness of the finding.
-    let exemption = bound
-        .as_ref()
-        .and_then(|f| exemption(&tc.run_dir, ledger, manifest, f, &all_refs, &series.id));
-    let mut results: Vec<ColumnResult> = picked
-        .tested
-        .iter()
-        .filter_map(|n| {
-            test_column(
-                &series,
-                n,
-                picked.voting.contains(n),
-                bound.is_some() && exemption.is_none(),
-                iterations,
-                event.as_ref(),
-                &mut limitations,
-            )
-        })
-        .collect();
-    // Voting columns first, in the order they were picked.
-    results.sort_by_key(|r| !r.voting);
-    if results
-        .iter()
-        .all(|r| r.plateau.verdict == PlateauVerdict::NotRun)
-    {
-        limitations.push(format!(
-            "the extra window has fewer than {MIN_EXTRA} points: the plateau test was not run (see the series limitations)"
-        ));
-    }
-
-    Ok(Measured {
-        attribution,
-        env_reused,
-        exemption,
-        limitations,
-        partial,
-        picked,
-        results,
-        series,
-        trend,
-        all_trends,
-        secs: began.elapsed().as_secs_f64(),
-    })
-}
-
 /// Runs `dla alloc-test`.
 pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) -> Res<Value> {
     if !a.harness.starts_with('H') {
@@ -1747,46 +1533,132 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         other => Some(other.to_owned()),
     };
 
-    let mut extra = extra;
-    let mut m = measure(&tc, &manifest, &a, &ledger, bound.as_ref(), &purge_kind, extra)?;
-    // Only the length of the extra window held a plateau back: run it again, once, with the
-    // window the expectation needs, as far as the time left allows.
-    if let Some(n) = wider_window(&m.results, &m.picked, &m.partial, extra) {
-        if window_fits(&tc, m.secs, extra, n) {
-            match measure(&tc, &manifest, &a, &ledger, bound.as_ref(), &purge_kind, n) {
-                Ok(mut w) => {
-                    w.limitations.push(format!(
-                        "the extra window was lengthened from {extra} to {n} points and the command run again, because its length alone kept a plateau from deciding against a purge that kept the growth (series {} is the shorter run)",
-                        m.series.id
-                    ));
-                    m = w;
-                    extra = n;
-                }
-                Err(f) if f.refusal.code == codes::TIME_BUDGET => m.limitations.push(format!(
-                    "the extra window of {extra} points is too short for a plateau to stand against the purge that kept the growth ({n} points would be); the longer run was refused for the time left"
-                )),
-                Err(f) => return Err(f),
+    // Command mode: a complete harness series of the same mode already holds the main
+    // window, so only the extra points are run and the two are joined.
+    let reuse = (manifest.mode == HarnessMode::Command)
+        .then(|| complete_series(&tc.run_dir, &manifest, key_mode(&manifest)))
+        .flatten();
+    let opts = RunOptions {
+        modes: vec![key_mode(&manifest)],
+        iterations: Some(manifest.iterations),
+        extra,
+        purge: purge_kind.clone(),
+        source_kind: SeriesSourceKind::AllocTest,
+        first_point: reuse
+            .as_ref()
+            .map_or(1, |_| manifest.warmup + manifest.iterations + 1),
+        attribute: attribution_target(&manifest, bound.as_ref()),
+        // Python: the agent counts how often the lines of the finding run, so that a line on a
+        // branch the unit does not take is told from a line that ran and kept nothing.
+        lines: match (&bound, manifest.runtime) {
+            (Some(f), Runtime::Python) => {
+                let earlier = TrendReport::load_all(&tc.run_dir);
+                let refs: Vec<&TrendReport> = earlier.iter().collect();
+                lines_of_finding(&ledger, f, &refs)
             }
-        } else {
-            m.limitations.push(format!(
-                "the extra window of {extra} points is too short for a plateau to stand against the purge that kept the growth ({n} points would be); the time left does not allow the longer run"
-            ));
-        }
+            _ => Vec::new(),
+        },
+        ..RunOptions::default()
+    };
+    let out = run_points(&tc, &manifest, &opts)?;
+    // The loop wrote its per-class figures to `harness/<H>/attribution-<F>.json`, the place the
+    // trigger and the bundle read.
+    let attributed = opts.attribute.as_ref().and_then(|t| {
+        dla_core::testloop::Attributed::parse(
+            &fs::read_to_string(tc.run_dir.join(format!(
+                "{}/{}/{}",
+                dla_core::harness::HARNESS_DIR,
+                a.harness,
+                dla_core::testloop::attribution_file(&t.finding)
+            )))
+            .ok()?,
+        )
+    });
+    let attribution = attributed.as_ref().map(attribution_summary);
+    let partial: Vec<String> = out.partial.clone();
+    let env_reused: Vec<String> = out.env_reused.clone();
+    let series_id = out.series.first().cloned().ok_or_else(|| {
+        Failure::refuse(
+            "harness-failed",
+            format!("harness {} produced no series", a.harness),
+            "at least one measured point",
+            format!("dla harness run {}", a.harness),
+        )
+    })?;
+    let mut series = SeriesFile::load(&tc.run_dir, &series_id)?;
+    if let Some(prev) = &reuse {
+        series = join_series(prev, &series);
+        series.id = tc.next_series_id();
+        series.save(&tc.run_dir)?;
     }
-    let Measured {
-        attribution,
-        env_reused,
-        exemption,
-        mut limitations,
-        partial,
-        mut picked,
-        results,
-        series,
-        trend,
-        all_trends,
-        ..
-    } = m;
+
+    // Columns.
+    let previous = pick::latest_trend(&tc.run_dir, &a.harness);
+    let all_trends = TrendReport::load_all(&tc.run_dir);
     let all_refs: Vec<&TrendReport> = all_trends.iter().collect();
+    let mut picked = pick::pick_in(
+        &series,
+        &ledger,
+        bound.as_ref(),
+        &a.columns,
+        previous.as_ref(),
+        &all_refs,
+        &a.harness,
+    )?;
+    let trend = trend_of(&tc, &ledger, &series, previous.as_ref())?;
+    let event = purge_event(&series);
+    let mut limitations: Vec<String> = series.limitations.clone();
+    limitations.extend(out.gaps.iter().cloned());
+    limitations.extend(picked.note.clone());
+    if opts.attribute.is_some() && attribution.is_none() {
+        limitations.push(
+            "which test class feeds the holder was not measured: the loop wrote no attribution file (see the run log)"
+                .to_owned(),
+        );
+    }
+    match (&purge_kind, &event) {
+        (None, _) => {
+            limitations.push("purge disabled (--purge none): the purge test was not run".into())
+        }
+        (Some(k), None) => limitations.push(format!(
+            "purge {k} produced no before/after reading: the purge test was not run"
+        )),
+        (Some(_), Some(e)) if e.before.is_empty() || e.after.is_empty() => limitations.push(
+            "the purge event carries no before/after readings: the purge test was not run".into(),
+        ),
+        _ => {}
+    }
+    let iterations = manifest.iterations as usize;
+    // A series that did not show the growth counts against it only on a harness that is neither the
+    // one the finding was raised on nor an entry-path harness of the finding.
+    let exemption = bound
+        .as_ref()
+        .and_then(|f| exemption(&tc.run_dir, &ledger, &manifest, f, &all_refs, &series.id));
+    let mut results: Vec<ColumnResult> = picked
+        .tested
+        .iter()
+        .filter_map(|n| {
+            test_column(
+                &series,
+                n,
+                picked.voting.contains(n),
+                bound.is_some() && exemption.is_none(),
+                iterations,
+                event.as_ref(),
+                &mut limitations,
+            )
+        })
+        .collect();
+    // Voting columns first, in the order they were picked.
+    results.sort_by_key(|r| !r.voting);
+    if results
+        .iter()
+        .all(|r| r.plateau.verdict == PlateauVerdict::NotRun)
+    {
+        limitations.push(format!(
+            "the extra window has fewer than {MIN_EXTRA} points: the plateau test was not run (see the series limitations)"
+        ));
+    }
 
     // The verdict: the bound column's, or the voting columns together, with the required
     // columns able to hold a non-leak verdict back.
@@ -4418,102 +4290,6 @@ mod tests {
         assert_eq!(anon.plateau.verdict, PlateauVerdict::Plateau, "{anon:?}");
         assert_eq!(anon.favors, Favors::Inconclusive, "{anon:?}");
         assert_eq!(favors, Favors::Inconclusive);
-    }
-
-    /// `column` on a 500 MB process: the end of the warm-up at 10 MB, then a main window
-    /// rising 100 KB a point and an extra window rising 150 KB a point (a rise far under 1% of
-    /// the process, kept from the main window with confidence: the plateau test calls it
-    /// inconclusive), with a purge that gives nothing back.
-    fn slowly_rising_run(column: &str) -> (Favors, ColumnResult) {
-        let mut s = series(&[]);
-        s.columns = vec![col("os.rss"), col(column)];
-        for (i, p) in s.points.iter_mut().enumerate() {
-            let y = if i < 2 {
-                10e6
-            } else if i < 8 {
-                10e6 + 100e3 * (i - 1) as f64
-            } else {
-                10.6e6 + 150e3 * (i - 7) as f64
-            };
-            p.values = vec![Some(500e6), Some(y)];
-        }
-        let (favors, mut results, _) = unbound_run(s, &[column]);
-        let at = results.iter().position(|r| r.name == column).unwrap();
-        (favors, results.swap_remove(at))
-    }
-
-    #[test]
-    fn a_retained_purge_does_not_make_a_leak_of_an_undecided_plateau_of_file_backed_memory() {
-        // The purge reading is kept (retained, marked as not applying), and the column is
-        // judged on its plateau alone: inconclusive, not a leak.
-        for name in ["os.rss_file", "os.vm_hwm", "go.total"] {
-            let (favors, r) = slowly_rising_run(name);
-            assert_eq!(
-                r.plateau.verdict,
-                PlateauVerdict::Inconclusive,
-                "{name}: {r:?}"
-            );
-            let purge = r.purge.as_ref().unwrap();
-            assert_eq!(purge.verdict, PurgeVerdict::Retained, "{name}: {r:?}");
-            assert!(!purge.applies, "{name}: {r:?}");
-            assert_eq!(r.favors, Favors::Inconclusive, "{name}: {r:?}");
-            assert_ne!(favors, Favors::Leak, "{name}");
-        }
-        // The same series of an ordinary column, whose purge does apply, is a leak as before.
-        let (favors, r) = slowly_rising_run("os.rss_anon");
-        assert_eq!(r.plateau.verdict, PlateauVerdict::Inconclusive, "{r:?}");
-        assert!(r.purge.as_ref().unwrap().applies, "{r:?}");
-        assert_eq!(r.favors, Favors::Leak, "{r:?}");
-        assert_eq!(favors, Favors::Leak);
-    }
-
-    #[test]
-    fn a_window_that_is_too_short_alone_is_lengthened_to_the_points_that_would_decide() {
-        let main = [10e6, 10e6, 14e6, 14e6, 18e6, 18e6];
-        let flat = |n: usize| -> Vec<f64> { (0..n).map(|i| 18e6 + 1e3 * (i % 2) as f64).collect() };
-        let run = |extra: usize| {
-            let mut s = series(&[]);
-            s.columns = vec![col("os.rss"), col("os.rss_anon")];
-            let ys: Vec<f64> = [10e6, 10e6]
-                .into_iter()
-                .chain(main)
-                .chain(flat(extra))
-                .collect();
-            s.points = ys
-                .iter()
-                .enumerate()
-                .map(|(i, &y)| Point {
-                    x: 1000.0 * (i as f64 + 1.0),
-                    t_ms: i as u64,
-                    values: vec![Some(500e6), Some(y)],
-                })
-                .collect();
-            unbound_run(s, &["os.rss_anon"])
-        };
-        // Two rises over a window as long as the extra one: nine points would be needed.
-        let (favors, results, picked) = run(6);
-        assert_eq!(favors, Favors::Inconclusive);
-        assert_eq!(wider_window(&results, &picked, &[], 6), Some(9));
-        // Not for a run the deadline cut short, nor when the window is long enough already.
-        assert_eq!(
-            wider_window(&results, &picked, &["p7".to_owned()], 6),
-            None
-        );
-        let (favors, results, picked) = run(12);
-        assert_eq!(favors, Favors::NonLeak);
-        assert_eq!(wider_window(&results, &picked, &[], 12), None);
-        // A window that would have to be over MAX_WIDEN times as long is left to a person.
-        let (_, results, picked) = run(6);
-        assert_eq!(wider_window(&results, &picked, &[], 1), None);
-        // A leak that goes on is no question of length.
-        let mut s = series(&[]);
-        s.columns = vec![col("os.rss"), col("os.rss_anon")];
-        for (i, p) in s.points.iter_mut().enumerate() {
-            p.values = vec![Some(500e6), Some(10e6 + 2e6 * i as f64)];
-        }
-        let (favors, results, picked) = unbound_run(s, &["os.rss_anon"]);
-        assert_eq!(favors, Favors::Leak);
-        assert_eq!(wider_window(&results, &picked, &[], 6), None);
     }
 
     #[test]
