@@ -3408,3 +3408,13 @@ unattended run at a time and no builder beside it.
   before any snapshot goes to main.
 - Then: reruns of set A, one at a time, on the preview.9 plugin (refresh /root/dla-real/plugin and
   bin from main 13f1dba first).
+
+## 16:30 UTC 2026-11-25: preview.9 published; rerun rig on preview.9
+
+- release.yml run 45653145346 green; tag v0.9.0-preview.9 on 13f1dba; pre-release, 11 assets.
+- Rig: /root/dla-real/bin/dla = released musl binary (sha256 checked, `dla 0.9.0-preview.9`);
+  old one at bin/dla.prev. /root/dla-real/plugin = git archive 13f1dba of .claude-plugin agents bin
+  data hooks skills (same file list as before, marketplace.json removed); old at plugin.prev.
+- Next: when builder F is done (no builder beside an unattended run), rerun set A one at a time:
+  interceptors (Node TS), fastrace (Rust), otel-python, otel-go, logstash (JVM). Keys in
+  wip-notes/start-run.sh; waiter u107/wait-run.sh <name> 7000.
