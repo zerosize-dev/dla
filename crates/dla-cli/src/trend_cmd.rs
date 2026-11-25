@@ -23,7 +23,7 @@ use dla_core::{
     finding::Polarity,
     fsutil::{to_pretty_json, write_atomic},
     paths::to_slash,
-    series::{ColumnKind, KeyMode, SeriesFile, SeriesSourceKind, numbered},
+    series::{ColumnKind, KeyMode, SeriesFile, numbered},
     toolctx::{EvidenceSpec, ToolCtx},
     trend::{ColumnTrend, TREND_DIR, TrendReport, finding_region, finding_shape},
 };
@@ -310,19 +310,6 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         None => None,
     };
 
-    // The residual rows of the series, as `dla gap <S> --residual` writes them: the gate and the
-    // capture item read them, and a model that was never told to run that command still gets
-    // them. A series of another source than a harness or a sample, a series outside the run and
-    // a series with no byte column to total get none and nothing else changes.
-    let residual = if main.rel.is_some() && main.series.source.kind != SeriesSourceKind::Gap {
-        crate::gap_cmd::write_residual_rows(&tc, &main.series)?
-    } else {
-        None
-    };
-    if residual.is_some() {
-        ledger = tc.ledger()?;
-    }
-
     let mut out = Map::new();
     out.insert("ok".into(), json!(true));
     out.insert("command".into(), json!("trend"));
@@ -474,25 +461,6 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         pytest_loop,
     );
     let mut next = next;
-    if let Some(r) = &residual {
-        let rows: Vec<String> = r["rows"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|row| {
-                format!(
-                    "{} {}",
-                    row["region"].as_str().unwrap_or("?"),
-                    if row["residual"].as_f64() > row["threshold"].as_f64() {
-                        "over its threshold"
-                    } else {
-                        "under its threshold"
-                    }
-                )
-            })
-            .collect();
-        out.insert("residual_rows".into(), json!(rows));
-    }
     if let Some(entry) = missed_targets_entry(ctx, &main.series, &target_verdicts) {
         next.insert(0, entry);
     }
@@ -533,14 +501,6 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
             ),
         );
     }
-    // An unexplained heap growth over its threshold whose harness has no summarized capture
-    // leads: the capture says who keeps the objects, and the gate lists it before everything else.
-    if residual.is_some()
-        && let Some((entry, attention)) = capture_entry(ctx, &main.series.id)
-    {
-        next.insert(0, entry);
-        out.insert("_attention".into(), json!([attention]));
-    }
     if let Some(hint) = holders_hint(ctx, &main.series, &next) {
         out.insert("holders_hint".into(), json!(hint));
     }
@@ -576,26 +536,6 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         }
     }
     Ok(Value::Object(out))
-}
-
-/// The `next` entry and the `_attention` line for a heap row of series `id` over its threshold
-/// whose harness has no summarized capture (the open `residual_capture` item of the gate): the
-/// capture command, and one short sentence. `None` when there is no such item.
-fn capture_entry(ctx: &Ctx, id: &str) -> Option<(String, String)> {
-    let view = dla_core::RunView::load_for(&ctx.run_dir, ctx.worker.as_deref()).ok()?;
-    let u = dla_core::gate::uncaptured_residuals(&view)
-        .into_iter()
-        .find(|u| u.series.iter().any(|s| s == id))?;
-    let entry = format!(
-        "{}   # the heap of {id} grows and no finding explains it ({}): the capture says who keeps the objects",
-        u.fix(),
-        u.items.join(", ")
-    );
-    let attention = format!(
-        "heap of {id} grows, no finding explains it, {} has no capture: first next entry",
-        u.harness
-    );
-    Some((entry, attention))
 }
 
 /// The sentence that rides with the add command of a growing `py.blocks@<file:line>` line that no

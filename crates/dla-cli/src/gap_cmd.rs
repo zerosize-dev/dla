@@ -157,18 +157,6 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: GapArgs) -> Res
     }
 }
 
-/// Writes the residual rows of `series` exactly as `dla gap <S> --residual` does (the gap series
-/// derived from it is used when there is one). `Ok(None)` when the series has no byte column to
-/// total (`residual-unavailable`): nothing is written then. Used by `dla trend`.
-pub fn write_residual_rows(tc: &ToolCtx, series: &SeriesFile) -> Res<Option<Value>> {
-    let derived = derived_of(tc, &series.id)?;
-    match residual::run(tc, series, derived.as_ref()) {
-        Ok(v) => Ok(Some(v)),
-        Err(f) if f.refusal.code == "residual-unavailable" => Ok(None),
-        Err(f) => Err(f),
-    }
-}
-
 /// Series listed by name in the summary of `--residual --all`; the rest are counted.
 const SHOWN: usize = 8;
 

@@ -26,11 +26,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-use super::{
-    graph::Bfs,
-    graph::Dominators,
-    snapshot::{JOB_KEEP_EDGE, Snapshot},
-};
+use super::{graph::Bfs, graph::Dominators, snapshot::Snapshot};
 
 const NONE: u32 = u32::MAX;
 /// Hops of a retention path kept.
@@ -58,19 +54,6 @@ pub enum HolderKind {
     Registration,
     /// A property of an object.
     Instance,
-}
-
-/// The symbols the preload script of the Node agent (`harness/node/dla-preload.cjs`) puts on the
-/// objects it watches, as a snapshot names a symbol-keyed property. A field with one of these
-/// names is the agent's own record, never a holder of the project.
-pub const AGENT_SYMBOL_FIELDS: [&str; 2] = ["<symbol dla.timer>", "<symbol dla.listeners>"];
-
-/// True for a script of the run directory's agent files (`<run>/harness/<H>/agent/...`): the
-/// statics of those scripts belong to the tool, not to the project.
-pub fn is_agent_script(path: &str) -> bool {
-    let p = path.replace('\\', "/");
-    p.find("/harness/")
-        .is_some_and(|i| p[i..].contains("/agent/"))
 }
 
 /// What piles up under a holder.
@@ -445,12 +428,6 @@ impl Snapshot {
                 if matches!(ename, "__proto__" | "constructor" | "prototype") {
                     continue;
                 }
-                // Nothing of the agent is a holder: its own record on an object and the statics
-                // of its scripts. What they keep is counted for the object that owns it, under
-                // that object's real holder.
-                if AGENT_SYMBOL_FIELDS.contains(&ename) {
-                    continue;
-                }
                 // A link of its own kind is part of the structure, not what holds it.
                 if !is_ctx && uname == self.node_name(v) {
                     continue;
@@ -464,12 +441,6 @@ impl Snapshot {
                 ) = if is_ctx {
                     let script = self.script_of_context(&ix, u);
                     if self.is_top_context(u) {
-                        if script
-                            .and_then(|s| self.script_name(s))
-                            .is_some_and(|n| is_agent_script(&n))
-                        {
-                            continue;
-                        }
                         (
                             HolderKind::Static,
                             None,
@@ -611,17 +582,6 @@ impl Snapshot {
             holders.sort_by_key(|h| std::cmp::Reverse(h.retained));
             holders.truncate(opts.max_holders);
         }
-        let mut notes = vec![
-            "retained bytes follow the dominator tree: a holder counts what only it keeps alive".to_owned(),
-            "weak edges are skipped; string contents are never read into the summary".to_owned(),
-            "the statics and the symbol fields of the agent are no holders: what they keep counts for the object that owns it".to_owned(),
-        ];
-        let job_only = self.job_keep_only();
-        if self.job_keep_edge_present() {
-            notes.push(format!(
-                "the edge {JOB_KEEP_EDGE} (the objects a WeakRef was read from in the current job) is skipped: it keeps objects alive until the job ends and says nothing about who holds them; {job_only} object(s) that nothing else reaches are unreachable and left out"
-            ));
-        }
         HolderSummary {
             nodes: self.node_count() as u64,
             edges: self.edge_count() as u64,
@@ -629,7 +589,10 @@ impl Snapshot {
             total_bytes: dom.total(),
             max_id: self.max_id(),
             holders,
-            notes,
+            notes: vec![
+                "retained bytes follow the dominator tree: a holder counts what only it keeps alive".to_owned(),
+                "weak edges are skipped; string contents are never read into the summary".to_owned(),
+            ],
         }
     }
 
@@ -1295,182 +1258,5 @@ mod tests {
                 h.holders
             );
         }
-    }
-    /// Four nodes of a module at `base`: its context (with `vars` and the native context at 3),
-    /// a closure that uses it, the function info and the script named `script`.
-    fn module_at(
-        base: usize,
-        script: &'static str,
-        vars: &[(&'static str, usize)],
-    ) -> Vec<N<'static>> {
-        let mut ctx_edges: Vec<(&'static str, &'static str, usize)> =
-            vars.iter().map(|&(n, t)| ("context", n, t)).collect();
-        ctx_edges.push(("internal", "previous", 3));
-        vec![
-            ("object", "system / Context", 32, ctx_edges),
-            (
-                "closure",
-                "run",
-                24,
-                vec![
-                    ("internal", "context", base),
-                    ("internal", "shared", base + 2),
-                ],
-            ),
-            ("code", "run", 16, vec![("internal", "script", base + 3)]),
-            ("code", script, 8, vec![]),
-        ]
-    }
-
-    const JOB: &str = "weak_refs_keep_during_job";
-
-    #[test]
-    fn an_object_kept_only_by_the_weak_ref_job_list_is_unreachable_and_counted_in_the_notes() {
-        let s = load(&[
-            ("synthetic", "", 0, vec![("element", "0", 1)]),
-            ("synthetic", "(GC roots)", 0, vec![("element", "0", 2)]),
-            (
-                "synthetic",
-                "(Strong root list)",
-                0,
-                vec![("internal", JOB, 3)],
-            ),
-            ("object", "Orphan", 20, vec![("property", "x", 4)]),
-            ("object", "Payload", 30, vec![]),
-        ]);
-        assert_eq!(s.job_keep_only(), 2);
-        let h = holders_of(&s);
-        assert_eq!(h.reachable, 3, "{h:?}");
-        assert!(h.holders.is_empty(), "{:?}", h.holders);
-        assert!(
-            h.notes
-                .iter()
-                .any(|n| n.contains(JOB) && n.contains("2 object(s)")),
-            "{:?}",
-            h.notes
-        );
-        let d = s.dominators(None).unwrap();
-        assert!(!d.reachable(3) && !d.reachable(4));
-        assert!(!s.bfs().reachable(3));
-    }
-
-    #[test]
-    fn an_object_kept_by_the_job_list_and_a_module_map_is_listed_under_the_map_without_the_list_in_its_path()
-     {
-        let mut nodes: Vec<N<'static>> = vec![
-            ("synthetic", "", 0, vec![("element", "0", 1)]),
-            (
-                "synthetic",
-                "(GC roots)",
-                0,
-                vec![
-                    ("element", "0", 2),
-                    ("element", "1", 4),
-                    ("element", "2", 5),
-                ],
-            ),
-            (
-                "synthetic",
-                "(Strong root list)",
-                0,
-                vec![("internal", JOB, 9)],
-            ),
-            ("hidden", "system / NativeContext", 100, vec![]),
-        ];
-        nodes.extend(module_at(4, "/work/src/cache.js", &[("registry", 8)]));
-        nodes.push(("object", "Map", 64, vec![("property", "entry", 9)]));
-        nodes.push(("object", "Payload", 200, vec![]));
-        let s = load(&nodes);
-        let h = holders_of(&s);
-        let held = h
-            .holders
-            .iter()
-            .find(|x| x.owner == "Map" && x.name == "entry")
-            .unwrap_or_else(|| panic!("{:?}", h.holders));
-        assert_eq!(held.retained, 200);
-        assert_eq!(held.root_kind, Some(HolderKind::Static));
-        assert!(
-            held.path.iter().any(|p| p.edge == ".registry"),
-            "{:?}",
-            held.path
-        );
-        for x in &h.holders {
-            assert!(x.path.iter().all(|p| !p.edge.contains(JOB)), "{x:?}");
-        }
-        assert_eq!(s.job_keep_only(), 0);
-    }
-
-    #[test]
-    fn an_agent_static_and_an_agent_symbol_field_are_no_holders() {
-        let mut nodes: Vec<N<'static>> = vec![
-            ("synthetic", "", 0, vec![("element", "0", 1)]),
-            (
-                "synthetic",
-                "(GC roots)",
-                0,
-                vec![
-                    ("element", "0", 2),
-                    ("element", "1", 4),
-                    ("element", "2", 5),
-                    ("element", "3", 8),
-                    ("element", "4", 9),
-                ],
-            ),
-            ("synthetic", "(Strong root list)", 0, vec![]),
-            ("hidden", "system / NativeContext", 100, vec![]),
-        ];
-        nodes.extend(module_at(4, "/work/src/app.js", &[("service", 12)]));
-        nodes.extend(module_at(
-            8,
-            "/work/.dla/r1/harness/H1/agent/dla-preload.cjs",
-            &[("listenerRefs", 14)],
-        ));
-        nodes.push((
-            "object",
-            "Service",
-            40,
-            vec![("property", "<symbol dla.listeners>", 13)],
-        ));
-        nodes.push(("object", "Record", 200, vec![]));
-        nodes.push(("object", "Set", 300, vec![]));
-        let s = load(&nodes);
-        let h = holders_of(&s);
-        let names: Vec<&str> = h.holders.iter().map(|x| x.name.as_str()).collect();
-        assert!(!names.contains(&"listenerRefs"), "{names:?}");
-        assert!(!names.contains(&"<symbol dla.listeners>"), "{names:?}");
-        // What the agent field keeps counts for the object that owns it, under its holder.
-        let service = h.holders.iter().find(|x| x.name == "service").unwrap();
-        assert_eq!(service.retained, 40 + 200);
-        assert_eq!(service.script.as_deref(), Some("/work/src/app.js"));
-    }
-
-    #[test]
-    fn the_agent_symbols_are_those_the_preload_script_defines() {
-        let src = include_str!("../../../../harness/node/dla-preload.cjs");
-        let mut defined: Vec<String> = src
-            .lines()
-            .filter_map(|l| {
-                let at = l.find("Symbol('dla.")?;
-                let rest = &l[at + "Symbol('".len()..];
-                Some(format!("<symbol {}>", &rest[..rest.find('\'')?]))
-            })
-            .collect();
-        defined.sort();
-        let mut listed: Vec<String> = AGENT_SYMBOL_FIELDS
-            .iter()
-            .map(|s| (*s).to_owned())
-            .collect();
-        listed.sort();
-        assert_eq!(defined, listed);
-    }
-
-    #[test]
-    fn agent_scripts_are_those_under_the_agent_directory_of_a_harness() {
-        assert!(is_agent_script(
-            "/p/.dla/r/harness/H1/agent/dla-preload.cjs"
-        ));
-        assert!(is_agent_script("C:\\p\\.dla\\r\\harness\\H2\\agent\\x.cjs"));
-        assert!(!is_agent_script("/p/src/agent/index.js"));
-        assert!(!is_agent_script("/p/.dla/r/harness/H1/work/src/a.js"));
     }
 }

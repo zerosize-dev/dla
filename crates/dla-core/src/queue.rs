@@ -530,11 +530,6 @@ impl Index {
         }
     }
 
-    /// How many second-look harnesses of `runtime` have been generated (see [`SECOND_LOOK_MAX`]).
-    pub fn second_looks_used(&self, runtime: &str) -> usize {
-        self.second_looks.get(runtime).map_or(0, Vec::len)
-    }
-
     /// The verdict a second-look harness read for `id`, when one has run and its trend was read.
     pub fn second_look_verdict(&self, id: &FindingId) -> Option<Verdict> {
         self.declared

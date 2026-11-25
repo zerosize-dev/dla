@@ -352,9 +352,6 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
     let mut left: Vec<(String, String)> = Vec::new();
     // Closed with a miss on record and no focus harness that settled it: "missed once".
     let mut missed_once = 0usize;
-    // Candidates left for their second look, by the room each runtime's queue has for them.
-    let mut second_left: std::collections::BTreeMap<String, usize> =
-        std::collections::BTreeMap::new();
     for f in &candidates {
         let runtime = dla_core::gate::finding_runtime_with(&view, f, &mut only);
         let q = runtime
@@ -395,28 +392,6 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
                 format!(
                     "pending in the {} queue: {gated}{cmd}",
                     runtime.unwrap_or_default()
-                ),
-            ));
-            continue;
-        }
-        // One flat run of one driver settled it and a second look with a different driver is
-        // still to come: while the first pass has candidates pending, the queue is open, and
-        // room is left under `SECOND_LOOK_MAX`, it is not closed (the first pass would end,
-        // find no candidate, and never offer the second look).
-        if let (Some(q), Some(rt)) = (q, runtime.as_deref())
-            && q.open()
-            && !q.pending.is_empty()
-            && matches!(ix.second_look(&f.id), queue::SecondLook::Awaiting(_))
-            && second_left.get(rt).copied().unwrap_or(0)
-                < queue::SECOND_LOOK_MAX.saturating_sub(ix.second_looks_used(rt)) * queue::FOCUS_MAX
-        {
-            *second_left.entry(rt.to_owned()).or_default() += 1;
-            left.push((
-                f.id.to_string(),
-                format!(
-                    "a flat run settled it and it waits for its second look with a different driver once the first pass is over ({} pending): {}",
-                    q.pending.len(),
-                    q.command
                 ),
             ));
             continue;

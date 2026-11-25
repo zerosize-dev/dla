@@ -988,21 +988,6 @@ fn run_dla_line(fx: &mut Fx, line: &str) -> Out {
     fx.call_quiet(&args)
 }
 
-/// Runs a command line the gate printed. A refusal `capture-first` (`dla harness gen --next`
-/// while a heap residual has no summarized capture) is followed as a model follows it: take the
-/// capture and its summaries (once per harness), then repeat the command.
-fn run_line_capture_first(fx: &mut Fx, line: &str, tried: &mut BTreeSet<String>) -> Out {
-    let o = run_dla_line(fx, line);
-    if o.code() == "capture-first" {
-        let fix = o.json["error"]["fix"].as_str().unwrap_or("").to_owned();
-        if let Some(said) = take_capture(fx, &fix, tried) {
-            fx.step(format!("final gate: {said}"));
-            return run_dla_line(fx, line);
-        }
-    }
-    o
-}
-
 /// Closes a finding or open item unresolved with the reason the evidence supports. The fix
 /// the gate printed names it (`--reason not_exercised` when nothing was measured for the
 /// item, `--reason inconclusive` when something was): `hint` is that fix. Without one,
@@ -1165,7 +1150,7 @@ fn fix_item(fx: &mut Fx, item: &Item, tried: &mut BTreeSet<String>) -> Option<St
             if cmd.contains('<') || !tried.insert(cmd.clone()) {
                 return None;
             }
-            let o = run_line_capture_first(fx, &cmd, tried);
+            let o = run_dla_line(fx, &cmd);
             Some(format!(
                 "{cmd}: {}",
                 if o.ok { "ok".to_owned() } else { refusal(&o) }
@@ -1461,11 +1446,6 @@ case "$1 $2" in
 "ledger duplicate") echo '{"ok":true}';;
 "alloc-test H1")
   echo '{"ok":true,"next":["dla ledger confirm F12 --evidence E30","dla ledger refute <F>"]}';;
-"harness gen")
-  if [ -n "$FAKE_CAPTURE_FIRST" ] && [ ! -f captured ]; then
-    echo '{"ok":false,"error":{"code":"capture-first","message":"m","fix":"dla harness run H1 --mode fresh --capture alloc,heap, then the `dla summarize` commands it prints"}}'; exit 2
-  fi
-  echo '{"ok":true}';;
 "harness run")
   touch captured
   echo '{"ok":true,"summary":{"summarize":["dla summarize alloc-stack-diff a b","dla summarize non-heap c"]}}';;
@@ -2182,30 +2162,6 @@ cause = "{cause}"
             1,
             "{calls}"
         );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_next_batch_refused_with_capture_first_takes_the_capture_and_is_repeated() {
-        let gate = r#"{"missing":[
-          {"kind":"series","id":"S9","description":"d","fix":"dla harness gen --lang python --driver --next"}]}"#;
-        let (_row, calls) = drive_fake_with(
-            &expected("L-COLLECT", "container-field"),
-            false,
-            &[("FAKE_GAPS", "1"), ("FAKE_CAPTURE_FIRST", "1")],
-            gate,
-        );
-        let lines: Vec<&str> = calls.lines().collect();
-        let gens: Vec<usize> = (0..lines.len())
-            .filter(|&i| lines[i].starts_with("harness gen --lang python --driver --next"))
-            .collect();
-        let run = lines
-            .iter()
-            .position(|l| l.starts_with("harness run H1 --mode fresh --capture alloc,heap"))
-            .expect(&calls);
-        assert_eq!(gens.len(), 2, "{calls}");
-        assert!(gens[0] < run && run < gens[1], "{calls}");
-        assert!(calls.contains("summarize non-heap c"), "{calls}");
     }
 
     #[cfg(unix)]

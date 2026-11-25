@@ -1174,6 +1174,9 @@ fn leftover(fx: &Fx, command: &str, wrong_start: bool) -> std::process::Child {
 #[test]
 fn the_process_an_earlier_command_of_the_harness_left_is_stopped_and_nothing_else() {
     let _g = lock();
+    if !have_pytest() {
+        return;
+    }
     let fx = project_with(&leak_project(&[]), true);
     gen_ok(&fx, &opts());
     let m = fx.ctx.harness("H1").unwrap();

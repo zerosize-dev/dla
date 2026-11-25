@@ -35,13 +35,9 @@ Every column has a unit (`bytes`, `count`, `ratio`, `seconds`), a kind, a region
   site); **finding**: the finding it was probed for.
 - A series has at most 64 columns. Grouped and per-type columns beyond that are dropped, lowest
   growth first, and the drop is written to `limitations`.
-- A per-site count column counts what is alive now that one line made, not how often the line ran:
-  `node.listeners@<file:line>` the listeners registered at that line that are still attached to objects that are
-  still alive, read after a forced collection (a rising value means those objects are kept);
-  `node.timers@<file:line>` the timers set at that line that have neither fired nor been cleared;
-  `go.goroutines@<file:line>` the goroutines alive now that a `go` statement at that line started; the Python
-  `py.blocks@<file:line>` of driver runs the traced blocks allocated at that line that are still alive. Such a
-  column ties only to a finding whose own site is that line.
+- A per-site count column (`node.listeners@`, `node.timers@`, `go.goroutines@`, and the Python
+  `py.blocks@<file:line>` of driver runs) counts what one line made, so it ties only to a finding whose
+  own site is that line.
 
 ### Column names
 
