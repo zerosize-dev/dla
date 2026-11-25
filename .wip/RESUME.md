@@ -3397,3 +3397,14 @@ unattended run at a time and no builder beside it.
   commit-snapshot-tree.sh 43de699e37a22cfa263a5f00dee3f57af48d2d62 commit-message-34.txt; push; then
   version 0.9.0-preview.9 (temp index; builder F in the tree) and release; sync tree version files
   after F.
+
+## 13:40 UTC 2026-11-25: K on main; preview.9 version commit in CI
+
+- 43de699 15/15 first try -> main 98cacc2 (message 34). Version commit 13f1dba "Version
+  0.9.0-preview.9" through a temp index (builder F in the tree). Pushed main and dev; waiter
+  u115/ci-main-29 (main branch). When green: release.yml publish true; verify tag v0.9.0-preview.9.
+- WORKING TREE version files still say preview.8: after F, run
+  sed -i 's/0\.9\.0-preview\.8/0.9.0-preview.9/g' .claude-plugin/marketplace.json .claude-plugin/plugin.json Cargo.toml Cargo.lock
+  before any snapshot goes to main.
+- Then: reruns of set A, one at a time, on the preview.9 plugin (refresh /root/dla-real/plugin and
+  bin from main 13f1dba first).

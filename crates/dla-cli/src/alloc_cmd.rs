@@ -1579,7 +1579,7 @@ fn measure(
     // trigger and the bundle read.
     let attributed = opts.attribute.as_ref().and_then(|t| {
         dla_core::testloop::Attributed::parse(
-            &fs::read_to_string(&tc.run_dir.join(format!(
+            &fs::read_to_string(tc.run_dir.join(format!(
                 "{}/{}/{}",
                 dla_core::harness::HARNESS_DIR,
                 a.harness,
@@ -1748,7 +1748,15 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     };
 
     let mut extra = extra;
-    let mut m = measure(&tc, &manifest, &a, &ledger, bound.as_ref(), &purge_kind, extra)?;
+    let mut m = measure(
+        &tc,
+        &manifest,
+        &a,
+        &ledger,
+        bound.as_ref(),
+        &purge_kind,
+        extra,
+    )?;
     // Only the length of the extra window held a plateau back: run it again, once, with the
     // window the expectation needs, as far as the time left allows.
     if let Some(n) = wider_window(&m.results, &m.picked, &m.partial, extra) {
@@ -4199,10 +4207,7 @@ mod tests {
         let mut s = series(&[]);
         s.columns = vec![col("os.rss"), col("os.rss_file")];
         for (i, p) in s.points.iter_mut().enumerate() {
-            p.values = vec![
-                Some(500e6 + 2e6 * i as f64),
-                Some(10e6 + 2e6 * i as f64),
-            ];
+            p.values = vec![Some(500e6 + 2e6 * i as f64), Some(10e6 + 2e6 * i as f64)];
         }
         let (favors, results, picked) = unbound_run(s, &["os.rss", "os.rss_file"]);
         assert_eq!(picked.voting, ["os.rss", "os.rss_file"], "{}", picked.basis);
@@ -4230,7 +4235,11 @@ mod tests {
         let (favors, results, picked) = unbound_run(s, &["os.rss", "os.rss_file"]);
         assert_eq!(picked.voting, ["os.rss", "os.rss_file"], "{}", picked.basis);
         let file = results.iter().find(|r| r.name == "os.rss_file").unwrap();
-        assert_eq!(file.plateau.verdict, PlateauVerdict::Inconclusive, "{file:?}");
+        assert_eq!(
+            file.plateau.verdict,
+            PlateauVerdict::Inconclusive,
+            "{file:?}"
+        );
         assert_eq!(file.favors, Favors::Inconclusive, "{file:?}");
         let rss = results.iter().find(|r| r.name == "os.rss").unwrap();
         assert_eq!(rss.favors, Favors::Leak, "{rss:?}");
@@ -4520,10 +4529,7 @@ mod tests {
         assert_eq!(favors, Favors::Inconclusive);
         assert_eq!(wider_window(&results, &picked, &[], 6), Some(9));
         // Not for a run the deadline cut short, nor when the window is long enough already.
-        assert_eq!(
-            wider_window(&results, &picked, &["p7".to_owned()], 6),
-            None
-        );
+        assert_eq!(wider_window(&results, &picked, &["p7".to_owned()], 6), None);
         let (favors, results, picked) = run(12);
         assert_eq!(favors, Favors::NonLeak);
         assert_eq!(wider_window(&results, &picked, &[], 12), None);
