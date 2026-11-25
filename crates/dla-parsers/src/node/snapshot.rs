@@ -518,6 +518,18 @@ impl Snapshot {
             && (0..self.node_count()).any(|u| self.edges_of(u).any(|e| self.is_job_keep(e)))
     }
 
+    /// The nodes the [`JOB_KEEP_EDGE`] edges point at, one per edge, in node order.
+    pub fn job_keep_targets(&self) -> Vec<usize> {
+        if self.job_keep.is_none() {
+            return Vec::new();
+        }
+        (0..self.node_count())
+            .flat_map(|u| self.edges_of(u))
+            .filter(|&e| self.is_job_keep(e))
+            .map(|e| self.edge_target(e))
+            .collect()
+    }
+
     /// How many nodes are reachable only through [`JOB_KEEP_EDGE`] edges: the nodes that a
     /// walk over every strong edge reaches and a walk that skips those edges does not.
     pub fn job_keep_only(&self) -> usize {

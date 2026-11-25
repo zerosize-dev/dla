@@ -14,7 +14,9 @@ mod json;
 pub mod snapshot;
 pub mod sourcemap;
 
-pub use holders::{Accumulation, Holder, HolderKind, HolderOptions, HolderSummary, Hop};
+pub use holders::{
+    Accumulation, Holder, HolderKind, HolderOptions, HolderSummary, Hop, Site,
+};
 pub use snapshot::{Options, Snapshot, sniff};
 
 /// Why a Node file could not be read.

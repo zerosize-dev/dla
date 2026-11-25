@@ -372,10 +372,16 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
         // column points at it and no alloc-test is bound to it. The commands are printed in
         // order and each one is accepted as printed.
         if let Some(g) = grown.iter().find(|g| g.finding == f.id) {
-            left.push((
-                f.id.to_string(),
-                format!("its column grew: {}", g.commands().join("   then   ")),
-            ));
+            let why = if g.dump.is_some() {
+                format!(
+                    "{} and nothing decided it: {}",
+                    g.grew_text(),
+                    g.commands().join("   then   ")
+                )
+            } else {
+                format!("its column grew: {}", g.commands().join("   then   "))
+            };
+            left.push((f.id.to_string(), why));
             continue;
         }
         // An alloc-test that favors leak decided it: it is confirmed (or refuted by a newer

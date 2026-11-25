@@ -3433,3 +3433,40 @@ unattended run at a time and no builder beside it.
   it times out: run limit 12600 s). NOTHING HEAVY BESIDE IT. Then fastrace, otel-python, otel-go,
   logstash, one at a time. Kept records: copy report/state/ledger/gate + transcript via
   /root/dla-real/redact.py into /root/dla-real/r3-<name>-keep; delete the run dir after reading.
+
+## 18:20 UTC 2026-11-25: r3-interceptors judged; two general causes; builder G next
+
+- r3-interceptors (preview.9, 47 of 180 min, INCOMPLETE 154 open). Against key section 6:
+  PARTLY FOUND. F74 confirmed (disputed by verifier, N-SCALE) at MockHttpSocket.ts:206, the
+  passthrough once('error') the key names as unfixed form; mechanism (parser retention) not named.
+  The main growth WAS measured: S1 heap 15.5 KB/iter (key: 20.9 KB/iter mock); heap-graph S4 tied
+  holders F129 .originalSocket / F130 .request / F131 .responseStream (counts 22k->200k over 4
+  dumps, discriminators favor leak, "needed: refuted sibling + holder, then confirm F129 --evidence E20").
+- Cause 1 (tool): close-rest at 17:01 closed F129-F131 "tier 5 (not ranked), not targeted".
+  grown::grown_unmeasured reads only view.trends; a dump-axis growth series from a summarizer
+  (heap-graph, JVM histogram, alloc_stack, vgdb, shim_groups all print the same confirm route)
+  never counts, so close-rest/resolve/gate treat its finding as untargeted. Later S30/S35 tied the
+  same growth again; unresolved finding never came back as an open item.
+- Cause 2 (agent): dla-preload.cjs build() does gc, sweepListenerRefs (deref all), countListeners
+  (deref all), probes, THEN captureNow -> writeHeapSnapshot, one job. Every live emitter sits on
+  (Strong root list).weak_refs_keep_during_job at snapshot time. Our summarizer skips that edge
+  (only 1 object was job-keep-only), but the model wrote its own BFS, saw 1980 MockHttpSocket
+  "retained only via the agent's WeakRef edge", called it a measuring artifact (F132 unresolved).
+  Driver already yields (setImmediate) before dla.checkpoint(), so moving the captures to right
+  after the forced gc and before any deref removes the edge's targets.
+- Kept: /root/dla-real/r3-interceptors-keep (redacted report/state/ledger/coverage/gate/
+  transcript/run.json, series S4 S30, H1/H5 drivers). Run dir thinned (outs deleted, 314 MB):
+  project copy kept for a replay of fix B; delete /root/dla-real/r3-interceptors after that.
+- Builder G (sonnet) brief: wip-notes/dump-lead-brief.md. Then verify, CI, commit; then fastrace.
+- (time correction: the 18:20 heading above was really ~17:50 UTC)
+- Replay (g-replay/replay.sh <preload> <out>; ret.js / ret-skip.js <snapshot> <Class>) of kept H1
+  driver on the run's project copy, preview.9 agent: 2200 MockHttpSocket, every BFS path
+  "(Strong root list).weak_refs_keep_during_job > [i]". With that edge skipped (SKIP_JOB_KEEP=1):
+  "(Global handles) > HTTPParser.[1] > native_bind.bound_this > MockHttpSocket" = the documented
+  mechanism. Our per-snapshot summaries already had this path in holders[].path, but the
+  heap-graph command output has no path -> model never saw it.
+- Builder H (sonnet) started in parallel with G: wip-notes/node-path-brief.md (kept_by + root +
+  project line of the bound callback via locations/scripts.json/sourcemap; needed text; node.md).
+- After G: replay with the new preload into g-replay/new and check job-keep list has no
+  MockHttpSocket and BFS shows Global handles path. Then delete /root/dla-real/r3-interceptors and
+  g-replay snapshots (literal paths).

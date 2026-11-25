@@ -1329,23 +1329,43 @@ fn refuse_grown_unmeasured(ctx: &Ctx, id: &FindingId, loaded: Option<&Loaded<'_>
     let Some(g) = grown.iter().find(|g| &g.finding == id) else {
         return Ok(());
     };
-    Err(Failure::refuse(
-        core_codes::GROWTH_NOT_MEASURED,
-        format!(
-            "{id} cannot be closed: its column {} of {} grew (it passed the growth gate, or it is a non-flat allocation-site column), and no alloc-test is bound to it",
-            g.column, g.series
-        ),
-        if g.pytest_loop {
+    let (message, wanted) = if g.dump.is_some() {
+        (
+            format!(
+                "{id} cannot be closed: {}, and nothing decided it since",
+                g.grew_text()
+            ),
+            format!(
+                "{id} decided by the result of that dump series: its non-leak sibling refuted and the finding confirmed (growth measured is decided, not closed)"
+            ),
+        )
+    } else if g.pytest_loop {
+        (
+            format!(
+                "{id} cannot be closed: {}, and no alloc-test is bound to it",
+                g.grew_text()
+            ),
             format!(
                 "an alloc-test of {id} on a harness of its own, not on {} (the loop re-runs the whole test suite per run); growth measured is decided, not closed",
                 g.harness
-            )
-        } else {
+            ),
+        )
+    } else {
+        (
+            format!(
+                "{id} cannot be closed: {}, and no alloc-test is bound to it",
+                g.grew_text()
+            ),
             format!(
                 "an alloc-test of {id} on {} (growth measured is decided, not closed)",
                 g.harness
-            )
-        },
+            ),
+        )
+    };
+    Err(Failure::refuse(
+        core_codes::GROWTH_NOT_MEASURED,
+        message,
+        wanted,
         g.commands().join("   then   "),
     ))
 }

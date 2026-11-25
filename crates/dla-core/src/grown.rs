@@ -8,10 +8,15 @@
 //! and the final gate lists it with the commands that decide it. A runtime detector hit that
 //! names a site is a lead of the same kind while nothing measured the finding at that site.
 //!
+//! Growth a dump series measured (a summarizer's `growth-series` record of authority `dump`
+//! whose gate passed, or a `dump` discriminator that favors leak) is a lead of the same kind
+//! ([`dump_grown`]), though no trend exists for it: a heap-graph series has no harness in its
+//! file and `dla trend` never ran over it.
+//!
 //! Whole-process columns tie to no finding and stay with the residual rows.
 
 use crate::{
-    evidence::{EvidenceKind, EvidenceRecord},
+    evidence::{Authority, EvidenceKind, EvidenceRecord},
     finding::{FindingState, Polarity},
     gate::is_whole_process,
     ids::{EvidenceId, FindingId},
@@ -50,13 +55,51 @@ pub struct Grown {
     /// duplicate of (the same owner or the same site, as `dla ledger duplicate` requires): the
     /// growth may be recorded as part of that finding instead of being tested again.
     pub same_leak: Option<(FindingId, String)>,
+    /// Set when the growth was measured over dumps (no trend exists for the series): see
+    /// [`dump_grown`]. `harness` is then the harness the dumps came from, empty when unknown.
+    pub dump: Option<DumpLead>,
+}
+
+/// A growth a dump series measured, as a lead to decide.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DumpLead {
+    /// The newest record that makes the lead: a passing dump growth record with a column that
+    /// names the finding, or a dump discriminator that favors leak.
+    pub evidence: EvidenceId,
+    /// The newest dump discriminator that favors leak and names the finding's family, the
+    /// result the summarizer's `needed` line cites.
+    pub discriminator: Option<EvidenceId>,
+    /// The command that wrote the series (`dla summarize heap-graph`), when its file says.
+    pub command: Option<String>,
+    /// The commands that decide it, each accepted by the ledger as printed, in order.
+    pub commands: Vec<String>,
 }
 
 impl Grown {
+    /// What grew, in words: the column, its series and how it was measured.
+    pub fn grew_text(&self) -> String {
+        match &self.dump {
+            Some(d) => format!(
+                "its holder column {} of {} grew over every dump (a dump series of {})",
+                self.column,
+                self.series,
+                d.command.as_deref().unwrap_or("a summarizer")
+            ),
+            None => format!(
+                "its column {} of {} grew (it passed the growth gate, or it is a non-flat allocation-site column)",
+                self.column, self.series
+            ),
+        }
+    }
+
     /// The commands that decide it, in order: the non-leak sibling when it is missing, the test
     /// (the ledger lets a candidate and a closed `unresolved` or `suspected_static_only`
-    /// finding go under test), the alloc-test.
+    /// finding go under test), the alloc-test. For growth measured over dumps: the dump route
+    /// ([`confirm_commands`]).
     pub fn commands(&self) -> Vec<String> {
+        if let Some(d) = &self.dump {
+            return d.commands.clone();
+        }
         let own = self.own_commands();
         match &self.same_leak {
             Some((g, by)) => vec![format!(
@@ -874,10 +917,244 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
                     .findings()
                     .any(|s| s.parent.as_ref() == Some(&root) && s.polarity() == Polarity::NonLeak),
                 same_leak: same_leak_as(view, &root, harness),
+                dump: None,
             });
         }
     }
+    dump_grown(view, &mut out);
     out
+}
+
+/// The harness a dump growth record `records[at]` was measured from: the capture files of the
+/// summarize call that wrote it. The call writes one `retention-path` record per dump right
+/// before the growth record, each with the dump file as its artifact source, so the harness is
+/// the `harness/<H>/` of those paths, when they agree on one.
+fn dump_harness(records: &[&EvidenceRecord], at: usize) -> Option<String> {
+    let n = records[at]
+        .result
+        .get("n")
+        .and_then(|n| n.as_u64())
+        .map_or(usize::MAX, |n| n as usize);
+    let mut found: Vec<&str> = Vec::new();
+    for e in records[..at]
+        .iter()
+        .rev()
+        .take_while(|e| e.kind == EvidenceKind::RetentionPath && e.authority == Authority::Dump)
+        .take(n)
+    {
+        if let crate::evidence::Source::Artifact { path, .. } = &e.source
+            && let Some(h) = crate::measured_holders::harness_of_path(path)
+            && !found.contains(&h)
+        {
+            found.push(h);
+        }
+    }
+    match found.as_slice() {
+        [h] => Some((*h).to_owned()),
+        _ => None,
+    }
+}
+
+/// Growth measured over dumps that nobody decided, as a lead of the same kind as a passed trend
+/// column. A summarizer (`dla summarize heap-graph` and its siblings) writes a dump series with
+/// its growth evidence and no trend, so [`grown_unmeasured`] cannot read it from `view.trends`;
+/// this reads the evidence instead. The rules, kept here and nowhere else:
+///
+/// * What counts: a `growth-series` or `unit-count-series` record of authority `dump` whose
+///   gate passed ([`crate::machine::is_passing_growth`]) with a passed column that names a
+///   finding (`finding`, else the first of `candidates` that exists), and a `discriminator` of
+///   authority `dump` that favors leak and names a finding. The finding must be a leak-side root
+///   (a column or discriminator naming a non-leak sibling counts for nothing), open or closed
+///   `unresolved` or `suspected_static_only`, not merged, and not already listed through a trend
+///   column.
+/// * What lifts it: evidence order is time order, and the newest decisive record about the
+///   family of the root decides. A dump discriminator naming the family that does not favor leak
+///   (non-leak or inconclusive), or an alloc-test bound to the family ([`bound_alloc_tests`]),
+///   newer than the newest record that makes the lead, lifts it; a newer growth record or leak
+///   discriminator brings it back.
+/// * The harness: [`dump_harness`] of the growth record of the series; empty when none is known.
+/// * The commands: [`confirm_commands`] with the newest leak discriminator, the dump route the
+///   summarizer prints. With no discriminator to cite (a growth record alone) the sibling needs
+///   a result that cannot be named, so the commands are the alloc-test route of [`commands`].
+fn dump_grown(view: &RunView, out: &mut Vec<Grown>) {
+    use crate::discriminator::{Favors, favors_of, finding_of};
+    let ledger = &view.ledger;
+    let records: Vec<&EvidenceRecord> = ledger.evidence().collect();
+    let series_of = |e: &EvidenceRecord| {
+        e.result
+            .get("series")
+            .and_then(|s| s.as_str())
+            .map(str::to_owned)
+    };
+    // (record index, root, column, series, is a discriminator)
+    let mut hits: Vec<(usize, FindingId, String, Option<String>, bool)> = Vec::new();
+    for (at, e) in records.iter().enumerate() {
+        if e.authority != Authority::Dump {
+            continue;
+        }
+        let series = series_of(e);
+        if series.as_ref().is_some_and(|s| view.gap_series.contains(s)) {
+            continue;
+        }
+        let mut named: Vec<(FindingId, String)> = Vec::new();
+        if crate::machine::is_passing_growth(e) {
+            let Some(g) = crate::trend::GrowthSummary::from_result(&e.result) else {
+                continue;
+            };
+            for c in g.passed.iter().filter(|c| !is_whole_process(&c.column)) {
+                let found = c
+                    .finding
+                    .iter()
+                    .chain(c.candidates.iter())
+                    .filter_map(|f| f.parse::<FindingId>().ok())
+                    .find(|f| ledger.finding(f).is_some());
+                if let Some(f) = found {
+                    named.push((f, c.column.clone()));
+                }
+            }
+        } else if e.kind == EvidenceKind::Discriminator
+            && favors_of(e) == Some(Favors::Leak)
+            && let Some(f) = finding_of(e).filter(|f| ledger.finding(f).is_some())
+        {
+            let column = e
+                .result
+                .get("column")
+                .and_then(|c| c.as_str())
+                .unwrap_or("(a dump column)")
+                .to_owned();
+            named.push((f, column));
+        }
+        let is_disc = e.kind == EvidenceKind::Discriminator;
+        for (f, column) in named {
+            let Some(ff) = ledger.finding(&f) else {
+                continue;
+            };
+            if ff.polarity() != Polarity::Leak || f.is_sibling() {
+                continue;
+            }
+            hits.push((at, ff.root_id(), column, series.clone(), is_disc));
+        }
+    }
+    let mut roots: Vec<FindingId> = Vec::new();
+    for (_, r, ..) in &hits {
+        if !roots.contains(r) {
+            roots.push(r.clone());
+        }
+    }
+    for root in roots {
+        let Some(rf) = ledger.finding(&root) else {
+            continue;
+        };
+        if rf.polarity() != Polarity::Leak
+            || root.is_sibling()
+            || ledger.merged_into(&root).is_some()
+            || !matches!(
+                rf.state,
+                FindingState::Candidate
+                    | FindingState::UnderTest
+                    | FindingState::Unresolved
+                    | FindingState::SuspectedStaticOnly
+            )
+            || out.iter().any(|g| g.finding == root)
+        {
+            continue;
+        }
+        let family: Vec<FindingId> = ledger
+            .findings()
+            .filter(|f| f.id == root || f.parent.as_ref() == Some(&root))
+            .map(|f| f.id.clone())
+            .collect();
+        let Some(lead) = hits.iter().filter(|h| h.1 == root).max_by_key(|h| h.0) else {
+            continue;
+        };
+        let (at, _, column, series, _) = lead;
+        // The newest decisive record decides: a newer dump discriminator that does not favor
+        // leak, or any newer alloc-test bound to the family, lifts the lead.
+        let later = &records[at + 1..];
+        let lifted = later.iter().any(|e| {
+            e.kind == EvidenceKind::Discriminator
+                && e.authority == Authority::Dump
+                && favors_of(e) != Some(Favors::Leak)
+                && finding_of(e).is_some_and(|f| family.contains(&f))
+        }) || !bound_alloc_tests(later, &family).is_empty();
+        if lifted {
+            continue;
+        }
+        // The growth record of the series and the harness its dumps came from.
+        let growth_at = if is_growth_record(records[*at]) {
+            Some(*at)
+        } else {
+            series.as_ref().and_then(|s| {
+                records
+                    .iter()
+                    .rposition(|e| is_growth_record(e) && series_of(e).as_ref() == Some(s))
+            })
+        };
+        let harness = growth_at
+            .and_then(|g| dump_harness(&records, g))
+            .unwrap_or_default();
+        let disc = hits
+            .iter()
+            .filter(|h| h.1 == root && h.4 && records[h.0].authority == Authority::Dump)
+            .filter(|h| favors_of(records[h.0]) == Some(Favors::Leak))
+            .max_by_key(|h| h.0)
+            .map(|h| records[h.0].evidence_id.clone());
+        let growth = growth_at.map(|g| records[g].evidence_id.to_string());
+        let workload = (!harness.is_empty())
+            .then(|| workload_evidence(ledger, &harness))
+            .flatten()
+            .map(|w| w.to_string());
+        let has_sibling = ledger
+            .findings()
+            .any(|s| s.parent.as_ref() == Some(&root) && s.polarity() == Polarity::NonLeak);
+        let commands = match &disc {
+            Some(d) => confirm_commands(ledger, rf, &harness, d),
+            None => commands(
+                &root,
+                if harness.is_empty() {
+                    "<harness>"
+                } else {
+                    &harness
+                },
+                growth.as_deref(),
+                workload.as_deref(),
+                has_sibling,
+                crate::machine::is_allowed(rf.state, FindingState::UnderTest),
+                false,
+            ),
+        };
+        let command = series
+            .as_deref()
+            .zip(view.run_dir.as_deref())
+            .and_then(|(s, d)| crate::series::SeriesFile::load(d, s).ok())
+            .and_then(|s| s.source.command);
+        out.push(Grown {
+            finding: root.clone(),
+            state: rf.state,
+            harness,
+            series: series.clone().unwrap_or_default(),
+            column: column.clone(),
+            growth,
+            workload,
+            pytest_loop: false,
+            has_sibling,
+            same_leak: None,
+            dump: Some(DumpLead {
+                evidence: records[*at].evidence_id.clone(),
+                discriminator: disc,
+                command,
+                commands,
+            }),
+        });
+    }
+}
+
+/// A growth-class record (`growth-series` or `unit-count-series`).
+fn is_growth_record(e: &EvidenceRecord) -> bool {
+    matches!(
+        e.kind,
+        EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries
+    )
 }
 
 /// A runtime detector hit that names a site, with nothing yet measuring the holder there.
@@ -977,10 +1254,21 @@ pub fn items(view: &RunView, grown: &[Grown]) -> Vec<BlockingItem> {
         out.push(BlockingItem {
             kind: BlockingKind::Growth,
             id: g.finding.to_string(),
-            description: format!(
-                "{} is closed {} but its column {} of {} grew (it passed the growth gate, or it is a non-flat allocation-site column) and no alloc-test decided it",
-                g.finding, g.state, g.column, g.series
-            ),
+            description: if g.dump.is_some() {
+                format!(
+                    "{} is closed {} but {} and nothing decided it since",
+                    g.finding,
+                    g.state,
+                    g.grew_text()
+                )
+            } else {
+                format!(
+                    "{} is closed {} but {} and no alloc-test decided it",
+                    g.finding,
+                    g.state,
+                    g.grew_text()
+                )
+            },
             fix: g.commands().join("   then   "),
         });
     }
@@ -1744,5 +2032,287 @@ mod tests {
             cmds.last().unwrap(),
             &format!("dla ledger confirm F1 --evidence {on_h1}")
         );
+    }
+
+    // ---- growth measured over dumps
+
+    /// One dump record of authority `dump`.
+    fn dump_ev(
+        l: &mut Ledger,
+        kind: EvidenceKind,
+        path: Option<&str>,
+        result: serde_json::Value,
+    ) -> EvidenceId {
+        l.add_evidence(NewEvidence {
+            source: match path {
+                Some(p) => Source::Artifact {
+                    path: p.into(),
+                    sha256: "0".repeat(64),
+                },
+                None => Source::Repo {
+                    commit: "c".into(),
+                    path: None,
+                },
+            },
+            tool: Tool {
+                name: "dla-summarize".into(),
+                version: "1".into(),
+            },
+            authority: Authority::Dump,
+            kind,
+            result,
+            raw: None,
+            coverage: EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        })
+        .unwrap();
+        l.evidence().last().unwrap().evidence_id.clone()
+    }
+
+    /// What `dla summarize heap-graph` writes over three dumps of harness H1: a retention record
+    /// per dump, the growth record with a passed column that names `finding`. Returns its id.
+    fn dump_growth(l: &mut Ledger, series: &str, finding: &str) -> EvidenceId {
+        for i in 1..=3 {
+            dump_ev(
+                l,
+                EvidenceKind::RetentionPath,
+                Some(&format!(
+                    ".dla/R1/harness/H1/out/p{i}/capture/7/heap-{i}.heapsnapshot"
+                )),
+                serde_json::json!({"holders": []}),
+            );
+        }
+        dump_ev(
+            l,
+            EvidenceKind::GrowthSeries,
+            None,
+            serde_json::json!({"series": series, "axis": "dump", "n": 3, "gate": "pass",
+                "passed": [{"column": "holder:app.Conn.request", "finding": finding}]}),
+        )
+    }
+
+    fn dump_disc(l: &mut Ledger, favors: &str, finding: &str, series: &str) -> EvidenceId {
+        dump_ev(
+            l,
+            EvidenceKind::Discriminator,
+            None,
+            serde_json::json!({"test": "dump-plateau", "favors": favors, "finding": finding,
+                "series": series, "column": "holder:app.Conn.request",
+                "reason": "retained bytes and count grew over every interval"}),
+        )
+    }
+
+    /// A view over the ledger with no trend, the way a run with only a summarizer's series is.
+    fn no_trend_view(l: Ledger) -> RunView {
+        let state =
+            crate::state::RunState::init("/p", None, 3600, None, crate::state::now_utc()).unwrap();
+        RunView::new(state, l, None)
+    }
+
+    fn close_f1(l: &mut Ledger) {
+        l.transition(
+            &f1(),
+            FindingState::Unresolved,
+            Some(crate::finding::UnresolvedReason::Inconclusive),
+            Some("x".into()),
+            vec![],
+            "t",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_dump_growth_with_a_leak_discriminator_is_grown_and_decided_by_the_dump_route() {
+        let (_d, mut l) = scene();
+        let g = dump_growth(&mut l, "S4", "F1");
+        let d = dump_disc(&mut l, "leak", "F1", "S4");
+        let view = no_trend_view(l);
+        let grown = grown_unmeasured(&view);
+        assert_eq!(grown.len(), 1, "{grown:?}");
+        let g1 = &grown[0];
+        assert_eq!((g1.finding.clone(), g1.series.as_str()), (f1(), "S4"));
+        assert_eq!(g1.column, "holder:app.Conn.request");
+        // The harness comes from the capture files of the dumps.
+        assert_eq!(g1.harness, "H1");
+        let dump = g1.dump.as_ref().unwrap();
+        assert_eq!(dump.discriminator.as_ref(), Some(&d));
+        assert_eq!(
+            g1.commands(),
+            [
+                format!("dla ledger refute F1.n1 --evidence {d}"),
+                "dla ledger annotate F1 --holder <holder>".to_owned(),
+                format!("dla ledger confirm F1 --evidence {g}"),
+            ]
+        );
+        assert!(g1.grew_text().contains("grew over every dump"));
+    }
+
+    #[test]
+    fn a_dump_growth_alone_is_a_lead_and_a_discriminator_alone_is_one() {
+        let (_d, mut l) = scene();
+        dump_growth(&mut l, "S4", "F1");
+        let grown = grown_unmeasured(&no_trend_view(l));
+        assert_eq!(grown.len(), 1);
+        assert!(grown[0].dump.as_ref().unwrap().discriminator.is_none());
+        // The discriminator by itself, with no growth record of its series: no harness known.
+        let (_d, mut l) = scene();
+        let d = dump_disc(&mut l, "leak", "F1", "S4");
+        let grown = grown_unmeasured(&no_trend_view(l));
+        assert_eq!(grown.len(), 1);
+        assert_eq!(grown[0].harness, "");
+        assert_eq!(
+            grown[0].commands()[0],
+            format!("dla ledger refute F1.n1 --evidence {d}")
+        );
+    }
+
+    #[test]
+    fn a_closed_finding_with_a_dump_growth_is_listed_in_words_that_name_the_dump() {
+        for close in [true, false] {
+            let (_d, mut l) = scene();
+            dump_growth(&mut l, "S4", "F1");
+            dump_disc(&mut l, "leak", "F1", "S4");
+            if close {
+                close_f1(&mut l);
+            }
+            let view = no_trend_view(l);
+            let grown = grown_unmeasured(&view);
+            assert_eq!(grown.len(), 1, "close={close}");
+            let items = items(&view, &grown);
+            if close {
+                assert_eq!(items.len(), 1);
+                let d = &items[0].description;
+                assert!(d.contains("F1 is closed unresolved"), "{d}");
+                assert!(
+                    d.contains("holder column holder:app.Conn.request of S4"),
+                    "{d}"
+                );
+                assert!(d.contains("grew over every dump"), "{d}");
+                assert!(d.contains("nothing decided it since"), "{d}");
+                assert!(!d.contains("no alloc-test decided it"), "{d}");
+                assert!(
+                    items[0].fix.contains("dla ledger confirm F1"),
+                    "{}",
+                    items[0].fix
+                );
+            } else {
+                // An open one is listed as a finding item by the status, not here.
+                assert!(items.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn a_newer_non_leak_dump_discriminator_or_alloc_test_lifts_the_lead() {
+        for lift in ["non-leak", "inconclusive"] {
+            let (_d, mut l) = scene();
+            dump_growth(&mut l, "S4", "F1");
+            dump_disc(&mut l, "leak", "F1", "S4");
+            dump_disc(&mut l, lift, "F1", "S4");
+            assert!(grown_unmeasured(&no_trend_view(l)).is_empty(), "{lift}");
+        }
+        // A newer alloc-test bound to the family, whichever way it favors.
+        for favors in ["non-leak", "leak"] {
+            let (_d, mut l) = scene();
+            dump_growth(&mut l, "S4", "F1");
+            dump_disc(&mut l, "leak", "F1", "S4");
+            alloc_test(&mut l, favors, "H1");
+            assert!(grown_unmeasured(&no_trend_view(l)).is_empty(), "{favors}");
+        }
+        // The non-leak discriminator names the sibling: the family is read.
+        let (_d, mut l) = scene();
+        dump_growth(&mut l, "S4", "F1");
+        dump_disc(&mut l, "non-leak", "F1.n1", "S4");
+        assert!(grown_unmeasured(&no_trend_view(l)).is_empty());
+        // An older one does not: growth measured after it is the newest word.
+        let (_d, mut l) = scene();
+        dump_disc(&mut l, "non-leak", "F1", "S3");
+        dump_growth(&mut l, "S4", "F1");
+        dump_disc(&mut l, "leak", "F1", "S4");
+        assert_eq!(grown_unmeasured(&no_trend_view(l)).len(), 1);
+    }
+
+    #[test]
+    fn a_dump_growth_of_a_sibling_a_decided_root_or_a_failed_gate_is_no_lead() {
+        // The growth names the non-leak sibling.
+        let (_d, mut l) = scene();
+        dump_growth(&mut l, "S4", "F1.n1");
+        dump_disc(&mut l, "leak", "F1.n1", "S4");
+        assert!(grown_unmeasured(&no_trend_view(l)).is_empty());
+        // The root is refuted (a confirmed one is covered by the CLI test: the confirm itself
+        // needs the ledger's whole route).
+        let (_d, mut l) = scene();
+        dump_growth(&mut l, "S4", "F1");
+        let d = dump_disc(&mut l, "non-leak", "F1", "S4");
+        l.transition(&f1(), FindingState::Refuted, None, None, vec![d], "t")
+            .unwrap();
+        assert!(grown_unmeasured(&no_trend_view(l)).is_empty());
+        // A growth record whose gate failed, or one that is not a dump's.
+        let (_d, mut l) = scene();
+        dump_ev(
+            &mut l,
+            EvidenceKind::GrowthSeries,
+            None,
+            serde_json::json!({"series": "S4", "gate": "fail",
+                "passed": [{"column": "holder:app.Conn.request", "finding": "F1"}]}),
+        );
+        add_ev(
+            &mut l,
+            EvidenceKind::GrowthSeries,
+            serde_json::json!({"series": "S5", "gate": "pass",
+                "passed": [{"column": "holder:app.Conn.request", "finding": "F1"}]}),
+        );
+        assert!(grown_unmeasured(&no_trend_view(l)).is_empty());
+    }
+
+    #[test]
+    fn a_finding_with_a_trend_column_and_a_dump_growth_is_one_lead() {
+        let (_d, mut l) = scene();
+        dump_growth(&mut l, "S4", "F1");
+        dump_disc(&mut l, "leak", "F1", "S4");
+        let mut view = no_trend_view(l);
+        let col: crate::trend::ColumnTrend = serde_json::from_value(serde_json::json!({
+            "name": "py.blocks@a.py:1", "unit": "count", "kind": "counter", "region": "heap",
+            "site": "a.py:1", "n": 8, "noise": 0.0, "rise": 100.0, "shape": "steady",
+            "gate": "pass", "gate_failed": [], "candidates": ["F1"],
+        }))
+        .unwrap();
+        view.trends = vec![crate::trend::TrendReport {
+            schema_version: 1,
+            id: "T1".into(),
+            series: "S1".into(),
+            thresholds: dla_stats::GateThresholds::default(),
+            columns: vec![col],
+            targets: vec![],
+        }];
+        view.series_harness.insert("S1".into(), "H1".into());
+        let grown = grown_unmeasured(&view);
+        assert_eq!(grown.len(), 1, "{grown:?}");
+        // The trend's own entry stands.
+        assert!(grown[0].dump.is_none());
+        assert_eq!(items(&view, &grown).len(), 0);
+    }
+
+    #[test]
+    fn dumps_of_two_harnesses_name_no_harness() {
+        let (_d, mut l) = scene();
+        for (i, h) in ["H1", "H2", "H1"].iter().enumerate() {
+            dump_ev(
+                &mut l,
+                EvidenceKind::RetentionPath,
+                Some(&format!(".dla/R1/harness/{h}/out/p{i}/heap-1.heapsnapshot")),
+                serde_json::json!({}),
+            );
+        }
+        dump_ev(
+            &mut l,
+            EvidenceKind::GrowthSeries,
+            None,
+            serde_json::json!({"series": "S4", "n": 3, "gate": "pass",
+                "passed": [{"column": "holder:x", "finding": "F1"}]}),
+        );
+        let grown = grown_unmeasured(&no_trend_view(l));
+        assert_eq!(grown[0].harness, "");
     }
 }
