@@ -21,7 +21,20 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   package. `--next --package <dir>` takes the pending candidates of that directory (refused with the
   packages that have some when none is pending there). A directory that cannot hold the driver (no
   non-test Go file, `go list` fails, or no file builds here) is named in `summary.next_note` and the
-  next package by rank is taken; its candidates stay pending, not targeted.
+  next package by rank is taken; its candidates stay pending, not targeted. A directory whose only
+  non-test Go files are generated (`Code generated ... DO NOT EDIT`) is such a directory: `--package`
+  refuses it saying so, and `--next` names it in `_attention` and goes on.
+- A package of a nested module. The driver is built and run from the module that holds the package, the
+  nearest `go.mod` at or above its directory, whatever module the workload is in: `harness.json` has that
+  directory as `build.cwd` and `run.cwd` and names the package relative to it (`./store`), and `--package`,
+  `--probe` and `--entry` take the directory from the project root. A work copy of a project with more than
+  one `go.mod` and no `go.work` of its own gets a `go.work` at its root that lists every module directory of
+  the copy, so the modules of the repository resolve from the copy, not as released versions. Its `go` line is
+  the highest `go` directive of the modules (a `go.work` below one of them is refused by the go command; a
+  module that needs a newer Go than the installed one makes the command look for a toolchain, which fails
+  offline). Coverage uses `-coverpkg` with every module of the workspace, so a writer in another module of
+  the repository is covered when the driver's binary links it. When the run's scope cuts the copy, the
+  package's module and the modules of the repository it requires are copied as well.
 - Probes. A package variable is read by the `dlaProbes` hook (`GoVar`). A struct field
   (`container-field`, `registry-field`, in the driver's package) gets a `go-field` probe in
   `probes.json`, read with no code of yours: pass the object that holds it to `dlaTrack(obj)` in

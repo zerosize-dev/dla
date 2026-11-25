@@ -69,15 +69,22 @@ weights! {
     w_param_flow = 15,
     w_const_only = -10,
     w_exported = 6,
+    // Three or four distinct functions add at run time, five or more.
+    w_many = 8,
+    w_many_lots = 16,
     // Removers.
     growth_unmatched = 25,
     r_none = 8,
     r_holder_level = -12,
+    // Every removal is a whole-container reset, and something adds at run time.
+    r_reset_only = 15,
     // Registrations and owners.
     recv_local = -20,
     recv_outer = 8,
     owner_percall = -10,
     owner_startup = 5,
+    // Go: the site is in a directory of test helpers (`spantest`, `httptest`).
+    go_support_dir = -25,
 }
 
 /// The worst tier the measurement queue takes.
@@ -186,6 +193,37 @@ fn is_test_file(name: &str) -> bool {
         || name.ends_with("Test.kt")
 }
 
+/// English words that end in `test`: a directory of one of these is not a package of test
+/// helpers.
+const TEST_SUFFIX_WORDS: &[&str] = &[
+    "latest", "greatest", "contest", "protest", "attest", "detest",
+];
+
+/// The path of a site without its line.
+fn site_path(site: &str) -> &str {
+    match site.rsplit_once(':') {
+        Some((p, line)) if line.chars().all(|c| c.is_ascii_digit()) && !line.is_empty() => p,
+        _ => site,
+    }
+}
+
+/// True when `site` is a Go file in a directory whose name ends in `test` and is longer than
+/// `test` (`spantest`, `httptest`, `helpertest`, `xtest`): by the language's convention a
+/// package of test helpers. The name `test` itself and the English words that end in `test`
+/// (`latest`, `contest`) do not count, nor does a file name.
+fn is_go_support_dir(site: &str) -> bool {
+    let path = site_path(site).replace('\\', "/");
+    if !path.ends_with(".go") {
+        return false;
+    }
+    let mut parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+    parts.pop();
+    parts.iter().any(|d| {
+        let d = d.to_ascii_lowercase();
+        d.len() > 4 && d.ends_with("test") && !TEST_SUFFIX_WORDS.contains(&d.as_str())
+    })
+}
+
 /// True when `site` (`file:line`, or a bare path) names test, example, benchmark or
 /// documentation code: a path component from [`NON_PRODUCT_DIRS`] or a test file name.
 pub fn is_non_product_site(site: &str) -> bool {
@@ -273,7 +311,7 @@ pub fn multi_origin_key(f: &Finding) -> u8 {
 }
 
 /// The text the report prints above the ranked findings.
-pub const TIER_NOTE: &str = "Suspected, static-only findings are ordered by a score: a sum of named weights for a DLA rule hit (stronger when the holder lives for the whole process or the rule is about a timer, task, listener or cache), a known leak pattern, a real container that is written by code that can run many times with a key from its caller and has no remover at the depth of the writer, minus weights for holders that are not containers, are bounded or weak, or are only filled at start-up; `dla ledger list` prints each row's score and its three largest contributions. Ties keep the tier (1: a DLA rule or known leak pattern, 2: a census holder with writers and no removers, 3: another detector hit, 4: a census holder with writers that also has removers), then a finding raised by more than one origin first, then the ledger's order; a finding in test, example, mock, sample, demo or benchmark code is demoted below all of them.";
+pub const TIER_NOTE: &str = "Suspected, static-only findings are ordered by a score: a sum of named weights for a DLA rule hit (stronger when the holder lives for the whole process or the rule is about a timer, task, listener or cache), a known leak pattern, a real container that is written by code that can run many times with a key from its caller and has no remover at the depth of the writer, plus a little when three or more functions add to the holder at run time (`w_many`, `w_many_lots`) and when every removal is a whole-container reset (`r_reset_only`), minus weights for holders that are not containers, are bounded or weak, or are only filled at start-up, and for a Go file in a directory of test helpers such as `spantest` (`go_support_dir`); `dla ledger list` prints each row's score and its three largest contributions. Ties keep the tier (1: a DLA rule or known leak pattern, 2: a census holder with writers and no removers, 3: another detector hit, 4: a census holder with writers that also has removers), then a finding raised by more than one origin first, then the ledger's order; a finding in test, example, mock, sample, demo or benchmark code is demoted below all of them.";
 
 /// Rule names (after `detector:dla/`) that are about a unit created per call or per object:
 /// a timer, task, goroutine, thread, handle, listener registration, cache decorator or the
@@ -489,6 +527,19 @@ pub fn contributions(f: &Finding, annotation: Option<&Annotation>) -> Vec<(&'sta
     if inserts.iter().any(|s| !s.init && !s.startup && s.exported) {
         add!(w_exported);
     }
+    // A holder added to from many places is more likely fed at run time than one with a
+    // single writer. Sites whose function is not known do not count.
+    let adding_functions = inserts
+        .iter()
+        .filter(|s| !s.init && !s.startup)
+        .filter_map(|s| s.function.as_deref())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    if adding_functions >= 5 {
+        add!(w_many_lots);
+    } else if adding_functions >= 3 {
+        add!(w_many);
+    }
 
     // Removers: an initialiser's reset is the initial value, not a removal.
     let removing: Vec<&SiteFact> = removers
@@ -509,6 +560,13 @@ pub fn contributions(f: &Finding, annotation: Option<&Annotation>) -> Vec<(&'sta
     if removing.iter().any(|r| r.depth == 0) {
         add!(r_holder_level);
     }
+    // Only whole-container resets remove: between two resets nothing bounds the holder.
+    if !removing.is_empty()
+        && removing.iter().all(|r| r.kind == SiteKind::Reset)
+        && inserts.iter().any(|s| !s.init && !s.startup)
+    {
+        add!(r_reset_only);
+    }
 
     // Registrations and owners.
     match facts.receiver {
@@ -520,6 +578,9 @@ pub fn contributions(f: &Finding, annotation: Option<&Annotation>) -> Vec<(&'sta
         Some(OwnerCreation::PerCall) => add!(owner_percall),
         Some(OwnerCreation::StartUp) => add!(owner_startup),
         None => {}
+    }
+    if f.site.as_deref().is_some_and(is_go_support_dir) {
+        add!(go_support_dir);
     }
     out
 }
@@ -1213,5 +1274,144 @@ mod tests {
             n.contains(&"w_runtime") && !n.contains(&"w_startup_all"),
             "{n:?}"
         );
+    }
+
+    /// A holder with inserts from the named functions at run time, and the given removers.
+    fn many_ann(funcs: &[&str], removers: Vec<SiteFact>) -> Annotation {
+        facts_ann(|h| {
+            h.container = Some(ContainerClass::Container);
+            h.writer_sites = funcs
+                .iter()
+                .enumerate()
+                .map(|(i, f)| site(&format!("pkg/a.go:{}", 10 + i), SiteKind::Insert, 0, f))
+                .collect();
+            h.remover_sites = removers;
+        })
+    }
+
+    #[test]
+    fn w_many_counts_distinct_run_time_functions_that_add() {
+        let f = census_holder(Holder::ContainerField);
+        let one = names(&f, &many_ann(&["A"], vec![]));
+        assert!(
+            !one.contains(&"w_many") && !one.contains(&"w_many_lots"),
+            "{one:?}"
+        );
+        // Two functions: still none. The same function at three sites counts once.
+        let two = names(&f, &many_ann(&["A", "B"], vec![]));
+        assert!(!two.contains(&"w_many"), "{two:?}");
+        let same = names(&f, &many_ann(&["A", "A", "A", "A"], vec![]));
+        assert!(!same.contains(&"w_many"), "{same:?}");
+        let three = names(&f, &many_ann(&["A", "B", "C"], vec![]));
+        assert!(
+            three.contains(&"w_many") && !three.contains(&"w_many_lots"),
+            "{three:?}"
+        );
+        let four = names(&f, &many_ann(&["A", "B", "C", "D"], vec![]));
+        assert!(
+            four.contains(&"w_many") && !four.contains(&"w_many_lots"),
+            "{four:?}"
+        );
+        let five = names(&f, &many_ann(&["A", "B", "C", "D", "E"], vec![]));
+        assert!(
+            five.contains(&"w_many_lots") && !five.contains(&"w_many"),
+            "{five:?}"
+        );
+        assert_eq!((weight("w_many"), weight("w_many_lots")), (8, 16));
+        // Initialisers and start-up sites do not count.
+        let mut a = many_ann(&["A", "B", "C", "D", "E"], vec![]);
+        a.facts.writer_sites[0].init = true;
+        a.facts.writer_sites[1].startup = true;
+        let n = names(&f, &a);
+        assert!(
+            n.contains(&"w_many") && !n.contains(&"w_many_lots"),
+            "{n:?}"
+        );
+    }
+
+    #[test]
+    fn r_reset_only_needs_resets_alone_and_an_adder_at_run_time() {
+        let f = census_holder(Holder::ContainerField);
+        let reset = || site("pkg/a.go:90", SiteKind::Reset, 0, "Close");
+        let only = names(&f, &many_ann(&["A"], vec![reset()]));
+        assert!(only.contains(&"r_reset_only"), "{only:?}");
+        assert_eq!(weight("r_reset_only"), 15);
+        // A removal of one entry beside the reset: it bounds the holder.
+        let del = site("pkg/a.go:91", SiteKind::Delete, 0, "Remove");
+        let both = names(&f, &many_ann(&["A"], vec![reset(), del.clone()]));
+        assert!(!both.contains(&"r_reset_only"), "{both:?}");
+        let del_only = names(&f, &many_ann(&["A"], vec![del]));
+        assert!(!del_only.contains(&"r_reset_only"));
+        // No remover at all.
+        assert!(!names(&f, &many_ann(&["A"], vec![])).contains(&"r_reset_only"));
+        // An initialiser's reset is the initial value, not a removal.
+        let mut init_reset = reset();
+        init_reset.init = true;
+        assert!(!names(&f, &many_ann(&["A"], vec![init_reset])).contains(&"r_reset_only"));
+        // No adding site at run time: only start-up writers.
+        let mut a = many_ann(&["A"], vec![reset()]);
+        a.facts.writer_sites[0].startup = true;
+        assert!(!names(&f, &a).contains(&"r_reset_only"));
+    }
+
+    #[test]
+    fn go_support_dir_marks_go_files_in_a_directory_that_ends_in_test() {
+        let a = many_ann(&["A"], vec![]);
+        let at = |site: &str| {
+            names(
+                &finding("census", &[], Some(Holder::ContainerField), site),
+                &a,
+            )
+        };
+        for site in [
+            "core/span/spantest/recorder.go:12",
+            "net/httptest/x.go:3",
+            "helpertest/x.go:3",
+            "xtest/x.go:3",
+            "sdk/SpanTest/x.go:3",
+            "pkg/spantest/sub/x.go:3",
+        ] {
+            assert!(at(site).contains(&"go_support_dir"), "{site}");
+        }
+        assert_eq!(weight("go_support_dir"), -25);
+        // The directory `test` itself, English words that end in `test`, a file name that ends
+        // in `test`, and a file of another language in a `...test` directory.
+        for site in [
+            "pkg/test/x.go:3",
+            "pkg/contest/x.go:3",
+            "pkg/latest/x.go:3",
+            "pkg/attest/x.go:3",
+            "pkg/x/spantest.go:3",
+            "pkg/spantest/x.py:3",
+            "pkg/test/x.py:3",
+            "pkg/contest/x.py:3",
+            "pkg/x.go:3",
+        ] {
+            assert!(!at(site).contains(&"go_support_dir"), "{site}");
+        }
+        // A penalty, not a demotion: the tier is unchanged.
+        let f = finding(
+            "census",
+            &[],
+            Some(Holder::ContainerField),
+            "a/spantest/x.go:1",
+        );
+        assert_eq!(tier(&f, Some(&ann(2, 0))), 2);
+        let g = finding(
+            "census",
+            &[],
+            Some(Holder::ContainerField),
+            "a/other/x.go:1",
+        );
+        assert_eq!(score(&g, Some(&a)) - score(&f, Some(&a)), 25);
+    }
+
+    #[test]
+    fn the_tier_note_names_the_weights_of_the_growth_first_order() {
+        for name in ["w_many", "r_reset_only", "go_support_dir"] {
+            assert!(TIER_NOTE.contains(name), "{name}");
+            assert!(WEIGHTS.iter().any(|(n, _)| *n == name), "{name}");
+        }
+        assert!(WEIGHTS.iter().any(|(n, _)| *n == "w_many_lots"));
     }
 }

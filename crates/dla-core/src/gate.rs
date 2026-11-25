@@ -1276,6 +1276,13 @@ pub fn residual_growth_bytes(residual: f64, series: &crate::series::SeriesFile) 
     residual * (last.x - first.x).max(0.0)
 }
 
+/// True when a series has fewer points after its warm-up than the trend gate needs: nothing of
+/// it can pass, so its residual is no reason for a capture; the longer run comes first.
+fn too_short_for_the_gate(series: &crate::series::SeriesFile) -> bool {
+    let need = dla_stats::GateThresholds::default().min_points as usize;
+    series.points.len().saturating_sub(series.warmup as usize) < need
+}
+
 /// The over-threshold heap residual rows whose harness has no summarized capture, one entry per
 /// harness. A row counts only when its unattributed growth over the span of its series is at
 /// least [`MIN_CAPTURE_GROWTH_BYTES`]. A harness has a summarized capture when the run holds a
@@ -1308,6 +1315,7 @@ pub fn uncaptured_residuals(view: &RunView) -> Vec<UncapturedResidual> {
         if !file.source.runtime.is_some_and(supports_capture)
             || scan.summarized.contains(harness)
             || residual_growth_bytes(r.residual, &file) < MIN_CAPTURE_GROWTH_BYTES
+            || too_short_for_the_gate(&file)
         {
             continue;
         }

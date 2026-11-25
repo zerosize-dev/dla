@@ -1240,3 +1240,48 @@ fn the_texts_say_what_a_site_column_counts_and_the_three_growth_first_changes() 
     }
     assert!(!read("skills/detect-leak-anywhere/SKILL.md").contains("capture-first"));
 }
+
+#[test]
+fn the_texts_say_how_a_go_package_of_a_nested_module_is_driven_and_what_ranks_it() {
+    let read = |p: &str| {
+        fs::read_to_string(root().join(p))
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let go = read("skills/detect-leak-anywhere/references/go.md");
+    for want in [
+        "The driver is built and run from the module that holds the package, the nearest `go.mod` at or above its directory, whatever module the workload is in",
+        "gets a `go.work` at its root that lists every module directory of the copy, so the modules of the repository resolve from the copy, not as released versions",
+        "Its `go` line is the highest `go` directive of the modules",
+        "Coverage uses `-coverpkg` with every module of the workspace",
+        "A directory whose only non-test Go files are generated (`Code generated ... DO NOT EDIT`) is such a directory: `--package` refuses it saying so, and `--next` names it in `_attention` and goes on",
+    ] {
+        assert!(go.contains(want), "go.md lacks: {want}");
+    }
+    let readme = read("harness/go/README.md");
+    for want in [
+        "the driver is built and run from the module that holds it (the nearest `go.mod` at or above it), whatever module the workload is in",
+        "`dla harness gen` writes one at the root of the copy that lists every module directory, with the highest `go` directive of the modules",
+        "A package directory whose only non-test Go files are generated is refused (`--next` skips it and says so in `_attention`)",
+    ] {
+        assert!(readme.contains(want), "harness/go/README.md lacks: {want}");
+    }
+    let stages = read("skills/detect-leak-anywhere/references/stages.md");
+    for want in [
+        "`w_many` 8 (`w_many_lots` 16) when three or four (five or more) distinct functions add to the holder at run time",
+        "`r_reset_only` 15 when every removal is a whole-container reset and something adds at run time",
+        "`go_support_dir` -25, a penalty and not a demotion",
+    ] {
+        assert!(stages.contains(want), "stages.md lacks: {want}");
+    }
+    let verify = fs::read_to_string(root().join("docs/VERIFY.md")).unwrap();
+    for want in [
+        "| A documented leak ranked below test helpers and registration rows (a Go library the tool had not been run on) | corrected |",
+        "| A driver could not be built for a package of a nested module (a Go library the tool had not been run on) | corrected |",
+    ] {
+        assert!(verify.contains(want), "VERIFY.md lacks the row: {want}");
+    }
+    assert!(!read("skills/detect-leak-anywhere/SKILL.md").contains("go_support_dir"));
+}

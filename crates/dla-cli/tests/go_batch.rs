@@ -305,10 +305,19 @@ fn a_package_that_cannot_hold_the_driver_is_skipped_and_its_candidates_stay_pend
     assert_eq!(out["summary"]["package"], "store", "{out}");
     let note = out["summary"]["next_note"].as_str().unwrap();
     assert!(
-        note.contains("package health cannot hold the driver (go list fails there"),
+        note.contains("package health cannot hold the driver: its 2 best-ranked candidate(s)")
+            && note.contains("(go list fails there"),
         "{note}"
     );
     assert!(note.contains("stay pending and are not targeted"), "{note}");
+    // The line that leads the output names the skipped package and why.
+    assert!(
+        out["_attention"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("--next skipped package health (go list fails there"),
+        "{out}"
+    );
     // The skipped candidates are still pending: nothing targeted them.
     let list = command(r.dir.path())
         .args(["ledger", "list", "--all"])

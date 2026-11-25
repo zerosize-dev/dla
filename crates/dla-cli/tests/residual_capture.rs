@@ -87,6 +87,11 @@ fn scene(runtime: &str) -> Run {
 /// [`scene`] with the residual per unit and the units between the first and the last point of
 /// the series; the threshold is a quarter of the residual.
 fn scene_with(runtime: &str, residual: f64, units: f64) -> Run {
+    scene_points(runtime, residual, units, 10)
+}
+
+/// [`scene_with`] with `n` points in the series.
+fn scene_points(runtime: &str, residual: f64, units: f64, n: u32) -> Run {
     let dir = tempfile::tempdir().unwrap();
     let o = base(dir.path())
         .env("DLA_CONSENT_TIERS", "1,2")
@@ -105,8 +110,10 @@ fn scene_with(runtime: &str, residual: f64, units: f64) -> Run {
         json!({"schema_version": 1, "id": "S1",
                "source": {"kind": "harness", "harness": "H1", "mode": "fresh", "runtime": runtime},
                "axis": "n", "warmup": 0, "columns": [],
-               "points": [{"x": 0.0, "t_ms": 0, "values": []},
-                          {"x": units, "t_ms": 1000, "values": []}]})
+               // Ten points: a series shorter than the gate needs demands no capture.
+               "points": (0..n)
+                   .map(|i| json!({"x": units * f64::from(i) / f64::from(n - 1), "t_ms": 100 * i, "values": []}))
+                   .collect::<Vec<_>>()})
         .to_string(),
     )
     .unwrap();
@@ -264,6 +271,20 @@ fn an_allocation_stack_summary_of_the_harness_captures_clears_it_wherever_its_fi
     assert!(r.capture_items(&["--stage", "classify"]).is_empty());
     let (code, v) = r.resolve_unresolved();
     assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn a_series_too_short_for_the_gate_demands_no_capture_whatever_its_growth() {
+    // 250 bytes per unit over 3,520 units, as below, but four points: nothing of the series can
+    // pass, so the longer run comes first, not a capture.
+    let r = scene_points("node", 250.0, 3520.0, 4);
+    assert!(r.capture_items(&["--final"]).is_empty());
+    assert!(r.capture_items(&["--stage", "classify"]).is_empty());
+    let (code, v) = r.resolve_unresolved();
+    assert_eq!(code, 0, "{v}");
+    // Eight points are enough.
+    let r = scene_points("node", 250.0, 3520.0, 8);
+    assert_eq!(r.capture_items(&["--final"]).len(), 1);
 }
 
 #[test]

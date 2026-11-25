@@ -505,6 +505,18 @@ fn go_functions(cov_dir: &Path, work: &Path) -> (BTreeSet<(String, String)>, Vec
     (lines.into_iter().map(|(p, n, _)| (p, n)).collect(), notes)
 }
 
+/// Where `go tool cover` reads a profile: the root of the copy when it holds a `go.work` or a
+/// `go.mod`, else the one module of the copy (a project whose only module is nested).
+fn go_cover_dir(work: &Path) -> PathBuf {
+    if work.join("go.work").is_file() || work.join("go.mod").is_file() {
+        return work.to_path_buf();
+    }
+    match super::gomod::modules_in(work).first() {
+        Some((dir, _)) => work.join(dir),
+        None => work.to_path_buf(),
+    }
+}
+
 /// [`go_functions`] with the line each function starts at.
 fn go_function_lines(
     cov_dir: &Path,
@@ -521,11 +533,12 @@ fn go_function_lines(
         .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("out"))
         .collect();
     files.sort();
+    let at = go_cover_dir(work);
     for f in files {
         let mut cmd = Command::new("go");
         cmd.args(["tool", "cover", "-func"])
             .arg(&f)
-            .current_dir(work)
+            .current_dir(&at)
             .env("GOPROXY", "off");
         // `-mod=mod` is refused in workspace mode.
         if !work.join("go.work").is_file() {
@@ -1150,6 +1163,22 @@ pub enum CoverageOutcome<'a> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_go_profile_is_read_where_the_copy_has_a_module_or_a_workspace() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path();
+        fs::create_dir_all(root.join("svc")).unwrap();
+        fs::write(root.join("svc/go.mod"), "module example.test/svc\n").unwrap();
+        // The one module is nested: the profile is read there.
+        assert_eq!(go_cover_dir(root), root.join("svc"));
+        // A go.work at the root, or a module at the root, is read from the root.
+        fs::write(root.join("go.work"), "use ./svc\n").unwrap();
+        assert_eq!(go_cover_dir(root), root);
+        fs::remove_file(root.join("go.work")).unwrap();
+        fs::write(root.join("go.mod"), "module example.test/root\n").unwrap();
+        assert_eq!(go_cover_dir(root), root);
+    }
 
     fn d(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| (*s).to_owned()).collect()

@@ -150,7 +150,14 @@ read by the optional `probes` hook (below), which fills the `probes` list of eve
 A Go `--next` batch is one package (the best-ranked pending candidate and the pending candidates of its
 package directory), and the driver is generated in that directory, so a test file of it reads every
 unexported name of the targets; `dla harness gen --next --package <dir>` picks the directory. The
-header of the target block names the package.
+header of the target block names the package. The directory is named from the project root, and the
+driver is built and run from the module that holds it (the nearest `go.mod` at or above it), whatever
+module the workload is in: `build.cwd` and `run.cwd` of the manifest are that module and the package is
+`./<dir relative to the module>`. When the work copy holds more than one `go.mod` and the project has no
+`go.work`, `dla harness gen` writes one at the root of the copy that lists every module directory, with
+the highest `go` directive of the modules, so the modules of the repository resolve from the copy. A
+package directory whose only non-test Go files are generated is refused (`--next` skips it and says so in
+`_attention`).
 
 ### Field probes and `dlaTrack`
 
