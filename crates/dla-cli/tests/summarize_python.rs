@@ -1123,6 +1123,62 @@ fn sites_with_kept_objects_and_no_chain_are_counted_with_the_reason_of_the_file(
 }
 
 #[test]
+fn a_walk_the_bound_cut_short_is_counted_and_the_attention_says_what_gives_it_time() {
+    let p = Project::new();
+    let cut = r#"{"dla_pyretain":1,"frames":10,"sites":[
+ {"site":"pkg/a.py:3","blocks_first":0,"blocks_last":50,"found_tracked":40,"found_untracked":0,"kept":40,"walked":40,"not_walked":0,
+  "chains":[{"count":40,"root":{"kind":"module-global","module":"pkg.a","key":"_reg"},"steps":[{"type":"int"}]}]},
+ {"site":"pkg/a.py:4","blocks_first":0,"blocks_last":50,"found_tracked":40,"found_untracked":0,"kept":40,"walked":5,"not_walked":35,
+  "chains":[{"count":5,"root":{"kind":"module-global","module":"pkg.a","key":"_reg"},"steps":[{"type":"int"}]}]}],
+ "walk":{"kept":80,"walked":45,"not_walked":35,"scanned":81280,"of":214420,"bound_secs":60.0},
+ "limitations":["the time bound (60 s) stopped the scan after 81280 of 214420 tracked objects (its share is 60% of the bound): the counts are partial"]}"#;
+    let f = p.put("in/py-1.retain.json", cut.as_bytes());
+    let v = summarize(&p, "heap-graph", "py-retain", &[f], &[]);
+    let attention: Vec<&str> = v["_attention"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|a| a.as_str())
+        .collect();
+    let line = attention
+        .iter()
+        .find(|a| a.starts_with("WALK CUT SHORT"))
+        .unwrap_or_else(|| panic!("{v}"));
+    assert!(
+        line.contains("45 of 80 kept objects walked")
+            && line.contains("the scan read 81280 of 214420 objects")
+            && line.ends_with("a smaller driver for one of pkg/a.py:4 gives the walk time")
+            && !line.contains("pkg/a.py:3"),
+        "{line}"
+    );
+    assert!(line.len() <= 160, "{line}");
+    let rec = retention(&p).pop().unwrap();
+    assert!(
+        rec["limitations"].as_array().unwrap().iter().any(|l| l
+            .as_str()
+            .unwrap()
+            .starts_with("the walk was cut short: 45 of 80 kept objects walked, 35 not")),
+        "{rec}"
+    );
+    // A file whose walk was whole says nothing of the kind.
+    let whole = cut
+        .replace("\"not_walked\":35", "\"not_walked\":0")
+        .replace("\"walked\":5,", "\"walked\":40,")
+        .replace(
+            "\"not_walked\":35,\"scanned\"",
+            "\"not_walked\":0,\"scanned\"",
+        );
+    let f = p.put("in/py-2.retain.json", whole.as_bytes());
+    let v = summarize(&p, "heap-graph", "py-retain", &[f], &[]);
+    assert!(
+        v["_attention"].as_array().is_none_or(|a| a
+            .iter()
+            .all(|x| !x.as_str().unwrap().starts_with("WALK CUT SHORT"))),
+        "{v}"
+    );
+}
+
+#[test]
 fn the_record_lists_the_types_a_holder_keeps_and_its_minor_sites() {
     let p = Project::new();
     let f = p.put("in/py-1.retain.json", RETAIN.as_bytes());

@@ -1139,5 +1139,128 @@ fn a_run_cut_after_some_tests_ran_is_not_a_unit_and_is_made_again() {
     );
 }
 
+// ---------------------------------------------------------------------------------------
+// A command that was cut leaves its process behind: the next run of the harness stops it
+// ---------------------------------------------------------------------------------------
+
+fn leftover(fx: &Fx, command: &str, wrong_start: bool) -> std::process::Child {
+    use std::os::unix::process::CommandExt;
+
+    use dla_core::state::{ProcessKind, ProcessRecord, ProcessRole};
+    let mut c = Command::new("sleep");
+    c.arg("120").process_group(0);
+    let child = c.spawn().unwrap();
+    let start = if wrong_start {
+        Some("2001-01-01T00:00:00Z".to_owned())
+    } else {
+        dla_sample::os::process_start_time(child.id())
+    };
+    fx.ctx
+        .register_process(ProcessRecord {
+            pid: child.id(),
+            start_time: start,
+            kind: ProcessKind::Harness,
+            command: command.to_owned(),
+            started_at: now_utc(),
+            stopped_at: None,
+            role: ProcessRole::Started,
+            worker: None,
+            cleanup: Vec::new(),
+        })
+        .unwrap();
+    child
+}
+
+#[test]
+fn the_process_an_earlier_command_of_the_harness_left_is_stopped_and_nothing_else() {
+    let _g = lock();
+    let fx = project_with(&leak_project(&[]), true);
+    gen_ok(&fx, &opts());
+    let m = fx.ctx.harness("H1").unwrap();
+    let command = m.run.argv.join(" ");
+    let mut mine = leftover(&fx, &command, false);
+    // Another harness's process, a process whose recorded start time is not the live one (a
+    // reused pid) and a process of the same command that is not ours to stop are left alone.
+    let mut other = leftover(&fx, "python3 /elsewhere/dla_pytest_loop.py", false);
+    let mut reused = leftover(&fx, &command, true);
+    let notes = dla_workload::harness::limit::stop_leftovers(&fx.ctx, &m);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(
+        notes[0].contains(&format!("stopped process {}", mine.id())),
+        "{notes:?}"
+    );
+    assert!(mine.wait().is_ok_and(|s| !s.success()));
+    assert!(
+        other.try_wait().unwrap().is_none(),
+        "another harness's process lives"
+    );
+    assert!(
+        reused.try_wait().unwrap().is_none(),
+        "a reused pid is not signalled"
+    );
+    let st = RunState::load(&fx.ctx.run_dir).unwrap();
+    assert!(
+        st.processes
+            .iter()
+            .any(|p| p.pid == mine.id() && p.stopped_at.is_some())
+    );
+    assert!(
+        st.processes
+            .iter()
+            .filter(|p| p.pid == other.id() || p.pid == reused.id())
+            .all(|p| p.stopped_at.is_none())
+    );
+    // Nothing is left to stop the second time.
+    assert!(dla_workload::harness::limit::stop_leftovers(&fx.ctx, &m).is_empty());
+    // A `dla harness run` that is alive is a run in progress: what it started is its own.
+    let mut running = leftover(&fx, &command, false);
+    let mut other_run = leftover(&fx, "dla harness run", false);
+    // (the record of the other command is of the kind `command`, as `dla` registers it)
+    dla_core::RunState::update(&fx.ctx.run_dir, |s| {
+        let r = s
+            .processes
+            .iter_mut()
+            .rev()
+            .find(|p| p.pid == other_run.id())
+            .unwrap();
+        r.stopped_at = None;
+        r.kind = dla_core::state::ProcessKind::Command;
+        Ok(())
+    })
+    .unwrap();
+    assert!(
+        dla_workload::harness::limit::stop_leftovers(&fx.ctx, &m).is_empty(),
+        "another command of the harness is running"
+    );
+    assert!(running.try_wait().unwrap().is_none());
+    let _ = running.kill();
+    let _ = other_run.kill();
+    let _ = running.wait();
+    let _ = other_run.wait();
+    let _ = other.kill();
+    let _ = reused.kill();
+    let _ = other.wait();
+    let _ = reused.wait();
+}
+
+#[test]
+fn a_run_of_the_harness_stops_the_leftover_and_says_so() {
+    let _g = lock();
+    if !have_pytest() {
+        return;
+    }
+    let fx = project_with(&leak_project(&[]), true);
+    gen_ok(&fx, &opts());
+    let m = fx.ctx.harness("H1").unwrap();
+    let mut mine = leftover(&fx, &m.run.argv.join(" "), false);
+    let out = run_ok(&fx, "H1", &RunOptions::default());
+    assert_eq!(out.left_stopped.len(), 1, "{:?}", out.left_stopped);
+    assert!(
+        mine.wait().is_ok_and(|s| !s.success()),
+        "the leftover is dead"
+    );
+    assert_eq!(out.points, 9, "the run itself went on to its end");
+}
+
 #[allow(dead_code)]
 fn _unused(_: &Path) {}

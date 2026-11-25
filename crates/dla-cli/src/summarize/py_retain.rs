@@ -72,8 +72,29 @@ struct File {
     frames: u64,
     #[serde(default)]
     sites: Vec<SiteIn>,
+    /// How far the search for holders got (files written before it was counted have none).
+    #[serde(default)]
+    walk: Option<WalkIn>,
     #[serde(default)]
     limitations: Vec<String>,
+}
+
+/// The agent's count of what it walked: the kept objects of the named lines, how many had their
+/// holders searched and how many did not (the time bound, the search bound, a scan that stopped).
+#[derive(Deserialize, Default, Clone)]
+struct WalkIn {
+    #[serde(default)]
+    kept: u64,
+    #[serde(default)]
+    walked: u64,
+    #[serde(default)]
+    not_walked: u64,
+    #[serde(default)]
+    scanned: u64,
+    #[serde(default)]
+    of: u64,
+    #[serde(default)]
+    bound_secs: f64,
 }
 
 #[derive(Deserialize, Default)]
@@ -92,6 +113,10 @@ struct SiteIn {
     kept: u64,
     #[serde(default)]
     note: Option<String>,
+    #[serde(default)]
+    walked: u64,
+    #[serde(default)]
+    not_walked: u64,
     #[serde(default)]
     chains: Vec<ChainIn>,
 }
@@ -913,6 +938,34 @@ fn retain(ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
         }
         no_chain_total += no_chain;
         no_chain_reason.get_or_insert_with(|| no_chain_why.clone());
+        // The walk was cut short: say how much of it was done, and what makes it fit.
+        if let Some(w) = f.walk.as_ref().filter(|w| w.not_walked > 0) {
+            let named: Vec<String> = f
+                .sites
+                .iter()
+                .filter(|s| s.not_walked > 0)
+                .take(2)
+                .map(|s| clip(&red.name(&s.site), 40))
+                .collect();
+            let scan = if w.of > 0 && w.scanned < w.of {
+                format!(", the scan read {} of {} objects", w.scanned, w.of)
+            } else {
+                String::new()
+            };
+            limitations.push(format!(
+                "the walk was cut short: {} of {} kept objects walked, {} not{scan} (bound {} s)",
+                w.walked, w.kept, w.not_walked, w.bound_secs
+            ));
+            attention.push(clip(
+                &format!(
+                    "WALK CUT SHORT: {} of {} kept objects walked{scan}; a smaller driver for one of {} gives the walk time",
+                    w.walked,
+                    w.kept,
+                    named.join(", ")
+                ),
+                160,
+            ));
+        }
         let raw_value = json!({
             "id": id,
             "tool": TOOL,
@@ -932,6 +985,8 @@ fn retain(ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
                 "found_tracked": s.found_tracked,
                 "found_untracked": s.found_untracked,
                 "kept": s.kept,
+                "walked": s.walked,
+                "not_walked": s.not_walked,
                 "unreferenced": (s.note.is_some() && s.chains.is_empty()).then_some(UNREFERENCED),
             })).collect::<Vec<_>>(),
             "limitations": limitations,

@@ -3121,3 +3121,25 @@ unattended run at a time and no builder beside it.
 - When d9ea782 is green: bash wip-notes/commit-snapshot-tree.sh d9ea7823d5b39f1c2dc82a6036a9f810dd450644
   wip-notes/commit-message-29.txt (main must be ef20720 or its CI done first). Check the diff
   stat: ~45 files, no .wip. Then version preview.8.
+
+## 23:57 UTC 2026-11-24: full tree on main; version preview.8 committed, CI running
+
+- CI on d9ea782 (run 45504308608): 15/15 green. Committed its tree on main as 1d69fc4 (message
+  29; 43 files, +4744/-98), pushed main and dev. NOTE: commit-snapshot-tree.sh does NOT push;
+  push by hand.
+- Version commit 8c2e5e2 "Version 0.9.0-preview.8" made through a TEMP INDEX (builder T works in
+  the tree): the four version files in the WORKING TREE still say preview.7. BEFORE the next
+  snapshot that goes to main, run in the tree:
+  sed -i 's/0\.9\.0-preview\.7/0.9.0-preview.8/g' .claude-plugin/marketplace.json .claude-plugin/plugin.json Cargo.toml Cargo.lock
+  (after T has finished). Snapshots taken before that carry preview.7: never commit them to main.
+- First push got a GitHub 500; retry worked. CI waiter (u115/ci-main-28). When green: release.yml
+  via mcp__github__actions_run_trigger with inputs {"publish": true}; verify the tag v0.9.0-preview.8.
+
+## 00:40 UTC 2026-11-25: container restarted; builder T resumed; CI of preview.8 on the dev branch
+
+- Container restart stopped builder T and the CI waiter. Disk intact. No MUT_ markers. T's logs
+  (u121/tests2.log ALLDONE, bench_py.log 9/9 pass) show it had finished its checks; resumed it by
+  SendMessage (agent a6a1bf95c6d16f9be) to recheck build/fmt/clippy and write its report.
+- The push of 8c2e5e2 to main (after the GitHub 500) made no CI run on main: the main run on
+  1d69fc4 (45513828601) goes on. The dev branch run 45513895084 tests 8c2e5e2 itself: waiter on
+  it (u115/ci-dev-28). When green: release.yml on main with publish true.

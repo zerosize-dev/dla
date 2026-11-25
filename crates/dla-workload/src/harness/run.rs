@@ -290,7 +290,7 @@ fn harness_failed_fix(manifest: &HarnessManifest, logs: &str) -> String {
 }
 
 /// The reason line of a pytest loop that stopped: the first `DLA-PYTEST` line of its log that
-/// is not an output block, a drop or the summary.
+/// is not an output block, a drop, a cut of the rounds or the summary.
 fn pytest_reason(logs: &[(String, PathBuf)]) -> Option<String> {
     logs.iter().find_map(|(_, path)| {
         let text = fs::read_to_string(path).ok()?;
@@ -300,6 +300,8 @@ fn pytest_reason(logs: &[(String, PathBuf)]) -> Option<String> {
                     && !l.starts_with("DLA-PYTEST summary")
                     && !l.starts_with("DLA-PYTEST output of unit")
                     && !l.starts_with("DLA-PYTEST dropped test file")
+                    && !l.starts_with("DLA-PYTEST the test loop cut its rounds")
+                    && !l.starts_with("DLA-PYTEST the time limit is short for a capture")
             })
             .map(|l| clip(l, 600))
     })
@@ -2152,7 +2154,6 @@ fn run_driver_mode(
             dumps_wanted,
             manifest.runtime == dla_core::runtime::Runtime::Python,
             timeout,
-            None,
         )
     });
     let timeout = plan
@@ -3003,11 +3004,7 @@ pub fn run_points(
     let mut dependency_env = dla_core::harness::current_dependency_env();
     dependency_env.extend(reuse.iter().cloned());
     // A command that was cut left its measured process running: it goes before this one starts.
-    let left_stopped = if opts.tool.is_none() && manifest.mode == HarnessMode::Driver {
-        limit::stop_leftovers(ctx, manifest)
-    } else {
-        Vec::new()
-    };
+    let left_stopped = limit::stop_leftovers(ctx, manifest);
     let mut out = RunOutput {
         left_stopped,
         capture_run: capture_active(manifest, opts) && opts.tool.is_none(),
@@ -4142,7 +4139,11 @@ pub fn attention_lines(
             160,
         ));
     } else if out.tool.is_none() && !out.series.is_empty() && measured < need {
-        let cut = out.points < planned;
+        let cut = out.points < planned
+            && !out
+                .limitations
+                .iter()
+                .any(|l| l.starts_with("the test loop cut its rounds"));
         let mode = out.modes.first().map_or("fresh", |m| m.as_str());
         lines.push(clip(
             &format!(
@@ -4357,6 +4358,80 @@ mod tests {
         assert!(
             l[0].starts_with("NO COVERAGE DATA") && l[0].contains("killed"),
             "{l:?}"
+        );
+    }
+
+    #[test]
+    fn a_leftover_a_shortened_loop_and_a_run_for_the_capture_are_attention_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = dla_core::Ledger::create(dir.path()).unwrap();
+        let m = tests_support::manifest();
+        let none = dir.path().join("none.json");
+        let plan = limit::Plan::compute(
+            420,
+            60.0,
+            0,
+            1,
+            (
+                &CaptureSet {
+                    heap: true,
+                    alloc: true,
+                    ..CaptureSet::default()
+                },
+                4,
+                true,
+            ),
+            Duration::from_secs(1800),
+        );
+        let out = RunOutput {
+            series: vec!["S2".into()],
+            points: 3,
+            modes: vec![KeyMode::Fresh],
+            left_stopped: vec![
+                "stopped process 4242 that an earlier H1 command left running".into(),
+            ],
+            time_plan: Some(plan),
+            capture_run: true,
+            earlier_full_series: true,
+            capture_commands: vec![
+                "dla summarize heap-graph a.retain.json".into(),
+                "dla summarize alloc-stack-diff a.alloc.json b.alloc.json".into(),
+            ],
+            limitations: vec![
+                "the test loop cut its rounds from 9 to 3: one run takes 2.7 s".into(),
+            ],
+            ..RunOutput::default()
+        };
+        let lines = attention_lines(&m, &out, 9, &ledger, &none);
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(
+            lines[0].starts_with("LEFTOVER STOPPED: stopped process 4242"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[1].starts_with("SHORTENED TO FIT 420 s: the loop got 338 s")
+                && lines[1].contains("rounds 9 to 3"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[2].starts_with("THIS RUN WAS FOR THE CAPTURE: the series of")
+                && lines[2].contains("dla summarize heap-graph and dla summarize alloc-stack-diff"),
+            "{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|l| l.len() <= 160 && !l.contains("SERIES TOO SHORT"))
+        );
+        // Without a full series before it, the short series says so as before.
+        let first = RunOutput {
+            earlier_full_series: false,
+            ..out
+        };
+        let lines = attention_lines(&m, &first, 9, &ledger, &none);
+        assert!(
+            lines.iter().any(|l| l.starts_with("SERIES TOO SHORT")),
+            "{lines:?}"
         );
     }
 

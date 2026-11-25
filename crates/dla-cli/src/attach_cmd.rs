@@ -275,7 +275,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AttachArgs) -> 
                 .collect();
             if !pending.is_empty() {
                 f.refusal.message = format!(
-                    "{} (the target may still be traced or recorded; left to do, `dla run abort` runs it: {})",
+                    "{} (the target may still be traced or recorded; left to do, `dla run stop` runs it and the run goes on: {})",
                     f.refusal.message,
                     pending.join("; ")
                 );

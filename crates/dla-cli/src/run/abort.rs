@@ -26,7 +26,7 @@ pub struct AbortArgs {
 }
 
 /// What `dla run abort` prints about the run it ended.
-const ENDED: &str = "this run is over: it is marked aborted for good and nothing more counts in it; dla run init starts a new run (dla run stop stops what a cut command left and keeps the run open)";
+const ENDED: &str = "this run ends here: it is marked aborted for good and nothing more can be recorded in it that counts; dla run init starts a new run; to stop only what a cut command left and keep the run, use dla run stop";
 
 /// What happened to one record.
 enum Fate {
