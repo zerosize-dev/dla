@@ -3189,3 +3189,18 @@ unattended run at a time and no builder beside it.
   waiter. No MUT_ markers. CI run 45523177339 on 62a12f5 still in progress on GitHub: new waiter
   b8l1ptd3x. Builder X resumed by SendMessage (agent afc44b2b50c9343cb).
 - The commit to main still comes from snapshot 62a12f5's tree (X's edits stay out).
+
+## 01:40 UTC 2026-11-25: third container restart; disk freed
+
+- Restart stopped builder X's background `cargo test -p dla-cli --no-fail-fast` and my CI waiter.
+  CI run 45523177339 on 62a12f5 still in progress: new waiter bwjqepck9. Builder X resumed again.
+- Disk was at 2.4 GB free. Deleted 19 /tmp/dla-bench-dynamic-* dirs (0.2 GB) and workspace-crate
+  build dirs older than 2 h under target/debug/build/dla-* (find -mindepth 1 -maxdepth 1 -mmin +120,
+  literal roots): 6.4 GB free. NOTE: target/debug/build/<crate>/<hash>/ holds test binaries in this
+  cargo layout and stale hashes pile up with every version bump; clean them the same way when low.
+- Big scratch dirs kept: u107/jetty-try (m2 1.3 GB, needed for Jetty), u119/micrometer-try (1.26 GB,
+  set B), u122/u123 proj copies (265 MB each; X's replay).
+- X status (before the restart): parts 3, 4 done and mutation-tested; bench policy
+  run_line_capture_first + test and Part 5 texts written, NOT compiled; left: full dla-cli run,
+  adapt failing scenes (second_look one_flat_run... fails with capture-first), tests for parts 1/2,
+  checks, the whole dynamic run.
