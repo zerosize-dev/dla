@@ -54,7 +54,7 @@ _T0 = time.monotonic()
 
 # A run with --capture takes its allocation profiles at the checkpoints and its retention record at
 # the last: at least this many rounds must run for 3 profiles and the record. A run without a
-# capture keeps WARMUP plus this many (the series is then short and says so).
+# capture never cuts its rounds: it drops test files, or stops when one file alone does not fit.
 CAPTURING = bool((os.environ.get("DLA_CAPTURE") or "").strip())
 CAPTURE_MIN_ROUNDS = 3
 
