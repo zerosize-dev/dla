@@ -519,3 +519,14 @@ fn python_a_call_in_a_test_file_is_no_run_time_caller() {
     let w = codec_writer(&[("tests_like/codecs_check.py", t)]);
     assert!(!w.startup, "{w:?}");
 }
+
+#[test]
+fn go_an_exported_method_of_an_unexported_type_counts_as_exported() {
+    let src = "package p\n\ntype store struct {\n\titems []int\n}\n\nfunc (s *store) Add(x int) {\n\ts.items = append(s.items, x)\n}\n\nfunc (s *store) add(x int) {\n\ts.items = append(s.items, x)\n}\n";
+    let es = entries(&[("p/p.go", src)], Runtime::Go);
+    let e = entry(&es, "store.items");
+    let upper = e.facts.writer_sites.iter().find(|s| s.site.ends_with(":8")).unwrap();
+    let lower = e.facts.writer_sites.iter().find(|s| s.site.ends_with(":12")).unwrap();
+    assert!(upper.exported, "{upper:?}");
+    assert!(!lower.exported, "{lower:?}");
+}
