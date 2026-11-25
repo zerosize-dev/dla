@@ -23,7 +23,7 @@ use dla_core::{
     finding::Polarity,
     fsutil::{to_pretty_json, write_atomic},
     paths::to_slash,
-    series::{ColumnKind, KeyMode, SeriesFile, numbered},
+    series::{ColumnKind, KeyMode, SeriesFile, SeriesSourceKind, numbered},
     toolctx::{EvidenceSpec, ToolCtx},
     trend::{ColumnTrend, TREND_DIR, TrendReport, finding_region, finding_shape},
 };
@@ -310,6 +310,19 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         None => None,
     };
 
+    // The residual rows of the series, as `dla gap <S> --residual` writes them: the gate and the
+    // capture item read them, and a model that was never told to run that command still gets
+    // them. A series of another source than a harness or a sample, a series outside the run and
+    // a series with no byte column to total get none and nothing else changes.
+    let residual = if main.rel.is_some() && main.series.source.kind != SeriesSourceKind::Gap {
+        crate::gap_cmd::write_residual_rows(&tc, &main.series)?
+    } else {
+        None
+    };
+    if residual.is_some() {
+        ledger = tc.ledger()?;
+    }
+
     let mut out = Map::new();
     out.insert("ok".into(), json!(true));
     out.insert("command".into(), json!("trend"));
@@ -501,6 +514,15 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
             ),
         );
     }
+    // An unexplained heap growth over its threshold whose harness has no summarized capture
+    // leads: the capture says who keeps the objects, and the gate lists it before everything else.
+    if residual.is_some()
+        && let Some((entry, attention)) = capture_entry(ctx, &main.series.id)
+    {
+        next.insert(0, entry);
+        next.truncate(MAX_NEXT);
+        out.insert("_attention".into(), json!([attention]));
+    }
     if let Some(hint) = holders_hint(ctx, &main.series, &next) {
         out.insert("holders_hint".into(), json!(hint));
     }
@@ -536,6 +558,19 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         }
     }
     Ok(Value::Object(out))
+}
+
+/// The `next` entry and the `_attention` line for a heap row of series `id` over its threshold
+/// whose harness has no summarized capture (the open `residual_capture` item of the gate): the
+/// capture command, and one short line for `_attention`. `None` when there is no such item.
+fn capture_entry(ctx: &Ctx, id: &str) -> Option<(String, String)> {
+    let view = dla_core::RunView::load_for(&ctx.run_dir, ctx.worker.as_deref()).ok()?;
+    let u = dla_core::gate::uncaptured_residuals(&view)
+        .into_iter()
+        .find(|u| u.series.iter().any(|s| s == id))?;
+    let entry = u.fix();
+    let attention = format!("{id} heap grows unexplained: capture {} first", u.harness);
+    Some((entry, attention))
 }
 
 /// The sentence that rides with the add command of a growing `py.blocks@<file:line>` line that no

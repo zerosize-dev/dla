@@ -1197,3 +1197,46 @@ fn the_texts_say_a_cut_command_is_stopped_with_run_stop_and_not_aborted() {
         );
     }
 }
+
+#[test]
+fn the_texts_say_what_a_site_column_counts_and_the_three_growth_first_changes() {
+    let read = |p: &str| {
+        fs::read_to_string(root().join(p))
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let refs = "skills/detect-leak-anywhere/references";
+    let report = read(&format!("{refs}/evidence-and-report.md"));
+    let stages = read(&format!("{refs}/stages.md"));
+    let node = read(&format!("{refs}/node.md"));
+    assert!(
+        report.contains("`node.listeners@<file:line>` the listeners registered at that line that are still attached to objects that are still alive, read after a forced collection (a rising value means those objects are kept)"),
+        "evidence-and-report.md does not say what a listener column counts"
+    );
+    assert!(!report.contains("counts what one line made"));
+    assert!(!stages.contains("counts what one line made"));
+    for (name, text) in [("stages.md", &stages), ("node.md", &node)] {
+        for want in ["`capture-first`", "`weak_refs_keep_during_job`"] {
+            assert!(text.contains(want), "{name} lacks: {want}");
+        }
+    }
+    for want in [
+        "`dla trend S<n>` writes the residual rows of its series itself",
+        "a harness made with `--probe` or `--entry` for a named finding is not refused",
+        "the statics and symbol fields of the agent are no holders",
+    ] {
+        assert!(stages.contains(want), "stages.md lacks: {want}");
+    }
+    assert!(node.contains("it does not count calls to the line"));
+    let verify = fs::read_to_string(root().join("docs/VERIFY.md")).unwrap();
+    for want in [
+        "| Unexplained heap growth was not the first thing the run did | corrected |",
+        "| A Node heap summary named the tool's own keep-alive as the path | corrected |",
+        "| `dla ledger close-rest` closed the candidates that waited for their second look | corrected |",
+    ] {
+        assert!(verify.contains(want), "VERIFY.md lacks the row: {want}");
+    }
+    assert!(!read("skills/detect-leak-anywhere/SKILL.md").contains("capture-first"));
+}

@@ -192,6 +192,25 @@ impl Run {
         full["missing"].as_array().unwrap().clone()
     }
 
+    /// Gives harness `h` a summarized capture: a retention record whose file lies under the
+    /// harness (the holder chains of one line the project does not keep), as the capture run and
+    /// `dla summarize heap-graph` leave it. A heap residual over its threshold asks for it.
+    fn summarized_capture(&self, h: &str) {
+        let dir = self
+            .run_dir
+            .join("harness")
+            .join(h)
+            .join("out/p1-fresh/capture/1");
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("py-1.retain.json");
+        fs::write(
+            &file,
+            r#"{"dla_pyretain":1,"frames":1,"sites":[{"site":"zz/elsewhere.py:1","blocks_first":0,"blocks_last":50,"found_tracked":0,"found_untracked":0,"kept":0,"note":"no object","chains":[]}],"limitations":[]}"#,
+        )
+        .unwrap();
+        self.ok(&["summarize", "heap-graph", file.to_str().unwrap()]);
+    }
+
     fn status(&self) -> Value {
         self.ok(&["run", "status"])
     }
@@ -377,13 +396,16 @@ fn the_trigger_is_reproduced_for_one_holder_and_not_found_for_the_other() {
         serde_json::from_str(&fs::read_to_string(r.run_dir.join("gate/final.json")).unwrap())
             .unwrap();
     let missing = full["missing"].as_array().unwrap();
-    // The capture item leads; the two trigger items (one per confirmed finding) follow it.
+    // The capture items lead (the one of the untied line, then the one of the heap residual the
+    // trend wrote: the same capture clears both); the two trigger items (one per confirmed
+    // finding) follow them.
     assert_eq!(missing[0]["kind"], "measured_capture", "{missing:?}");
-    assert_eq!(missing[1]["kind"], "trigger", "{missing:?}");
+    assert_eq!(missing[1]["kind"], "residual_capture", "{missing:?}");
     assert_eq!(missing[2]["kind"], "trigger", "{missing:?}");
+    assert_eq!(missing[3]["kind"], "trigger", "{missing:?}");
     // `run status` clips long fixes; the gate file has them whole.
     assert!(
-        missing[1]["fix"]
+        missing[2]["fix"]
             .as_str()
             .unwrap()
             .starts_with(fix.trim_end_matches("...")),
@@ -505,6 +527,10 @@ fn the_trigger_is_reproduced_for_one_holder_and_not_found_for_the_other() {
             .starts_with("write a second, different entry-path harness"),
         "{trigger}"
     );
+    // The captures the heap residuals ask for are taken (the stop text lists three items and is
+    // cut at 1,000 characters: the capture items would crowd the trigger item out of it).
+    r.summarized_capture("H1");
+    r.summarized_capture("H2");
     assert!(
         r.stop_reason()
             .contains("did not grow in the entry-path harness H2")

@@ -136,9 +136,11 @@ impl Run {
             .map(|i| format!("    from shop import m{i}\n    _state['m{i}'] = m{i}\n"))
             .collect();
         let calls: String = (1..=reach)
-            .map(|i| format!("    _state['m{i}'].put_{i}(key)\n"))
+            .map(|i| format!("        _state['m{i}'].put_{i}(key)\n"))
             .collect();
-        let unit = format!("    # {tag}\n{calls}    pass");
+        // One unit in sixteen reaches the targets: the growth is steady and the heap it leaves
+        // stays under the floor below which a heap residual demands no capture (64 KiB).
+        let unit = format!("    # {tag}\n    if i % 16 == 0:\n{calls}        pass");
         let text = text
             .replace(
                 "    raise NotImplementedError(\"DLA-HOOK setup has not been filled in\")",

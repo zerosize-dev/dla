@@ -170,6 +170,10 @@ pub mod codes {
     /// keeps growing lines and that no finding covers: the holder comes before the next
     /// candidate of the queue.
     pub const MEASURED_HOLDER_FIRST: &str = "measured-holder-first";
+    /// `dla harness gen --next` was asked while a heap residual above its threshold has no
+    /// summarized capture of its harness: the capture comes before the next candidate of the
+    /// queue (a harness for a named finding, `--probe` or `--entry`, is not refused).
+    pub const CAPTURE_FIRST: &str = "capture-first";
 }
 
 /// A rule-based refusal: what was refused, what is missing, the command that fixes it.

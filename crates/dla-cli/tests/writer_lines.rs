@@ -173,6 +173,49 @@ impl Proj {
     /// What every one of the three languages shows once the first driver read the target
     /// `writer_not_executed`: the queue keeps it and offers a focus harness, `close-rest` leaves
     /// it, and the next driver's block shows the writer line and the lines that decide.
+    /// Takes the capture of `harness` and runs every summary it prints when `dla run status`
+    /// lists a `residual_capture` item for it; does nothing otherwise.
+    fn capture_if_the_gate_asks(&self, harness: &str) {
+        let status = self.dla(&["run", "status"]);
+        let asked = status.json["blocking"].as_array().is_some_and(|b| {
+            b.iter().any(|i| {
+                i["kind"] == "residual_capture"
+                    && i["id"].as_str().is_some_and(|id| id.starts_with(harness))
+            })
+        });
+        if !asked {
+            return;
+        }
+        let run = self.dla(&[
+            "harness",
+            "run",
+            harness,
+            "--mode",
+            "fresh",
+            "--capture",
+            "alloc,heap",
+        ]);
+        let cmds: Vec<String> = run.json["summary"]["summarize"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(
+            !cmds.is_empty(),
+            "the capture printed no summary: {}",
+            run.text
+        );
+        for c in cmds {
+            let words: Vec<&str> = c.split_whitespace().collect();
+            assert_eq!(words.first(), Some(&"dla"), "{c}");
+            self.dla(&words[1..]);
+        }
+    }
+
     fn queue_keeps_the_target_and_the_next_block_shows_the_lines(
         &self,
         lang: &str,
@@ -195,6 +238,10 @@ impl Proj {
         let rest = self.dla(&["ledger", "close-rest"]);
         assert_eq!(rest.json["closed"], 0, "{}", rest.text);
         assert_eq!(rest.json["left"][0]["id"], "F1", "{}", rest.text);
+        // The heap of the scene may grow by itself past the floor on a slow machine (the drain
+        // runs on a timer); the gate then asks for a capture before the next batch, and the scene
+        // takes it as a model is told to.
+        self.capture_if_the_gate_asks("H1");
         // The next harness is a focus harness; its block shows what did not run.
         let next = self.dla(&["harness", "gen", "--lang", lang, "--driver", "--next"]);
         assert_eq!(next.json["summary"]["purpose"], "focus", "{}", next.text);

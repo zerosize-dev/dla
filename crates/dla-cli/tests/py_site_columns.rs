@@ -806,8 +806,11 @@ fn the_site_column_comes_before_the_whole_process_hint_in_next() {
         next[0].starts_with(ADD_PREFIX) && next[0].contains(&format!(" --site {SITE} ")),
         "{next:?}"
     );
+    // The trend writes the residual rows itself, so the whole-process hint is the final gate
+    // (it lists what is left of the row), not the `dla gap` command; the site entry is first.
     assert!(
-        next.iter().any(|n| n.starts_with("dla gap S1 --residual")),
+        next.iter()
+            .any(|n| n.starts_with("dla gate check --final   # S1 has a gap row")),
         "{next:?}"
     );
     assert!(next.len() <= 8, "{next:?}");
@@ -1988,6 +1991,9 @@ fn a_finding_whose_alloc_test_favored_leak_cannot_be_closed_and_the_route_confir
         .unwrap_or_else(|| panic!("{out}"));
     assert!(left["why"].as_str().unwrap().contains(&fix), "{left}");
     assert_eq!(out["closed"], 0, "{out}");
+    // The heap residual of the series leads the gate until H1 has a summarized capture; the
+    // capture is taken (and its summary made) before the route is read from the status.
+    give_h1_a_retention_record(&r.project, &r.run_dir);
     // The final gate and the status print the route as the fix of the finding.
     let missing = r.final_gate();
     let items: Vec<&Value> = missing
