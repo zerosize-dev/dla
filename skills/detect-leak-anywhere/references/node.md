@@ -35,6 +35,8 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   the harness prints. Before a snapshot the agent checks that about 12 times `heapUsed` is available and
   skips it with an error if not (a coverage gap, not a failure).
 
+An `AsyncLocalStorage` holder, and a container of a module or class that owns one, is kept per context or thread: the driver block says so for such a target, and the units must run in `worker_threads` (a new worker per unit that ends, and a few that live across units) and in separate async contexts, not only in the one the driver starts in (a first pass in one context leaves such a target pending for its second look).
+
 ## Attach backends
 | Backend | Tier | Notes |
 |---|---|---|

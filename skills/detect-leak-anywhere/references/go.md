@@ -103,6 +103,8 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   `dla install go-toolchain-1.27` (tier 1; it downloads the toolchain into the Go module cache, outside the
   project). Record the candidate `unresolved` (`tool_missing`) if you cannot install it.
 
+Go has no thread-local: per-goroutine state is a map keyed by an id, and the census records no key types, so such a map is not marked as kept per thread. When a target is keyed by a goroutine or a worker id, run its units as goroutines, one per unit, and as a few goroutines that live across units, not only from the goroutine that calls the driver.
+
 ## Static rules
 `dla sweep --lang go` runs five DLA rules of its own beside the Go linters; the candidate of each rule
 is an open question for the dynamic stages, not a verdict.

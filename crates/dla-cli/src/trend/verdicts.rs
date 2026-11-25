@@ -1088,6 +1088,7 @@ mod tests {
             param,
             constant: false,
             exported: true,
+            thread_init: false,
         };
         let m = manifest(json!([py_probe("P1", "F1", "CACHE")]), &["F1"]);
         let flat = [1.0; 9];
@@ -1252,6 +1253,7 @@ mod tests {
             param: false,
             constant: false,
             exported: true,
+            thread_init: false,
         };
         write_run(
             &s,

@@ -316,7 +316,16 @@ pub struct Index {
     /// True when `dla harness gen --lang python --pytest` was refused in this run (pytest does
     /// not import in the harness interpreter): a failed attempt of the loop, with no harness.
     pytest_refused: bool,
+    /// The findings whose holder is kept per thread (see
+    /// [`HolderFacts::thread_keyed`](crate::census::HolderFacts::thread_keyed)).
+    thread_keyed: std::collections::BTreeSet<FindingId>,
 }
+
+/// Why a flat reading of a thread-keyed target does not settle it. Nothing in a run says how
+/// many threads a unit ran on (the driver templates run units on the caller's thread unless
+/// the hooks start threads, and the agents' thread counts include the runtime's own threads),
+/// so every run that is not a second look counts as one thread.
+pub const THREAD_REASON: &str = "kept per thread; the units came from one thread";
 
 impl Index {
     /// Reads the harness manifests and the trend reports of `view`.
@@ -326,6 +335,17 @@ impl Index {
             return ix;
         };
         ix.pytest_refused = crate::harness::HarnessAttempt::pytest_loop_refused(run_dir);
+        ix.thread_keyed = view
+            .ledger
+            .findings()
+            .filter(|f| {
+                crate::census::thread_keyed(
+                    f.holder,
+                    view.ledger.annotation(&f.id).map(|a| &a.facts),
+                )
+            })
+            .map(|f| f.id.clone())
+            .collect();
         let mut manifests: BTreeMap<String, HarnessManifest> = BTreeMap::new();
         for (_, h) in gate::harness_ids(run_dir) {
             let Ok(m) = HarnessManifest::load(run_dir, &h) else {
@@ -519,15 +539,26 @@ impl Index {
         if moved || executed.is_empty() || self.missed_in(id).is_some() {
             return SecondLook::No;
         }
+        // A thread-keyed holder is not settled by another driver of the same one thread: only a
+        // second-look harness, whose unit takes its threads from the key, ends the wait.
+        let thread_keyed = self.is_thread_keyed(id);
         let done = runs.iter().filter(live).find(|r| {
             r.verdict.is_some()
                 && (r.second_look
-                    || (r.focused && executed.iter().any(|e| e.driver_key != r.driver_key)))
+                    || (!thread_keyed
+                        && r.focused
+                        && executed.iter().any(|e| e.driver_key != r.driver_key)))
         });
         match done {
             Some(r) => SecondLook::Done(r.harness.clone()),
             None => SecondLook::Awaiting(executed[0].harness.clone()),
         }
+    }
+
+    /// True when the holder of `id` is kept per thread: one flat run on one thread does not
+    /// settle it, and only a second look (which varies the threads) does.
+    pub fn is_thread_keyed(&self, id: &FindingId) -> bool {
+        self.thread_keyed.contains(id)
     }
 
     /// How many second-look harnesses of `runtime` have been generated (see [`SECOND_LOOK_MAX`]).
@@ -879,7 +910,8 @@ pub struct RuntimeQueue {
     pub focus: bool,
     /// The pending candidates that wait for a second look (see [`SECOND_LOOK_MAX`]), each with
     /// the first harness that read it flat. Non-empty only while no first-pass candidate is
-    /// pending; `batch` is then a second-look focus batch.
+    /// pending, except for a thread-keyed candidate ([`THREAD_REASON`]), which is listed at
+    /// once; `batch` is a second-look focus batch when the best-ranked candidate is one of them.
     pub second: BTreeMap<FindingId, Miss>,
     /// The pending candidates that a hook-driver harness run missed, each with the first
     /// harness that missed it and its verdict.
@@ -1100,9 +1132,12 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
             }
             // The second look: the first pass first; then, while the run is going and budget is
             // left, the candidates one flat run of one driver settled wait for a different
-            // driver (see `SECOND_LOOK_MAX`).
+            // driver (see `SECOND_LOOK_MAX`). A thread-keyed candidate does not wait for the
+            // first pass to end: its flat reading came from one thread ([`THREAD_REASON`]), so it
+            // is not settled, and it takes the room of the second look first.
             let mut second: BTreeMap<FindingId, Miss> = BTreeMap::new();
-            if pending.is_empty() && view.state.queue && budget.is_some() && !blocked {
+            if view.state.queue && budget.is_some() && !blocked {
+                let first_pass_over = pending.is_empty();
                 let used = ix.second_looks.get(&runtime).map_or(0, Vec::len);
                 let in_flight_second = |id: &FindingId| {
                     ix.declared_by.get(id).is_some_and(|hs| {
@@ -1113,7 +1148,16 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                     })
                 };
                 let mut room = SECOND_LOOK_MAX.saturating_sub(used) * FOCUS_MAX;
-                for r in &open_ones {
+                let threads_first = open_ones
+                    .iter()
+                    .filter(|r| ix.is_thread_keyed(&r.id))
+                    .chain(open_ones.iter().filter(|r| !ix.is_thread_keyed(&r.id)));
+                let mut admitted: Vec<(&Ranked, String, bool)> = Vec::new();
+                for r in threads_first {
+                    let thread = ix.is_thread_keyed(&r.id);
+                    if !(first_pass_over || thread) {
+                        continue;
+                    }
                     let SecondLook::Awaiting(first) = ix.second_look(&r.id) else {
                         continue;
                     };
@@ -1121,19 +1165,34 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                         if !in_flight_second(&r.id) {
                             room -= 1;
                         }
-                        pending.push(r.id.clone());
-                        pending_rank.push((r.rank.unwrap_or(0), r.tier));
-                        second.insert(
-                            r.id.clone(),
-                            Miss {
-                                harness: first,
-                                verdict: Verdict::Executed,
-                                detail: "its code ran and its holder stayed flat under one driver"
-                                    .into(),
-                                writers: Vec::new(),
-                            },
-                        );
+                        admitted.push((r, first, thread));
                     }
+                }
+                // Back in rank order, as the pending list is.
+                let mut order: Vec<usize> = (0..admitted.len()).collect();
+                order.sort_by_key(|i| {
+                    open_ones
+                        .iter()
+                        .position(|o| o.id == admitted[*i].0.id)
+                        .unwrap_or(usize::MAX)
+                });
+                for i in order {
+                    let (r, first, thread) = &admitted[i];
+                    pending.push(r.id.clone());
+                    pending_rank.push((r.rank.unwrap_or(0), r.tier));
+                    second.insert(
+                        r.id.clone(),
+                        Miss {
+                            harness: first.clone(),
+                            verdict: Verdict::Executed,
+                            detail: if *thread {
+                                THREAD_REASON.into()
+                            } else {
+                                "its code ran and its holder stayed flat under one driver".into()
+                            },
+                            writers: Vec::new(),
+                        },
+                    );
                 }
             }
             let no_coverage: Vec<FindingId> = pending
@@ -2081,6 +2140,7 @@ mod tests {
                         param: true,
                         constant: false,
                         exported: true,
+                        thread_init: false,
                     }],
                     ..HolderFacts::default()
                 },
@@ -2597,6 +2657,87 @@ mod tests {
             item.description.contains("Next batch (second look"),
             "{}",
             item.description
+        );
+    }
+
+    /// Marks finding `n` as state of a class that owns a thread-local.
+    fn thread_class(run: &Run, n: u32) {
+        run.reload();
+        let mut l = Ledger::load(run.dir.path()).unwrap();
+        l.annotate_record(crate::FindingAnnotation {
+            writers: vec![format!("pkg/m{n}.py:9")],
+            facts: crate::census::HolderFacts {
+                thread_class: true,
+                ..Default::default()
+            },
+            ..crate::FindingAnnotation::new(FindingId::new(n))
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn a_thread_keyed_target_read_flat_on_one_thread_waits_for_its_second_look_at_once() {
+        let (run, _) = Run::new(3);
+        thread_class(&run, 2);
+        // H1 read F1 and F2 flat; F3 was never declared, so the first pass is not over.
+        ran(
+            &run,
+            "H1",
+            &[1, 2],
+            "a",
+            "S1",
+            &[(1, Verdict::Executed), (2, Verdict::Executed)],
+        );
+        let view = run.reload();
+        let q = queues(&view, None).remove(0);
+        // F1 is settled; F2 is kept per thread, so it is not, and F3 is first-pass work.
+        assert_eq!(pending_of(&view), ["F3", "F2"]);
+        assert_eq!(q.second.len(), 1, "{:?}", q.second);
+        assert_eq!(q.second[&FindingId::new(2)].detail, THREAD_REASON);
+        assert_eq!(q.second[&FindingId::new(2)].harness, "H1");
+        assert!(Index::of(&view).is_thread_keyed(&FindingId::new(2)));
+        assert!(!Index::of(&view).is_thread_keyed(&FindingId::new(1)));
+    }
+
+    #[test]
+    fn only_a_second_look_settles_a_thread_keyed_target_another_driver_on_one_thread_does_not() {
+        let (run, _) = Run::new(2);
+        thread_class(&run, 1);
+        ran(
+            &run,
+            "H1",
+            &[1, 2],
+            "a",
+            "S1",
+            &[(1, Verdict::Executed), (2, Verdict::Executed)],
+        );
+        // A focused hook driver of another code that read it flat again: two drivers, one thread.
+        ran(
+            &run,
+            "H2",
+            &[1, 2],
+            "b",
+            "S2",
+            &[(1, Verdict::Executed), (2, Verdict::Executed)],
+        );
+        let view = run.reload();
+        assert_eq!(pending_of(&view), ["F1"]);
+        assert_eq!(
+            Index::of(&view).second_look(&FindingId::new(1)),
+            SecondLook::Awaiting("H1".into())
+        );
+        // The same two drivers settle the target that is not kept per thread.
+        assert!(matches!(
+            Index::of(&view).second_look(&FindingId::new(2)),
+            SecondLook::Done(_)
+        ));
+        // A second-look harness that read it flat ends the wait.
+        looked(&run, "H3", &[1], "c", "S3", &[(1, Verdict::Executed)]);
+        let view = run.reload();
+        assert!(pending_of(&view).is_empty());
+        assert_eq!(
+            Index::of(&view).second_look(&FindingId::new(1)),
+            SecondLook::Done("H3".into())
         );
     }
 

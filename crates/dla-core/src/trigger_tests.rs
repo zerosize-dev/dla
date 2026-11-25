@@ -602,6 +602,7 @@ fn writer_facts_for(
                 param,
                 constant,
                 exported: true,
+                thread_init: false,
             }],
             ..Default::default()
         },

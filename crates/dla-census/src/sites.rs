@@ -1524,6 +1524,7 @@ fn analyse_one(proj: &Project<'_>, raw: &Raw, usage: &Usage) -> Option<Analysis>
                 param,
                 constant,
                 exported,
+                thread_init: false,
             }
         };
         let grow: Vec<_> = evs.iter().filter(|e| e.kind == Ev::Grow).collect();
@@ -1605,6 +1606,7 @@ fn analyse_one(proj: &Project<'_>, raw: &Raw, usage: &Usage) -> Option<Analysis>
                 param: false,
                 constant: false,
                 exported: run && proj.exported(fc, outer),
+                thread_init: false,
             },
         );
     }

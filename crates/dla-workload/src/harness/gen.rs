@@ -2344,13 +2344,13 @@ fn go_batch(
 
 /// Writes the second-look unit skeleton (see [`dla_core::harness::unit_skeleton`]) above the
 /// line of `file` that says the unit hook is not filled in.
-fn insert_unit_skeleton(file: &Path, rt: Runtime) -> std::io::Result<()> {
+fn insert_unit_skeleton(file: &Path, rt: Runtime, threads: bool) -> std::io::Result<()> {
     let text = fs::read_to_string(file)?;
     let mut out = String::with_capacity(text.len() + 1200);
     let mut done = false;
     for line in text.split_inclusive('\n') {
         if !done && line.contains("DLA-HOOK unit has not been filled in") {
-            out.push_str(&dla_core::harness::unit_skeleton(rt));
+            out.push_str(&dla_core::harness::unit_skeleton_with(rt, threads));
             done = true;
         }
         out.push_str(line);
@@ -3095,15 +3095,22 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         if let Some(info) = driver_info.as_ref().filter(|i| !i.edit.is_empty()) {
             let file = hdir.join(&info.edit);
             let mut notes = info.block_notes.clone();
+            // A holder kept per thread: the units have to come from many threads (once, above
+            // the targets), and a second look has a sixth slot for them.
+            let threads = described.iter().any(|t| t.thread_keyed);
+            if threads {
+                notes.push(targets::thread_note(rt));
+            }
             if manifest.is_second_look() {
                 // The unit hook is a skeleton: one variable per choice, to be used.
-                insert_unit_skeleton(&file, rt).map_err(|e| io_refusal(&file, e))?;
+                insert_unit_skeleton(&file, rt, threads).map_err(|e| io_refusal(&file, e))?;
             }
             if manifest.is_second_look() {
                 notes.extend(targets::second_look_notes(
                     &focus.missed,
                     &derived.targets,
                     dla_core::harness::choice_helper(rt),
+                    threads,
                 ));
             } else if manifest.is_focus() {
                 notes.extend(targets::focus_notes(&focus.missed, &derived.targets));

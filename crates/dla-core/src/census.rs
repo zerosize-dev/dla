@@ -165,10 +165,25 @@ pub struct SiteFact {
     /// The enclosing function is part of the public surface.
     #[serde(default, skip_serializing_if = "is_false")]
     pub exported: bool,
+    /// The site lies in a thread-local initialiser (a function a thread-local runs for each
+    /// thread that reads it: a `withInitial` lambda or method reference, an `initialValue`
+    /// override, the `__init__` of a `threading.local` subclass), so the holder gets an entry
+    /// for every thread that reads the thread-local, and again whenever the thread-local was
+    /// cleared.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub thread_init: bool,
 }
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+/// [`HolderFacts::thread_keyed`] for a finding that may have no facts: a thread-local holder
+/// is thread-keyed whatever the facts say.
+pub fn thread_keyed(holder: Option<Holder>, facts: Option<&HolderFacts>) -> bool {
+    facts.map_or(holder == Some(Holder::ThreadLocal), |f| {
+        f.thread_keyed(holder)
+    })
 }
 
 /// What the census knows of a holder beyond its name and its sites. Every field is optional:
@@ -207,6 +222,10 @@ pub struct HolderFacts {
     /// How instances of the owner type are created, where the census can tell.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_creation: Option<OwnerCreation>,
+    /// The owner class (the owner up to its last segment) also owns a holder of kind
+    /// `thread-local` in the census: state of a class that keeps things per thread.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub thread_class: bool,
     /// The writer sites, one per entry of `writers`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub writer_sites: Vec<SiteFact>,
@@ -223,6 +242,19 @@ impl HolderFacts {
         self.writer_sites
             .iter()
             .any(|s| s.kind.adds() && s.depth == 0 && s.param && !s.constant && !s.startup)
+    }
+
+    /// True when the holder is kept per thread, so that it grows with the number of distinct
+    /// threads or thread lifetimes the code sees: it is a thread-local, or its owner class also
+    /// owns one, or an adding writer site lies in a thread-local initialiser. The census does
+    /// not record key types, so a map keyed by a thread or a thread id is not recognised.
+    pub fn thread_keyed(&self, holder: Option<Holder>) -> bool {
+        holder == Some(Holder::ThreadLocal)
+            || self.thread_class
+            || self
+                .writer_sites
+                .iter()
+                .any(|s| s.kind.adds() && s.thread_init)
     }
 
     /// True when nothing is recorded.
@@ -250,6 +282,7 @@ impl HolderFacts {
         self.pool |= other.pool;
         self.key_bounded |= other.key_bounded;
         self.unit |= other.unit;
+        self.thread_class |= other.thread_class;
         for (mine, theirs) in [
             (&mut self.writer_sites, &other.writer_sites),
             (&mut self.remover_sites, &other.remover_sites),
@@ -260,5 +293,75 @@ impl HolderFacts {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn site(kind: SiteKind, thread_init: bool) -> SiteFact {
+        SiteFact {
+            site: "a/B.java:3".into(),
+            kind,
+            depth: 0,
+            function: Some("init".into()),
+            init: false,
+            startup: false,
+            startup_via: Vec::new(),
+            param: false,
+            constant: false,
+            exported: false,
+            thread_init,
+        }
+    }
+
+    #[test]
+    fn a_thread_local_holder_is_thread_keyed_alone() {
+        let facts = HolderFacts::default();
+        assert!(facts.thread_keyed(Some(Holder::ThreadLocal)));
+        assert!(!facts.thread_keyed(Some(Holder::ContainerField)));
+        assert!(!facts.thread_keyed(None));
+    }
+
+    #[test]
+    fn an_owner_class_with_a_thread_local_makes_its_containers_thread_keyed_alone() {
+        let facts = HolderFacts {
+            thread_class: true,
+            ..HolderFacts::default()
+        };
+        assert!(facts.thread_keyed(Some(Holder::ContainerField)));
+    }
+
+    #[test]
+    fn an_adding_writer_in_a_thread_local_initialiser_is_thread_keyed_alone() {
+        let mut facts = HolderFacts {
+            writer_sites: vec![site(SiteKind::Insert, true)],
+            ..HolderFacts::default()
+        };
+        assert!(facts.thread_keyed(Some(Holder::ContainerField)));
+        // A remover in an initialiser does not add, and an adder elsewhere is not one.
+        facts.writer_sites = vec![site(SiteKind::Delete, true), site(SiteKind::Insert, false)];
+        assert!(!facts.thread_keyed(Some(Holder::ContainerField)));
+    }
+
+    #[test]
+    fn a_container_of_a_class_without_a_thread_local_is_not_thread_keyed() {
+        let facts = HolderFacts {
+            container: Some(ContainerClass::Container),
+            writer_sites: vec![site(SiteKind::Insert, false)],
+            ..HolderFacts::default()
+        };
+        assert!(!facts.thread_keyed(Some(Holder::ContainerField)));
+    }
+
+    #[test]
+    fn merging_keeps_the_thread_class_fact() {
+        let mut a = HolderFacts::default();
+        a.merge(&HolderFacts {
+            thread_class: true,
+            ..HolderFacts::default()
+        });
+        assert!(a.thread_class);
     }
 }

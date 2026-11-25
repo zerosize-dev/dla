@@ -113,6 +113,10 @@
       "description": "Declaration, spawn or acquire site, `file:line` (project-relative).",
       "type": "string"
     },
+    "thread_class": {
+      "description": "The owner class (the owner up to its last segment) also owns a holder of kind\n`thread-local` in the census: state of a class that keeps things per thread.",
+      "type": "boolean"
+    },
     "unit": {
       "description": "The entry is the creation site of a unit (timer, task, goroutine, thread, handle):\nthe creation is the growth.",
       "type": "boolean"
@@ -359,6 +363,10 @@
           "items": {
             "type": "string"
           }
+        },
+        "thread_init": {
+          "description": "The site lies in a thread-local initialiser (a function a thread-local runs for each\nthread that reads it: a `withInitial` lambda or method reference, an `initialValue`\noverride, the `__init__` of a `threading.local` subclass), so the holder gets an entry\nfor every thread that reads the thread-local, and again whenever the thread-local was\ncleared.",
+          "type": "boolean"
         }
       },
       "required": [
