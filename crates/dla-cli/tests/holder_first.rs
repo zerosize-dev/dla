@@ -865,6 +865,9 @@ fn the_same_finding_on_the_harness_that_grew_is_a_leak_and_reaches_confirmed() {
         return;
     }
     let r = prepared(KEEPS);
+    // The heap of the series grows and no finding explains it: the capture and its summary come
+    // first, as the trend says (the add command of the line is then in its `next`).
+    capture_and_summarize(&r, None);
     let f = finding_at_the_line(&r);
     let t = r.ok(&["trend", "S1"]);
     let e = t["evidence"][0].as_str().unwrap().to_owned();

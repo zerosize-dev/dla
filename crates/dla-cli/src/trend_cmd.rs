@@ -474,25 +474,6 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         pytest_loop,
     );
     let mut next = next;
-    if let Some(r) = &residual {
-        let rows: Vec<String> = r["rows"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|row| {
-                format!(
-                    "{} {}",
-                    row["region"].as_str().unwrap_or("?"),
-                    if row["residual"].as_f64() > row["threshold"].as_f64() {
-                        "over its threshold"
-                    } else {
-                        "under its threshold"
-                    }
-                )
-            })
-            .collect();
-        out.insert("residual_rows".into(), json!(rows));
-    }
     if let Some(entry) = missed_targets_entry(ctx, &main.series, &target_verdicts) {
         next.insert(0, entry);
     }
@@ -580,21 +561,14 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
 
 /// The `next` entry and the `_attention` line for a heap row of series `id` over its threshold
 /// whose harness has no summarized capture (the open `residual_capture` item of the gate): the
-/// capture command, and one short sentence. `None` when there is no such item.
+/// capture command, and one short line for `_attention`. `None` when there is no such item.
 fn capture_entry(ctx: &Ctx, id: &str) -> Option<(String, String)> {
     let view = dla_core::RunView::load_for(&ctx.run_dir, ctx.worker.as_deref()).ok()?;
     let u = dla_core::gate::uncaptured_residuals(&view)
         .into_iter()
         .find(|u| u.series.iter().any(|s| s == id))?;
-    let entry = format!(
-        "{}   # the heap of {id} grows and no finding explains it ({}): the capture says who keeps the objects",
-        u.fix(),
-        u.items.join(", ")
-    );
-    let attention = format!(
-        "heap of {id} grows, no finding explains it, {} has no capture: first next entry",
-        u.harness
-    );
+    let entry = u.fix();
+    let attention = format!("{id} heap grows unexplained: capture {} first", u.harness);
     Some((entry, attention))
 }
 

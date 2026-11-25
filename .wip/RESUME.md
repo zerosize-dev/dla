@@ -3227,3 +3227,10 @@ unattended run at a time and no builder beside it.
 - Commit a27e2e9 on wip/progress = 62a12f5 tree + these two files (+ notes), built through a temp
   index so X2's work stays out. Waiter u115/ci-wip-30. When green: commit-snapshot-tree.sh a27e2e9
   with commit-message-30.txt (add one line about the attach advice), push main and dev.
+
+## 02:50 UTC 2026-11-25: builder T's work on main
+
+- CI on a27e2e9 (run 45528133626): 15/15. Committed its tree on main as 5749443 (message 30; 24
+  files), pushed main and dev. Not released (preview.8 is the last release; next one after X2).
+- Next: builder X2 (growth-first finish) report -> verify -> CI -> main; then G2, J; then set A
+  reruns one at a time; then set B and Jetty.

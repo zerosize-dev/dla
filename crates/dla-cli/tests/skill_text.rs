@@ -1218,10 +1218,7 @@ fn the_texts_say_what_a_site_column_counts_and_the_three_growth_first_changes() 
     assert!(!report.contains("counts what one line made"));
     assert!(!stages.contains("counts what one line made"));
     for (name, text) in [("stages.md", &stages), ("node.md", &node)] {
-        for want in [
-            "`capture-first`",
-            "`weak_refs_keep_during_job`",
-        ] {
+        for want in ["`capture-first`", "`weak_refs_keep_during_job`"] {
             assert!(text.contains(want), "{name} lacks: {want}");
         }
     }

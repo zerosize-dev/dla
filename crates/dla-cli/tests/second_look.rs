@@ -256,7 +256,9 @@ fn one_flat_run_gets_a_second_look_with_a_different_driver_while_budget_lasts() 
     );
     let unit = skeleton.replace(
         "    # first\n    pass",
-        "    # second look\n    _state['m1'].put_1(key)\n    pass",
+        // One unit in sixteen reaches the writer: the heap it leaves stays under the floor below
+        // which a heap residual demands a capture (64 KiB over the series).
+        "    # second look\n    if i % 16 == 0:\n        _state['m1'].put_1(key)\n    pass",
     );
     fs::write(&p, &unit).unwrap();
     let o = r.run(&["harness", "run", "H2", "--mode", "both"]);

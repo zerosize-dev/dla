@@ -149,7 +149,10 @@ fn prepared(setup: &str, unit: &str) -> Run {
 }
 
 const SETUP: &str = "  state.pool = projectRequire('src/pool.js');";
-const UNIT: &str = "  state.pool.connect(key);";
+/// One unit in eight registers a listener: the leak is real and steady, and the heap growth it
+/// leaves stays under the floor below which a heap residual demands no capture (64 KiB over the
+/// series), so the trend of the short run leads with its own sentence.
+const UNIT: &str = "  if (i % 8 === 0) state.pool.connect(key);";
 
 fn site_finding(run: &Run) -> Value {
     let o = dla(&run.project, &["ledger", "list", "--all"]);
