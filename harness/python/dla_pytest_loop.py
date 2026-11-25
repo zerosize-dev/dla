@@ -10,8 +10,8 @@ Rounds: DLA_WARMUP warm-up rounds, then DLA_ROUNDS measured rounds of DLA_STEP u
 defaults are baked in at generation time; the step is never below 1). The time limit of the
 process is DLA_TIME_LIMIT_SECS (`dla harness run` sets it from DLA_COMMAND_SECS, less the start-up and,
 with --capture, the capture's own time): from the first unit the loop estimates the whole series and,
-when it would not fit, lowers the step, then cuts the number of rounds (not below CAPTURE_MIN_ROUNDS
-with a capture: its allocation profiles), then drops the slowest test files (a limitation says which).
+when it would not fit, lowers the step, then cuts the number of rounds (only with a capture, not below
+CAPTURE_MIN_ROUNDS: its allocation profiles), then drops the slowest test files (a limitation says which).
 The time of the checkpoints so far counts too: a checkpoint of a capture is not free.
 
 A run that pytest ends early is not a unit. From the second run on, when the exit code of
@@ -57,7 +57,6 @@ _T0 = time.monotonic()
 # capture keeps WARMUP plus this many (the series is then short and says so).
 CAPTURING = bool((os.environ.get("DLA_CAPTURE") or "").strip())
 CAPTURE_MIN_ROUNDS = 3
-SERIES_MIN_ROUNDS = 3
 
 # Bounds of what a unit may write to the harness log: the first unit, and the first later unit that
 # has a failure.
@@ -433,13 +432,6 @@ def main(counts):
                 state["estimate"] = max(1e-6, per * share)
                 state["since_secs"] = 0.0
                 state["since_units"] = 0
-        if runs + ckpt * left > budget and not CAPTURING:
-            # Without a capture the series is what is measured, so its rounds are cut last, to the
-            # warm-up and a few points; the series says it is short.
-            floor = max(round_no, WARMUP + SERIES_MIN_ROUNDS)
-            if total > floor and cut_rounds(round_no, in_round, per, ckpt, budget, floor):
-                left = total - round_no
-                runs = per * (step - in_round + step * left)
         need = runs + ckpt * left
         if need > budget and not CAPTURING:
             # One file alone does not fit. A first reading holds the one-time costs (the imports of

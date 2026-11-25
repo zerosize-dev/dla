@@ -82,15 +82,26 @@ impl Plan {
         dumps: u32,
         python: bool,
         cap: Duration,
-    ) -> Self {
-        Self::compute(
+    ) -> Option<Self> {
+        if !Self::applies(capture, std::env::var_os("DLA_COMMAND_SECS").is_some()) {
+            return None;
+        }
+        Some(Self::compute(
             command_secs(),
             heap_secs(),
             started.elapsed().as_secs(),
             modes_left,
             (capture, dumps, python),
             cap,
-        )
+        ))
+    }
+
+    /// Whether the command's own bound holds for a run: with `--capture` always (the agent's tool
+    /// cuts a long command, and the capture is what such a command was cut in), without it only
+    /// when `DLA_COMMAND_SECS` is set. A plain loop keeps the limit of its manifest: on a large
+    /// library it takes longer than the command bound, and a cut run writes no series.
+    pub fn applies(capture: &CaptureSet, explicit: bool) -> bool {
+        explicit || !capture.is_empty()
     }
 
     /// [`Plan::of`] from its numbers: the command's seconds, the retention bound, the seconds
@@ -143,6 +154,14 @@ impl Plan {
             secs += (PROFILE_SECS * u64::from(dumps.max(1))) as f64;
         }
         secs.ceil() as u64
+    }
+
+    /// The sentence of a plain loop, which keeps the limit of its manifest.
+    pub fn plain_limit(limit_secs: u64) -> String {
+        format!(
+            "this loop runs up to its limit of {} minutes per key mode and the tool may move the command to the background: wait for it; do not wrap it in timeout",
+            limit_secs.div_ceil(60)
+        )
     }
 
     /// The sentence that says once: this command ends by itself.
@@ -315,6 +334,17 @@ mod tests {
             Duration::from_secs(1800),
         );
         assert_eq!(p.capture, 48);
+    }
+
+    #[test]
+    fn a_plain_run_keeps_its_manifest_limit_and_a_capture_run_gets_the_plan() {
+        let none = CaptureSet::default();
+        let cap = set(true, true);
+        assert!(!Plan::applies(&none, false), "a plain run has no command bound");
+        assert!(Plan::applies(&none, true), "DLA_COMMAND_SECS set bounds it");
+        assert!(Plan::applies(&cap, false), "a capture run has the 420 s plan");
+        let p = Plan::compute(COMMAND_SECS_DEFAULT, 60.0, 0, 1, (&cap, 4, true), Duration::from_secs(1800));
+        assert_eq!((p.command, p.process), (420, 410));
     }
 
     #[test]

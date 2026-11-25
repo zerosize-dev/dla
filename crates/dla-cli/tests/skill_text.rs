@@ -1174,6 +1174,11 @@ fn the_texts_say_a_cut_command_is_stopped_with_run_stop_and_not_aborted() {
             && stages.contains("`dla run abort --reason \"<why>\"` does the same and ends the run: it is marked aborted, the gate and the queue count it as over and nothing more can be recorded in it that counts"),
         "stages.md does not separate dla run stop from dla run abort"
     );
+    // The line of the skill the model reads on every run: a cut command is stopped, not aborted.
+    assert!(
+        skill().contains("Cut command: `dla run stop`; `dla run abort` ends the run for good."),
+        "SKILL.md does not send a cut command to dla run stop"
+    );
     assert!(
         python.contains("the scan gets 60 percent of it, then every named line gets an equal share of the rest for its walks, and the record counts the kept objects it walked and did not walk")
             && python.contains("`WALK CUT SHORT`"),

@@ -2156,6 +2156,7 @@ fn run_driver_mode(
             timeout,
         )
     });
+    let mut plan = plan.flatten();
     let timeout = plan
         .as_ref()
         .map_or(timeout, |p| Duration::from_secs(p.process));
@@ -4040,6 +4041,9 @@ fn run_loaded(
     summary["next"] = json!(next);
     if let Some(plan) = &out.time_plan {
         summary["ends_by_itself"] = json!(plan.ends_by_itself());
+    } else if manifest.is_test_loop() {
+        let secs = opts.timeout_secs.unwrap_or(manifest.timeout_secs);
+        summary["ends_by_itself"] = json!(limit::Plan::plain_limit(secs));
     }
     if !out.env_reused.is_empty() {
         summary["env_reused"] = json!(out.env_reused);

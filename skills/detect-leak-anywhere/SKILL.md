@@ -85,7 +85,7 @@ Rules that stay in force at every stage:
 - Measure the ranked candidates before closing any: while `dla run status` shows an open `queue`, run the batch of checklist item 4. A `target-pending` refusal of `dla ledger resolve` is fixed by the batch command it prints, never by another reason. A candidate that could not be exercised is never confirmed or refuted: `dla ledger resolve <F> --as suspected_static_only|unresolved --reason <r> --remedy "<text>"`. Reasons: see Before you stop.
 - A `time-budget` refusal whose fix names a smaller plan: run that command. When the deadline has passed or nothing smaller fits, the floor rule of Time budget applies, then report. A result marked `partial run` is inconclusive: it never confirms or refutes.
 - A refused command is fixed with the command the refusal prints, never looped.
-- Interrupted run: `dla run abort --reason "<why>"` stops what DLA started.
+- Cut command: `dla run stop`; `dla run abort` ends the run for good.
 
 ## When nothing fits
 

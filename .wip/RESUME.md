@@ -3143,3 +3143,20 @@ unattended run at a time and no builder beside it.
 - The push of 8c2e5e2 to main (after the GitHub 500) made no CI run on main: the main run on
   1d69fc4 (45513828601) goes on. The dev branch run 45513895084 tests 8c2e5e2 itself: waiter on
   it (u115/ci-dev-28). When green: release.yml on main with publish true.
+
+## 01:00 UTC 2026-11-25: builder T reported; one correction sent back
+
+- T report (u121): `dla run stop` (run/stop.rs, shares abort's stop_processes), leftover stop at
+  the start of `dla harness run` (limit.rs stop_leftovers, by pid and start time), abort text;
+  limit.rs Plan: DLA_COMMAND_SECS default 420, start-up 10 s, capture allowance DLA_HEAP_SECS+12
+  s; pytest loop fit() counts checkpoint time, cuts rounds first with capture (floor 3); capture
+  run with a full series does not print SERIES TOO SHORT; retention walk: scan 60% of
+  DLA_HEAP_SECS, targets first (215k-object heap: scan 21.6 s -> 6.1 s, holder named). Tests,
+  mutations, 9/9 Python fixtures. Brief errors it found: abort does not refuse ledger writes;
+  pytest loop timeout is 1800 (JUNIT_TIMEOUT_SECS), not 600.
+- I fixed SKILL.md line 88 myself ("Cut command: `dla run stop`; `dla run abort` ends the run
+  for good."), pinned in skill_text.rs; SKILL.md budget: 18412 bytes, Before-you-stop at 9207.
+- MY BRIEF WAS WRONG on the 420 s bound for EVERY test-loop run: Pillow's full loop took 1258 s
+  and found the leak (pillow-3/-6), the narrowed loop missed it (pillow-4), and the tool moves a
+  long foreground command to the background by itself. Sent T back: plain runs keep the manifest
+  cap (1800 s) unless DLA_COMMAND_SECS is set; capture runs keep the 420 s plan; texts/pins/VERIFY.
