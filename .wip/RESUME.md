@@ -3364,3 +3364,10 @@ unattended run at a time and no builder beside it.
   residual_capture.rs (working tree versions; J/K did not touch them? CHECK) + VERIFY (4243d43's,
   with the corrected J sentence and the short-series row) -> CI -> main (msg 33). Then K: full
   working tree -> CI -> main (msg 34). Then preview.9. Then reruns.
+
+## 10:05 UTC 2026-11-25: CI on 1cd3e7e: one flaky job re-run
+
+- ubuntu clippy-and-test failed: alloc_test.rs a_flat_file_backed_column_that_passed_the_gate_reads_
+  non_leak_on_a_flat_run (os.rss_file +155 KB on a flat run on the runner, plateau inconclusive,
+  favors inconclusive). Test untouched since cb933c3; not caused by this round. Re-ran failed jobs of
+  run 45587638264 (gh rerun). Add to task 110 (flaky tests): os.rss_file on a flat run.
