@@ -2327,7 +2327,9 @@ fn go_batch(
         if let Some(why) = go_package_problem(&ctx.project, p) {
             let b = q.batch_in_package(view, n, p);
             skipped.push(format!(
-                "package {} cannot hold the driver ({why}): its {} best-ranked candidate(s) stay pending and are not targeted, and the next package by rank was taken",
+                // What it means comes first and the reason last: a reason can be long (a path
+                // of the machine) and a long output cuts its strings from the end.
+                "package {} cannot hold the driver: its {} best-ranked candidate(s) stay pending and are not targeted, and the next package by rank was taken ({why})",
                 package_label(p),
                 b.ids.len()
             ));
@@ -3262,10 +3264,12 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
                 .unwrap_or_default();
             // The short form: the package and the start of the reason (`next_note` has the rest).
             lines.extend(focus.skipped.iter().map(|t| {
-                let head = t.split_once("): its ").map_or(t.as_str(), |(h, _)| h);
-                let (pkg, why) = head
-                    .split_once(" cannot hold the driver (")
-                    .unwrap_or((head, ""));
+                let (pkg, rest) = t
+                    .split_once(" cannot hold the driver: ")
+                    .unwrap_or((t.as_str(), ""));
+                let why = rest
+                    .split_once("was taken (")
+                    .map_or("", |(_, w)| w.strip_suffix(')').unwrap_or(w));
                 let why = why.split_once(": ").map_or(why, |(w, _)| w);
                 json!(format!("--next skipped {pkg} ({why})"))
             }));
