@@ -130,6 +130,7 @@ none, as the single command does, and prints the series above their threshold wi
 The classify gate does not ask for it. The final gate accounts for it through the residual rows: run `dla gap
 S<n> --residual`; the column is covered when the rows of its region are under their threshold, or over it with
 a resolved open item. A resolved open item that names the column and its trend also covers it.
+`dla trend S<n>` writes the residual rows of its series itself (as `dla gap S<n> --residual` does; a series with no byte column gets none). While a heap row is over its threshold and its harness has no summarized capture, the first `next` entry of `dla trend` is the capture command, and `dla harness gen --next` is refused with `capture-first` (its fix is `dla harness run <H> --mode <mode> --capture alloc,heap` and the `dla summarize` commands it prints; a harness made with `--probe` or `--entry` for a named finding is not refused). The capture is per harness. In a Node heap summary the edge `weak_refs_keep_during_job` (the objects a `WeakRef` was read from in the current job, which the tool's own agent causes) is not a retaining edge, and the statics and symbol fields of the agent are no holders, so a path names who really keeps the objects.
 The total of a summarize series (`metric:<category>/total`, for example `metric:goroutine/total`) has no byte
 column to total, so the residual cannot cover it: it is the sum of its group columns, and the final gate accounts
 for it when at least one group column of the trend is not flat and every such group column is tied to a
@@ -451,7 +452,7 @@ For each passed column tied to a candidate `F3`:
   `dla ledger duplicate F3 --of F7` (a duplicate needs the same owner or the same site), or resolve the old one.
 - The passing column must be tied to `F3`: its probe (`probe:<owner>`), a group column at its site,
   or a column that lists it under `candidates`. A per-site count column (`node.listeners@`, `node.timers@`,
-  `go.goroutines@`, the Python `py.blocks@<file:line>`) ties only to the finding whose own site is that line;
+  `go.goroutines@`, the Python `py.blocks@<file:line>`) counts what is alive now that one line made (for `node.listeners@` the listeners at that line still attached to live objects after a forced collection, so a rising value means those objects are kept, not that the line was called often; evidence-and-report.md says what each counts) and ties only to the finding whose own site is that line;
   when none is there, `dla trend` prints the `dla ledger add ... --site <file:line>` that makes it (for
   `py.blocks@`; the final gate prints it too, and both name the lines largest growth first, so the first commands are for the lines that grow most). A refusal `growth-not-tied` means the growth you cite
   belongs to another holder or to the whole process (`os.rss`, heap totals). Then add a probe for
