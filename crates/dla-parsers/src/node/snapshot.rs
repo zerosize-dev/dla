@@ -125,6 +125,10 @@ pub fn preflight(size: u64, opts: &Options) -> Result<(), NodeError> {
     Ok(())
 }
 
+/// The name of the edge of V8's strong root list to the objects that a `WeakRef` was read from
+/// in the current job. It is no retaining edge.
+pub const JOB_KEEP_EDGE: &str = "weak_refs_keep_during_job";
+
 /// The ids of node and edge types the analysis needs, found by name in the enums.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct Kinds {
@@ -171,6 +175,8 @@ pub struct Snapshot {
     /// First edge of each node, and the end of the last: `node_count + 1` entries.
     first_edge: Vec<u32>,
     pub(crate) kinds: Kinds,
+    /// The string index of [`JOB_KEEP_EDGE`], when the snapshot has that string.
+    job_keep: Option<u32>,
     /// `object_index, script_id, line, column` rows as the file has them.
     locations: Vec<u32>,
     /// `location_fields.len()`, 0 when the file has no locations.
@@ -358,6 +364,10 @@ impl Snapshot {
             e_shortcut: index_of(&edge_types, "shortcut"),
             e_weak: index_of(&edge_types, "weak"),
         };
+        let job_keep = strings
+            .iter()
+            .position(|s| s == JOB_KEEP_EDGE)
+            .map(|i| i as u32);
         Ok(Self {
             nf,
             ef,
@@ -375,6 +385,7 @@ impl Snapshot {
             strings,
             first_edge,
             kinds,
+            job_keep,
             locations,
             lf,
         })
@@ -479,8 +490,62 @@ impl Snapshot {
 
     /// True for an edge that keeps its target alive and counts for retention: not weak,
     /// and not a shortcut unless it starts at the root (the DevTools rule).
-    pub(crate) fn essential(&self, from: usize, t: u32) -> bool {
+    pub(crate) fn essential(&self, from: usize, e: usize) -> bool {
+        self.holds(from, e) && !self.is_job_keep(e)
+    }
+
+    /// [`Snapshot::essential`] without the exception for [`JOB_KEEP_EDGE`].
+    fn holds(&self, from: usize, e: usize) -> bool {
+        let t = self.edge_type(e);
         Some(t) != self.kinds.e_weak && (Some(t) != self.kinds.e_shortcut || from == 0)
+    }
+
+    /// True for an edge named [`JOB_KEEP_EDGE`]: the list V8 keeps of the objects a `WeakRef`
+    /// was read from in the current job. It keeps them alive until the job ends, which says
+    /// nothing about who holds them.
+    pub(crate) fn is_job_keep(&self, e: usize) -> bool {
+        self.job_keep.is_some_and(|k| {
+            let t = self.edge_type(e);
+            Some(t) != self.kinds.e_element
+                && Some(t) != self.kinds.e_hidden
+                && self.edges[e * self.ef + self.e_name] == k
+        })
+    }
+
+    /// True when the snapshot has an edge named [`JOB_KEEP_EDGE`].
+    pub fn job_keep_edge_present(&self) -> bool {
+        self.job_keep.is_some()
+            && (0..self.node_count()).any(|u| self.edges_of(u).any(|e| self.is_job_keep(e)))
+    }
+
+    /// How many nodes are reachable only through [`JOB_KEEP_EDGE`] edges: the nodes that a
+    /// walk over every strong edge reaches and a walk that skips those edges does not.
+    pub fn job_keep_only(&self) -> usize {
+        if self.job_keep.is_none() || self.node_count() == 0 {
+            return 0;
+        }
+        let n = self.node_count();
+        let walk = |with_job: bool| {
+            let mut seen = vec![false; n];
+            let mut stack = vec![0usize];
+            seen[0] = true;
+            let mut count = 1usize;
+            while let Some(u) = stack.pop() {
+                for e in self.edges_of(u) {
+                    if !self.holds(u, e) || (!with_job && self.is_job_keep(e)) {
+                        continue;
+                    }
+                    let v = self.edge_target(e);
+                    if !seen[v] {
+                        seen[v] = true;
+                        count += 1;
+                        stack.push(v);
+                    }
+                }
+            }
+            count
+        };
+        walk(true) - walk(false)
     }
 
     /// `(script_id, line, column)` of an object that has a location, by node index.
