@@ -1,0 +1,65 @@
+A cut command no longer costs the run, and a capture of the test loop ends by itself
+
+The miss on a Python library in the unattended test on projects the tool
+had never seen. The loop over the project's tests showed 11 growing
+lines, and the gate asked for the capture run. The model ran it under its
+own `timeout 550`, which cut it; to clean up it ran `dla run abort`, which
+ends the run for good, and the run was lost after 15 minutes of a 3 hour
+budget. A second try with fewer iterations printed `SERIES TOO SHORT`,
+had one allocation profile where its summary needs three, and the
+retention walk stopped at its 60 s bound after a fifth of the heap and
+named no holder.
+
+A CUT COMMAND
+
+- New command `dla run stop`: stops what the run started and undoes what
+  it attached, as `dla run abort` does, and leaves the run open. With
+  `--worker` it stops only that worker's processes.
+- `dla harness run <H>` stops, at its start, the processes an earlier
+  command of the same harness left alive (checked by pid and start time,
+  never by name, and not while another `dla harness run` is alive), and
+  says so in `_attention`.
+- The help and output of `dla run abort` say first that it ends the run
+  for good, and name `dla run stop`. The skill and its references say: a
+  cut command is followed by `dla run stop` or by running it again, never
+  by `dla run abort`.
+
+A CAPTURE RUN OF THE TEST LOOP
+
+- A test-loop run with `--capture` (the pytest loop and the JUnit repeat
+  harness) ends by itself within `DLA_COMMAND_SECS`, 420 s by default.
+  The process gets that time less 10 s for start-up and reading; the loop
+  gets the process time less what the capture may take (`DLA_HEAP_SECS`
+  and 12 s for the last allocation profile). The loop counts the time of
+  the checkpoints it has written and, for a capture, cuts its rounds
+  first, never below the three its profiles and its retention record
+  need, then drops the slowest test files. `_attention` says what was
+  shortened, and the output says the command ends by itself and is not
+  to be wrapped in `timeout`.
+- A plain loop keeps its own limit (30 minutes per key mode for the
+  pytest loop): the full loop of a large library took 21 minutes, and
+  that loop is how its leak was found. The bound applies to it only when
+  `DLA_COMMAND_SECS` is set.
+- A capture run of a harness that already has a full series does not
+  print `SERIES TOO SHORT`; it names the two summaries that read it.
+
+THE RETENTION WALK ON A LARGE HEAP
+
+- The objects made at the growing lines are looked for first, the
+  holders of what was found and the module dictionaries are read before
+  the other containers, the scan gets 60 percent of `DLA_HEAP_SECS` and
+  the walks of the named lines share the rest. The site of each block is
+  looked up once per distinct traceback.
+- The record counts the kept objects walked and not walked, and the
+  summary says in `_attention` when the walk was cut, with the remedy (a
+  smaller driver for one of the named lines).
+- On a heap of 215,000 objects with 10 frames per block: the scan took
+  21.6 s and a bound of 8 s named no holder; now the scan takes 6.1 s and
+  the holder is named for both growing lines within 8 s.
+
+Not covered. A project of the incident's size was not run again. The
+allowance for a JVM capture (12 s per dump point) is a guess. With ten
+frames per block an allocation profile of a small project took 11 s, so
+a capture run of a slow suite may keep only its three rounds. Windows and
+macOS were not run. The raw traceback lookup was tried on Python 3.13
+only; other versions take the public function.

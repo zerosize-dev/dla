@@ -37,6 +37,22 @@ The machine has 4 cores. Use `cargo ... -j 3`, one cargo command at a time. Neve
    attached to objects that are still alive, after a forced collection), and the reference
    text invites it: it says such a column "counts what one line made".
 
+## What changed in the tool since this brief was written (read the code; it is on `main`)
+
+- The `residual_capture` item counts only a heap residual row whose unattributed growth over the
+  span of its series is at least 64 KiB (`MIN_CAPTURE_GROWTH_BYTES`, `residual_growth_bytes` in
+  `crates/dla-core/src/gate.rs`), and an allocation-stack summary counts for the harness whose
+  capture files its raw file names (`capture_harnesses` in `crates/dla-core/src/measured_holders.rs`).
+  Parts 1 and 2 use `uncaptured_residuals` as it is: do not add a second rule beside it.
+- The benchmark's fixed policy (`bench/runner/src/dynamic/policy.rs`, `take_capture`) takes the
+  capture and its summaries for a `residual_capture` item and for a `capture-not-summarized`
+  refusal, once per harness. Part 2 adds a refusal of `dla harness gen --next`: the policy must
+  handle `capture-first` the same way (take the capture, then repeat the command), with a test
+  next to the existing ones.
+- A line of a holder counts as growing only when its counts show growth (a first count known
+  and the last above it).
+- `dla run stop` exists; `dla run abort` ends a run for good.
+
 ## The change
 
 ### 1. `dla trend` writes the residual rows of its series
@@ -134,9 +150,14 @@ the flat ones stay; after the missed one is settled the queue offers the second 
   array and attaches a listener to each; the heap-graph summary names the array, and no path
   contains `weak_refs_keep_during_job`.
 - Existing tests that change: say which and why. Do not weaken a test. Nothing under
-  `bench/fixtures` is edited. Run `dla-bench dynamic --only <name>` (one name per call) for
-  three Node fixtures (two leaks, one non-leak) and two Python fixtures and report each
-  result; if one changes, stop and report it.
+  `bench/fixtures` is edited. A new refusal can break the benchmark's fixed policy, so run the
+  WHOLE dynamic acceptance once at the end: `./target/debug/dla-bench dynamic` (all fixtures,
+  40 to 60 minutes; start it in the background with its output in your scratch directory, wait
+  for it, run nothing heavy beside it) and report the whole table and its totals line. One
+  fixture is an expected failure (xfail). `jvm-pool-warmup` fails about one run in three for a
+  reason of its own: if it fails, run it alone twice more and report all three. A fixture that
+  fails for another reason: report its first lines; do not change the tool to make it pass
+  without saying why the change is right in general.
 
 ## Rules
 

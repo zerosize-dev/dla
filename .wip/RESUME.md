@@ -3167,3 +3167,18 @@ unattended run at a time and no builder beside it.
   green; tag v0.9.0-preview.8 on 8c2e5e2; pre-release with 5 archives, 5 .sha256, SHA256SUMS.
 - STILL TO DO: sync the working tree's version files to preview.8 once builder T has finished
   (see the 23:57 entry), before any snapshot goes to main.
+
+## 01:35 UTC 2026-11-25: T corrected and checked; snapshot 62a12f5 in CI; builder X started
+
+- T's correction: Plan::applies(capture, explicit) = explicit || capture; a plain loop keeps the
+  manifest limit (1800 s) and never cuts rounds; only capture runs (or DLA_COMMAND_SECS set) get
+  the 420 s plan. Checked by me: diff of dla_pytest_loop.py (plain path = before, plus checkpoint
+  time in the estimate), fixed one stale comment, mutation on `applies` caught, limit tests 5,
+  test_agent_heap 4, run_stop 3, clippy, fmt. T's fixtures 9/9.
+- Version files of the working tree synced to preview.8 (now equal to HEAD).
+- Snapshot 62a12f5 (T + SKILL.md line + comment) pushed for CI: waiter bckpbgn2q (u115/ci-wip-29).
+  When green: commit-snapshot-tree.sh 62a12f5872aa0905d3728371ab20d383ea6d8973
+  wip-notes/commit-message-30.txt, then PUSH main and dev by hand.
+- BUILDER X started (Sonnet, background): growth-first-brief.md, updated with the floor, the bench
+  policy's take_capture (must handle capture-first), the one-point rule, run stop, and the WHOLE
+  dynamic run at the end. Scratch u123. Commit to main from snapshot 62a12f5 keeps X's edits out.
