@@ -3182,3 +3182,10 @@ unattended run at a time and no builder beside it.
 - BUILDER X started (Sonnet, background): growth-first-brief.md, updated with the floor, the bench
   policy's take_capture (must handle capture-first), the one-point rule, run stop, and the WHOLE
   dynamic run at the end. Scratch u123. Commit to main from snapshot 62a12f5 keeps X's edits out.
+
+## 01:12 UTC 2026-11-25 (clock checked): second container restart
+
+- Stopped: builder X (had edited gap_cmd.rs, trend_cmd.rs, error.rs only; u123 empty) and the CI
+  waiter. No MUT_ markers. CI run 45523177339 on 62a12f5 still in progress on GitHub: new waiter
+  b8l1ptd3x. Builder X resumed by SendMessage (agent afc44b2b50c9343cb).
+- The commit to main still comes from snapshot 62a12f5's tree (X's edits stay out).
