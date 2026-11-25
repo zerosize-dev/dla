@@ -3342,3 +3342,25 @@ unattended run at a time and no builder beside it.
   green: commit-snapshot-tree.sh 1cd3e7e commit-message-32.txt; push. Then J's tree 4243d43 +
   these three files for CI (J's working-tree versions: gate.rs, residual_capture.rs unchanged by J;
   VERIFY.md = 4243d43's + my row).
+
+## 09:40 UTC 2026-11-25: builder K done and checked; cap fix by me
+
+- K: jvm-instance probe (DlaDump walk from driver statics, project statics, thread-locals of live
+  platform threads; 1M objects / 5 s bounds), targets_for gives it to container-field and
+  registry-field JVM candidates; queue flat_reading counts `constant` for thread-keyed. Real
+  library: 1 instance, list 103 entries, grows with the pool's live thread count, flat on one
+  thread. K found the brief wrong: on JDK 21 the common pool keeps thread-locals.
+- K's whole run: jni-order-codec FAIL (3 of 3). Diagnosed by me: series column cap (64) dropped
+  `native.live_bytes@native/src/lib.rs:40` (Class::Group, value only at the last point -> growth 0,
+  dropped first) after K's probe columns filled the cap; correlate then found no native site.
+  FIXED by me in build.rs: a column whose accumulator has `site` set ranks as Class::Site (label
+  "per-site"); new test a_native_site_column_with_one_late_value...; existing go cap test label
+  "dropped 17 grouped" -> "dropped 17 per-site". Mutation caught. jni-order-codec passes alone.
+- Corrected J's VERIFY row: removed the unverified claim that the shared pool's workers clear
+  thread-locals (now: "The list grows with the number of distinct threads that use the helper; on
+  one thread it stays flat."). Same in commit-message-33.
+- Checked K: no names; mutation of jvm_instance_kind caught. Commit message 34 ready.
+- ORDER: 1cd3e7e (G2 + short series) green -> main (msg 32). Then J: tree 4243d43 + gate.rs +
+  residual_capture.rs (working tree versions; J/K did not touch them? CHECK) + VERIFY (4243d43's,
+  with the corrected J sentence and the short-series row) -> CI -> main (msg 33). Then K: full
+  working tree -> CI -> main (msg 34). Then preview.9. Then reruns.

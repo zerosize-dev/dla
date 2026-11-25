@@ -1,0 +1,54 @@
+A JVM probe reads an instance field of the objects that are alive
+
+A JVM probe read static fields only. A census candidate whose holder is an
+instance field (a list or map kept by an object for its whole life) got
+the probe of its class, which reads that class's static fields: none of
+them is the field. The record said the class was loaded, `dla trend`
+read the target `executed`, and every column was flat, whatever the field
+held. A real unattended run on a JVM library missed its documented leak
+this way: a list in an instance field of a helper class.
+
+- New probe target `jvm-instance { class, field }`. At each checkpoint the
+  agent walks, breadth first, from the static fields of the driver and of
+  the loaded classes of the project, and from the thread-local values of
+  every live thread, finds the live instances of the class (a subclass
+  counts) and records for the field the number of instances, the sum of
+  their sizes (a collection or map size, an array length), the objects
+  reachable from it and their shallow bytes. It loads no class, reads
+  only initialized classes and calls no project code. The walk stops at
+  1,000,000 objects or 5 s and says so. No instance found is an
+  abstention with a limitation, not a reading.
+- The column is `probe:<class>.<field>`, with `.size` and `.bytes`, read
+  by `dla trend` and the tie rules as a static probe's column is.
+- A JVM candidate whose holder is an instance field gets the new probe as
+  its specific probe, ahead of its class probe; the driver block says how
+  it is read.
+- A measured flat reading (`constant`) of a target kept per thread by a
+  driver on one thread waits for its second look as an `executed` one
+  does: once the field is read, a flat column no longer counts as a miss.
+- At the column cap, a column of one `file:line` (a native allocation
+  site of the shim, a per-site count of an agent) ranks as a site column,
+  above probe columns. The new probe columns had pushed a native
+  allocation site out of the series of a mixed JVM and native fixture:
+  the shim reports its sites at the last point only, so the column read
+  no growth and was dropped first, and `dla correlate` then found no
+  native site for the native leak.
+
+On the library, a helper whose list grows per thread: the record found 1
+instance and read the list at 103 entries; on the runtime's shared pool
+the column grew with the pool's live thread count (it rises when tasks
+block) and passed the growth gate, and with the units on the caller's
+thread it stayed flat.
+
+For Python and Node a holder that is an instance attribute still has no
+probe of its own (a module probe is used); Go reads such fields in driver
+mode already.
+
+The whole dynamic acceptance passes on the tree with the cap fix; the
+mixed JVM and native fixture that the probe columns broke passes again.
+
+Not covered. A JDK other than 21; virtual threads (their thread-locals
+are not walked); an instance held only by a local variable of a running
+method; the JUnit harness, whose test instances are dropped after each
+test (only static fields are roots there). A walk that reaches its time
+bound was not seen.

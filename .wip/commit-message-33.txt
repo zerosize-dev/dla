@@ -3,10 +3,8 @@ A holder kept per thread waits for a second look whose units come from many thre
 From the miss on a JVM library in the unattended test on projects the tool
 had never seen. The documented leak is a list of a helper class that keeps
 one entry per thread: a thread-local's initializer adds the entry, and it
-goes when its thread dies. On the runtime's shared fork-join pool the
-workers clear their thread-locals before each task, so the initializer
-runs again for the same live thread and the list grows without bound; on
-one thread it stays flat. The loop over the project's tests ran the
+goes when its thread dies. The list grows with the number of distinct
+threads that use the helper; on one thread it stays flat. The loop over the project's tests ran the
 initializer once per test thread, the target read `executed`, every
 column was flat, and the queue settled it. Four minutes in, `dla ledger
 close-rest` closed it with 57 others before any second look, and the
