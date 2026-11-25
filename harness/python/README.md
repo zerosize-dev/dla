@@ -256,8 +256,8 @@ After the first run the driver:
    (also when every test was skipped), no test passed in any file stops with exit 2; a later run with failing tests is
    counted and its first failure recorded once; exit 2 also when no test passed in any run;
 3. estimates the whole series (warm-up plus rounds) from the time of the first run and, when it does not fit
-   `DLA_TIME_LIMIT_SECS` (margin 15 percent and 5 seconds; `dla harness run` sets it from `DLA_COMMAND_SECS`, default 420 s, less about 10 s of start-up and, with `--capture`, the time the capture may take: `DLA_HEAP_SECS` plus 12 s), lowers the step (not below 1), cuts the
-   rounds (a run with `--capture` first, not below 3 rounds, so that its allocation profiles and the retention record are taken; without a capture last, not below the warm-up and 3) and drops the slowest
+   `DLA_TIME_LIMIT_SECS` (margin 15 percent and 5 seconds; `dla harness run` sets it: for a plain loop the limit of the manifest (1800 s) or, when `DLA_COMMAND_SECS` is set, that less about 10 s of start-up; with `--capture` always `DLA_COMMAND_SECS`, default 420 s, less 10 s and the time the capture may take: `DLA_HEAP_SECS` plus 12 s), lowers the step (not below 1), with `--capture` cuts the
+   rounds first (not below 3, so that its allocation profiles and the retention record are taken; a plain loop never cuts its rounds) and drops the slowest
    files until it fits (the time the checkpoints took counts too: a capture's profiles are taken there; the note `the test loop cut its rounds from <n> to <m>` says it) (limitation `dropped test file <path>: it took <t> s of <unit> s per run and the series would
    not fit <limit> s`); when one file alone does not fit it stops with `the tests are too slow for a series` and exit 3,
    so the run reports no usable point. A reading of a single run holds the one-time costs (the imports), so this stop

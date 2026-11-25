@@ -819,13 +819,13 @@ fn the_python_test_loop_is_never_put_under_a_shell_timeout_and_a_registration_ta
     let stages = read("skills/detect-leak-anywhere/references/stages.md");
     assert!(
         python.contains(
-            "The command ends by itself within `DLA_COMMAND_SECS` (default 420 s, seven minutes), capture included: the loop is given what is left after about 10 s of start-up and, with `--capture`, the time the capture may take (`DLA_HEAP_SECS` plus 12 s), cuts its rounds (not below 3 with a capture, so its allocation profiles and the retention record are taken) and then drops the slowest test files to fit, and `_attention` says what was shortened. Run `dla harness run <H>` for it as a plain foreground command with the tool's longest timeout. When the tool moves the command to the background because it runs long, wait for the notice that it ended and do other read-only work meanwhile. Never start it with the shell's `&` or `nohup` and never put it under `timeout`: a shell background job is killed when the command returns, and a cut run writes no series."
+            "A run with `--capture` ends by itself within `DLA_COMMAND_SECS` (default 420 s, seven minutes): the loop is given what is left after about 10 s of start-up and the time the capture may take (`DLA_HEAP_SECS` plus 12 s), cuts its rounds (not below 3, so its allocation profiles and the retention record are taken) and then drops the slowest test files to fit, and `_attention` says what was shortened. A plain loop runs up to its limit of 1800 s (30 minutes) per key mode, or `DLA_COMMAND_SECS` when that is set, and the tool may move it to the background: wait for it. Run `dla harness run <H>` for it as a plain foreground command with the tool's longest timeout. When the tool moves the command to the background because it runs long, wait for the notice that it ended and do other read-only work meanwhile. Never start it with the shell's `&` or `nohup` and never put it under `timeout`: a shell background job is killed when the command returns, and a cut run writes no series."
         ),
         "python.md does not keep the loop out of the shell's timeout"
     );
     assert!(
         stages.contains(
-            "The Python test loop (and the JUnit repeat harness) ends by itself within `DLA_COMMAND_SECS` (default 420 s, seven minutes), capture included, and `_attention` says what it shortened. Run `dla harness run <H>` for it as a plain foreground command with the tool's longest timeout. When the tool moves the command to the background because it runs long, wait for the notice that it ended and do other read-only work meanwhile. Never start it with the shell's `&` or `nohup` and never put it under `timeout`: a shell background job is killed when the command returns, and a cut run writes no series."
+            "The Python test loop (and the JUnit repeat harness) with `--capture` ends by itself within `DLA_COMMAND_SECS` (default 420 s, seven minutes), and `_attention` says what it shortened; a plain loop runs up to its limit per key mode (1800 s for the pytest loop), or `DLA_COMMAND_SECS` when that is set, and the tool may move it to the background: wait for it. Run `dla harness run <H>` for it as a plain foreground command with the tool's longest timeout. When the tool moves the command to the background because it runs long, wait for the notice that it ended and do other read-only work meanwhile. Never start it with the shell's `&` or `nohup` and never put it under `timeout`: a shell background job is killed when the command returns, and a cut run writes no series."
         ),
         "stages.md does not keep the loop out of the shell's timeout"
     );
@@ -1185,7 +1185,7 @@ fn the_texts_say_a_cut_command_is_stopped_with_run_stop_and_not_aborted() {
         "python.md does not say what the retention walk does with its bound"
     );
     for want in [
-        "`dla harness run` sets it from `DLA_COMMAND_SECS`, default 420 s, less about 10 s of start-up and, with `--capture`, the time the capture may take",
+        "for a plain loop the limit of the manifest (1800 s) or, when `DLA_COMMAND_SECS` is set, that less about 10 s of start-up; with `--capture` always `DLA_COMMAND_SECS`, default 420 s",
         "the note `the test loop cut its rounds from <n> to <m>` says it",
         "The scan looks first at every tracked object for the sites that grew",
         "the record says in `walk` (`kept`, `walked`, `not_walked`, `scanned`, `of`, `bound_secs`, and `walked` and `not_walked` for each site) how much was done",

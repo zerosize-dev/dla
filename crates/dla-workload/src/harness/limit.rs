@@ -340,10 +340,23 @@ mod tests {
     fn a_plain_run_keeps_its_manifest_limit_and_a_capture_run_gets_the_plan() {
         let none = CaptureSet::default();
         let cap = set(true, true);
-        assert!(!Plan::applies(&none, false), "a plain run has no command bound");
+        assert!(
+            !Plan::applies(&none, false),
+            "a plain run has no command bound"
+        );
         assert!(Plan::applies(&none, true), "DLA_COMMAND_SECS set bounds it");
-        assert!(Plan::applies(&cap, false), "a capture run has the 420 s plan");
-        let p = Plan::compute(COMMAND_SECS_DEFAULT, 60.0, 0, 1, (&cap, 4, true), Duration::from_secs(1800));
+        assert!(
+            Plan::applies(&cap, false),
+            "a capture run has the 420 s plan"
+        );
+        let p = Plan::compute(
+            COMMAND_SECS_DEFAULT,
+            60.0,
+            0,
+            1,
+            (&cap, 4, true),
+            Duration::from_secs(1800),
+        );
         assert_eq!((p.command, p.process), (420, 410));
     }
 

@@ -2142,7 +2142,7 @@ fn run_driver_mode(
     let dumps_wanted = opts.capture_dumps.unwrap_or(capture::DEFAULT_DUMPS);
     // A test loop ends by itself within the command's time: its process gets what is left of
     // `DLA_COMMAND_SECS` after the start-up and reading time and the capture (see `limit`).
-    let mut plan: Option<limit::Plan> = manifest.is_test_loop().then(|| {
+    let plan: Option<Option<limit::Plan>> = manifest.is_test_loop().then(|| {
         limit::Plan::of(
             started,
             modes_left,

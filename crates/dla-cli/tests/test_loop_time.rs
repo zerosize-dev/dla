@@ -211,10 +211,10 @@ fn a_capture_run_ends_by_itself_inside_the_command_time_with_its_profiles_and_th
     assert!(captures.contains(".retain.json"), "{captures}");
     let capture_points = cap["summary"]["points"].as_u64().unwrap();
 
-    // The same command time without a capture keeps more rounds.
+    // The command bound set explicitly holds for a plain run too, and it keeps more rounds.
     let plain = ok(
         &project,
-        &[("DLA_COMMAND_SECS", "40")],
+        &[("DLA_COMMAND_SECS", "60")],
         &["harness", "run", "H1", "--mode", "fresh"],
     );
     let plain_points = plain["summary"]["points"].as_u64().unwrap();
