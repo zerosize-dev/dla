@@ -3503,3 +3503,26 @@ unattended run at a time and no builder beside it.
   HTTPParser > native_bind.bound_this > MockHttpSocket.
 - Commit message 36 written. Full tests (core, parsers, workload, cli) running -> then snapshot
   WITH CI -> wait -> commit to main -> version preview.10 -> release -> reruns.
+- 19:55 full tests 137/137 ok; fmt and clippy clean. Snapshot 43b5bc2 pushed WITH CI; waiter
+  u115/ci-wip-39 (bf1hyrqm0). When green: commit-snapshot-tree.sh 43b5bc23ed7f7d877776d692f4aaaf2e05b87004
+  commit-message-36.txt; push main + dev; then version 0.9.0-preview.10 (sed in .claude-plugin
+  marketplace.json, plugin.json, Cargo.toml, Cargo.lock), release, refresh rig, reruns.
+- Disk: freed old u72 u79 u97 u112 u122 u124 u125 dirs and binaries; keep u107 (m2), u119
+  (gradle), g-gate/project (r3 copy, for a release-binary gate check).
+- r3-fastrace started 18:59 UTC (pid 31961) on the preview.9 rig while CI runs (no builder
+  beside it). Waiter u107/wait-run.sh r3-fastrace 7000. Judge against key section 7 after.
+
+## 19:15 UTC 2026-11-25: r3-fastrace judged NOT FOUND; builder J started
+
+- r3-fastrace (preview.9): 245 s, COMPLETE, 3 of 167 min. F41 (the documented holder
+  Sender.pending_messages, spsc.rs:21) targeted: H2 writer_not_executed (setup installs a
+  reporter, which drains the ring buffer); H3 focus = H2's setup copied + unit wrapped in
+  `for _ in 0..8` -> writer_not_executed again -> NotReached (two different driver keys, one
+  focused) -> close-rest closed it suspected_static_only. The H3 block DID say guard lines and
+  "a state that normal set-up removes ... needs a set-up that does not remove it".
+- General cause: a second miss with the same set-up does not test the set-up-state hypothesis.
+  Builder J (sonnet): wip-notes/setup-miss-brief.md: writer_not_executed settles NotReached
+  only after two misses whose DLA-HOOK setup bodies differ (like the Rust untried-feature rule).
+- Kept: /root/dla-real/r3-fastrace-keep (redacted + H2/H3 drivers). Run dir deleted.
+- Plan: CI 43b5bc2 green -> main; J verify -> CI -> main; then preview.10 with all of it (decide
+  whether to wait for J), reruns otel-python, otel-go, logstash, interceptors, fastrace.
