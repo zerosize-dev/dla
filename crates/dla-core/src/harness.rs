@@ -776,25 +776,6 @@ pub const SECOND_LOOK_SLOTS: [(&str, usize, &str); 5] = [
     ),
 ];
 
-/// The sixth choice of a second look, for a target whose holder is kept per thread: which
-/// threads the unit runs on. Its index in the choice helper's `slot` argument is 5. It cannot
-/// be given up: a holder kept per thread grows only with the threads the units come from.
-pub const THREADS_SLOT: (&str, usize, &str) = (
-    "threads",
-    4,
-    "which threads the unit runs on (the holder is kept per thread): 0 the caller's thread, 1 a small fixed pool of threads that live across units, 2 the runtime's shared pool where it has one, 3 a new thread per unit that ends",
-);
-
-/// The slots of a second look: the five of [`SECOND_LOOK_SLOTS`], and [`THREADS_SLOT`] when a
-/// target is thread-keyed.
-pub fn second_look_slots(threads: bool) -> Vec<(&'static str, usize, &'static str)> {
-    let mut v = SECOND_LOOK_SLOTS.to_vec();
-    if threads {
-        v.push(THREADS_SLOT);
-    }
-    v
-}
-
 /// The most slots a second look may give up (explicitly, with a reason).
 pub const SLOTS_GIVEN_UP_MAX: usize = 2;
 
@@ -813,16 +794,10 @@ pub fn slot_given_up_form(rt: Runtime, name: &str) -> String {
 /// choice helper, the options in a comment on the same line. It goes above the marker line
 /// that says the hook is not filled in; the unit body goes below it.
 pub fn unit_skeleton(rt: Runtime) -> String {
-    unit_skeleton_with(rt, false)
-}
-
-/// [`unit_skeleton`] with the `threads` slot when `threads` is set (a target is kept per
-/// thread).
-pub fn unit_skeleton_with(rt: Runtime, threads: bool) -> String {
     let helper = choice_helper(rt);
     let c = line_comment(rt);
     let mut out = String::new();
-    for (i, (name, n, meaning)) in second_look_slots(threads).iter().enumerate() {
+    for (i, (name, n, meaning)) in SECOND_LOOK_SLOTS.iter().enumerate() {
         let call = format!("{helper}(key, {i}, {n})");
         let decl = match rt {
             Runtime::Python => format!("    {name} = {call}"),
@@ -906,22 +881,13 @@ fn unit_region(text: &str, rt: Runtime) -> Vec<&str> {
 
 /// [`slot_report`] over one text.
 pub fn slot_report_in(text: &str, rt: Runtime) -> SlotReport {
-    slot_report_in_with(text, rt, false)
-}
-
-/// [`slot_report_in`] with the `threads` slot checked when `threads` is set. That slot cannot
-/// be given up.
-pub fn slot_report_in_with(text: &str, rt: Runtime, threads: bool) -> SlotReport {
     let helper = choice_helper(rt);
     let c = line_comment(rt);
     let region = unit_region(text, rt);
     let mut report = SlotReport::default();
-    for (i, (name, _, _)) in second_look_slots(threads).iter().enumerate() {
+    for (i, (name, _, _)) in SECOND_LOOK_SLOTS.iter().enumerate() {
         let form = format!("slot {name}: not applicable:");
         let reason = region.iter().find_map(|l| {
-            if i >= SECOND_LOOK_SLOTS.len() {
-                return None;
-            }
             let l = l.trim();
             let rest = l.strip_prefix(c)?.trim_start().strip_prefix(&form)?;
             let rest = rest.trim().trim_end_matches("*/").trim();
@@ -949,24 +915,8 @@ pub fn slot_report_in_with(text: &str, rt: Runtime, threads: bool) -> SlotReport
     report
 }
 
-/// True when a target of harness `id` is kept per thread (`targets.json`, written when the
-/// harness was generated): its second look has the `threads` slot.
-pub fn has_threads_slot(run_dir: &Path, id: &str) -> bool {
-    let path = HarnessManifest::dir_in(run_dir, id).join("targets.json");
-    let Ok(text) = fs::read_to_string(path) else {
-        return false;
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return false;
-    };
-    v["targets"]
-        .as_array()
-        .is_some_and(|t| t.iter().any(|x| x["thread_keyed"] == true))
-}
-
 /// The slots of the second-look harness `id`: the unit of its driver files.
 pub fn slot_report(run_dir: &Path, id: &str, rt: Runtime) -> SlotReport {
-    let threads = has_threads_slot(run_dir, id);
     let dir = HarnessManifest::dir_in(run_dir, id).join("driver");
     let Ok(rd) = fs::read_dir(dir) else {
         return SlotReport::default();
@@ -982,11 +932,11 @@ pub fn slot_report(run_dir: &Path, id: &str, rt: Runtime) -> SlotReport {
             continue;
         };
         if text.contains("DLA-HOOK unit") {
-            return slot_report_in_with(&text, rt, threads);
+            return slot_report_in(&text, rt);
         }
     }
     SlotReport {
-        unused: (0..second_look_slots(threads).len()).collect(),
+        unused: (0..SECOND_LOOK_SLOTS.len()).collect(),
         given_up: Vec::new(),
     }
 }
@@ -1835,64 +1785,6 @@ mod tests {
             // The form without a reason is no give-up.
             let empty = format!("{}    {c} slot when: not applicable:\n", some);
             assert_eq!(slot_report_in(&unit_text(rt, &empty), rt).unused, [2]);
-        }
-    }
-
-    /// [`unit_text`] with the `threads` slot in the skeleton.
-    fn unit_text_threads(rt: Runtime, body: &str) -> String {
-        let c = line_comment(rt);
-        let open = format!(
-            "    {c} DLA-HOOK unit: x\n{}{body}",
-            unit_skeleton_with(rt, true)
-        );
-        match rt {
-            Runtime::Python => format!("def unit(i, key):\n{open}\ndef other():\n    pass\n"),
-            _ => format!("fn unit() {{\n{open}}}\nfn other() {{ let order = 1; }}\n"),
-        }
-    }
-
-    #[test]
-    fn the_threads_slot_is_in_the_skeleton_only_for_a_thread_keyed_target_and_cannot_be_given_up() {
-        for rt in [
-            Runtime::Python,
-            Runtime::Node,
-            Runtime::Go,
-            Runtime::Jvm,
-            Runtime::Rust,
-        ] {
-            let helper = choice_helper(rt);
-            assert!(!unit_skeleton(rt).contains("threads"));
-            assert!(unit_skeleton_with(rt, true).contains(&format!("{helper}(key, 5, 4)")));
-            let uses: String = second_look_slots(true)
-                .iter()
-                .map(|(n, _, _)| format!("    use_it({n});\n"))
-                .collect();
-            assert_eq!(
-                slot_report_in_with(&unit_text_threads(rt, &uses), rt, true),
-                SlotReport::default(),
-                "{rt:?}"
-            );
-            // The unit that leaves the threads out is reported, the rest used.
-            let five: String = SECOND_LOOK_SLOTS
-                .iter()
-                .map(|(n, _, _)| format!("    use_it({n});\n"))
-                .collect();
-            assert_eq!(
-                slot_report_in_with(&unit_text_threads(rt, &five), rt, true).unused,
-                [5],
-                "{rt:?}"
-            );
-            // The same unit is complete for a target that is not kept per thread.
-            assert_eq!(
-                slot_report_in_with(&unit_text(rt, &five), rt, false),
-                SlotReport::default()
-            );
-            // Giving it up in the fixed form does not count.
-            let c = line_comment(rt);
-            let given = format!("{five}    {c} slot threads: not applicable: single threaded\n");
-            let r = slot_report_in_with(&unit_text_threads(rt, &given), rt, true);
-            assert_eq!(r.unused, [5], "{rt:?}");
-            assert!(r.given_up.is_empty());
         }
     }
 }

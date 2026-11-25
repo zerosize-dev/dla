@@ -165,8 +165,6 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   attribution, not for the trend: tracemalloc with several frames, memray and the chain search slow the
   points that take them.
 
-A holder kept per thread (a `threading.local`, or a container filled in the `__init__` of a `threading.local` subclass) shows its growth only with units from several threads: the driver block says so for such a target, and the units must run on a `ThreadPoolExecutor` and on a new thread per unit that ends, not only on the caller's thread (a first pass on one thread leaves such a target pending for its second look).
-
 ## Census
 - Native codec contexts are listed as kind `handle`, holder `native-handle/global-ref`, off-heap, like
   `mmap.mmap` and `sqlite3.connect`: constructors named `compressobj`, `decompressobj`, `BZ2Compressor`,

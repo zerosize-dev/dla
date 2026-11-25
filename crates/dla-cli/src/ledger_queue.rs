@@ -135,14 +135,6 @@ pub fn list(ctx: &Ctx, a: ListArgs) -> Res<String> {
             e["harnesses"] = Value::Object(m);
         }
         match (second_q, ix.second_look(id)) {
-            (Some(q), _) if q.second[id].detail == queue::THREAD_REASON => {
-                e["second_look"] = json!(format!(
-                    "pending: {} ({} read it flat); {} gives it a second look whose units come from other threads",
-                    queue::THREAD_REASON,
-                    q.second[id].harness,
-                    q.batch_command
-                ));
-            }
             (Some(q), _) => {
                 e["second_look"] = json!(format!(
                     "pending: one flat run of one driver ({}) settled it and budget is left; {} gives it a different driver",

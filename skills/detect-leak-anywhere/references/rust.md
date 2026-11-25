@@ -39,8 +39,6 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   debug line tables, shows fewer project frames (limitation lines say so).
 - Purges: `trim` (glibc `malloc_trim`).
 
-A `thread_local!` holder, and a container of a module or type that owns one, is kept per thread (the census records the holder and its owner, not the writers of a Rust holder): the driver block says so for such a target, and the units must run on a new thread per unit (`std::thread::spawn`, joined) and on a small pool of threads that live across units, not only on the caller's thread (a first pass on one thread leaves such a target pending for its second look).
-
 ## Attach backends
 | Backend | Tier | Notes |
 |---|---|---|

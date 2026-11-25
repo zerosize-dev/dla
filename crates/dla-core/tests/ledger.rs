@@ -776,7 +776,6 @@ fn only_the_writer_sites_that_add_are_the_writer_lines_to_count() {
         param: false,
         constant: false,
         exported: false,
-        thread_init: false,
     };
     l.annotate_record(dla_core::FindingAnnotation {
         writers: vec![

@@ -387,7 +387,6 @@ fn sites_of(
                 param: false,
                 constant: false,
                 exported: false,
-                thread_init: false,
             }),
     );
     out
@@ -487,7 +486,6 @@ pub fn contributions(f: &Finding, annotation: Option<&Annotation>) -> Vec<(&'sta
             param: false,
             constant: false,
             exported: false,
-            thread_init: false,
         });
     }
     let removers = sites_of(&facts.remover_sites, &a.removers, SiteKind::Delete, false);
@@ -800,7 +798,6 @@ mod tests {
             param: false,
             constant: false,
             exported: false,
-            thread_init: false,
         }
     }
 
