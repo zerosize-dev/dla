@@ -34,6 +34,7 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   mode (`--driver`) gives 3 or more snapshots of one process in one pid directory. Run the `dla summarize` commands
   the harness prints. Before a snapshot the agent checks that about 12 times `heapUsed` is available and
   skips it with an error if not (a coverage gap, not a failure).
+- The output of `dla summarize heap-graph` names, for the holders that pass (three at most), `kept_by` (the retention path from the root to the holder, short) and `root` (what the root is: a native handle, a module variable or global, a registration; for a native handle that keeps a bound function or a closure of the project, the project line of that function and the object it is bound to, or that the line is not known). Both are the path the summary used (`holders[].path` of the summary file): read them before writing a path script of your own. The edge `weak_refs_keep_during_job` is never a holder: it holds what a `WeakRef` was read from in the current job, and the summary skips it.
 
 An `AsyncLocalStorage` holder, and a container of a module or class that owns one, is kept per context or thread: the driver block says so for such a target, and the units must run in `worker_threads` (a new worker per unit that ends, and a few that live across units) and in separate async contexts, not only in the one the driver starts in (a first pass in one context leaves such a target pending for its second look).
 

@@ -1547,6 +1547,11 @@ type Node = (
 );
 
 fn snapshot_text(nodes: &[Node]) -> String {
+    snapshot_with_locations(nodes, &[])
+}
+
+/// As [`snapshot_text`], with the `locations` rows `(node index, script id, line, column)`.
+fn snapshot_with_locations(nodes: &[Node], locations: &[(usize, u32, u32, u32)]) -> String {
     const NT: [&str; 15] = [
         "hidden",
         "array",
@@ -1606,7 +1611,12 @@ fn snapshot_text(nodes: &[Node]) -> String {
             "location_fields": ["object_index","script_id","line","column"],
         }, "node_count": nodes.len(), "edge_count": ev.len() / 3},
         "nodes": nv, "edges": ev, "trace_function_infos": [], "trace_tree": [],
-        "samples": [], "locations": [], "strings": strings,
+        "samples": [], "strings": strings,
+        // `object_index` is an offset into the node array: seven fields a node.
+        "locations": locations
+            .iter()
+            .flat_map(|&(n, id, line, col)| [(n * 7) as u32, id, line, col])
+            .collect::<Vec<u32>>(),
     })
     .to_string()
 }
@@ -1814,4 +1824,329 @@ fn growth_only_inside_node_modules_is_said_so_and_is_not_a_call_for_more_snapsho
     assert!(reasons.contains("Node's own modules"), "{reasons}");
     let needed = v["needed"].as_str().unwrap();
     assert!(!needed.contains("take another snapshot"), "{needed}");
+}
+
+// ---- the retention path and what the root is -------------------------------------------------
+
+/// One snapshot of a process whose native handle keeps `parsers` HTTP parsers; each parser keeps
+/// a function bound to a `Conn` of `script`, and the `Conn` keeps a `Request` (node 3 is the
+/// function the bind call was made with, 6 and 7 the class). `site` is the row of the
+/// `locations` table for that function: `(script id, line, column)`.
+fn native_scene(script: &str, parsers: usize, site: Option<(u32, u32, u32)>) -> String {
+    let mut v = vec![
+        nd("synthetic", "", 0, &[("element", "0", 1)]),
+        nd(
+            "synthetic",
+            "(GC roots)",
+            0,
+            &[
+                ("element", "0", 2),
+                ("element", "1", 3),
+                ("element", "2", 6),
+            ],
+        ),
+        nd("synthetic", "(Global handles)", 0, &[]),
+        nd("closure", "onData", 24, &[("internal", "shared", 4)]),
+        nd("code", "onData", 16, &[("internal", "script", 5)]),
+        nd("code", script, 8, &[]),
+        nd("object", "Object", 16, &[("property", "constructor", 7)]),
+        nd("closure", "Conn", 24, &[("internal", "shared", 8)]),
+        nd("code", "Conn", 16, &[("internal", "script", 5)]),
+    ];
+    let mut handles = Vec::new();
+    for k in 0..parsers {
+        let at = v.len();
+        handles.push(("element", k.to_string(), at));
+        v.push(nd("native", "HTTPParser", 64, &[("element", "1", at + 1)]));
+        v.push(nd(
+            "closure",
+            "native_bind",
+            32,
+            &[
+                ("internal", "bound_this", at + 2),
+                ("internal", "bound_function", 3),
+            ],
+        ));
+        v.push(nd(
+            "object",
+            "Conn",
+            32,
+            &[
+                ("property", "__proto__", 6),
+                ("property", "request", at + 3),
+            ],
+        ));
+        v.push(nd("object", "Request", 1500, &[]));
+    }
+    v[2].3 = handles;
+    let rows: Vec<(usize, u32, u32, u32)> =
+        site.map(|(id, l, c)| (3, id, l, c)).into_iter().collect();
+    snapshot_with_locations(&v, &rows)
+}
+
+const PARSERS: [usize; 3] = [4, 8, 13];
+
+/// A project with `src/conn.js` and its census, three native-handle snapshots in `in/native/`
+/// and the `scripts.json` sidecar `scripts` next to them.
+fn native_project(site: Option<(u32, u32, u32)>, scripts: Option<Value>) -> (Project, Vec<String>) {
+    let p = Project::new();
+    p.put(
+        "src/conn.js",
+        b"'use strict';\nclass Conn {\n  constructor() { this.request = new Map(); }\n}\nmodule.exports = { Conn };\n",
+    );
+    ok(p.path(), &["census", "--lang", "node"]);
+    let files: Vec<String> = PARSERS
+        .iter()
+        .enumerate()
+        .map(|(i, &k)| {
+            p.put(
+                &format!("in/native/heap-{}.heapsnapshot", i + 1),
+                native_scene("/work/src/conn.js", k, site).as_bytes(),
+            )
+        })
+        .collect();
+    if let Some(doc) = scripts {
+        p.put("in/native/scripts.json", doc.to_string().as_bytes());
+    }
+    (p, files)
+}
+
+const KEY: &str = "field:src.conn.Conn.request";
+
+#[test]
+fn a_native_handle_that_keeps_a_bound_callback_names_the_project_line_that_binds_it() {
+    let sidecar = json!({"dla_scripts": 1, "scripts": {"12": "file:///elsewhere/work/src/conn.js"}, "maps": {}});
+    let (p, files) = native_project(Some((12, 118, 4)), Some(sidecar));
+    let f = p.finding_with_owner("src.conn.Conn.request");
+    let v = heap_graph(&p, &files, &[]);
+    assert_eq!(v["gate"], "pass", "{v}");
+    assert_eq!(v["passed"][0], KEY, "{v}");
+    assert_eq!(
+        v["kept_by"][KEY],
+        "(Global handles) > HTTPParser[1] > bound function (this) > Conn.request",
+        "{v}"
+    );
+    assert_eq!(
+        v["root"][KEY],
+        "a native handle keeps an HTTPParser, which keeps a bound function created at src/conn.js:119 whose this is the Conn",
+        "{v}"
+    );
+    // The next step starts with the mechanism and the line, and still ends with the confirm
+    // command of the tied finding.
+    let needed = v["needed"].as_str().unwrap();
+    assert!(
+        needed.starts_with("native code keeps the objects (a handle that is not released); the line that hands them to it is src/conn.js:119; then "),
+        "{needed}"
+    );
+    let id = f["id"].as_str().unwrap();
+    assert!(
+        needed.contains(&format!("dla ledger confirm {id} --evidence ")),
+        "{needed}"
+    );
+    // The summary file keeps the whole path, with the site of the function.
+    let dir = p.run_dir.join("summaries");
+    let mut sites = 0;
+    for e in fs::read_dir(dir).unwrap().flatten() {
+        let t = fs::read_to_string(e.path()).unwrap();
+        sites += t.matches("\"script_id\": 12").count();
+    }
+    assert!(sites >= 3, "{sites}");
+}
+
+#[test]
+fn a_bundled_callback_is_mapped_through_its_source_map_to_the_source_file() {
+    let (p, files) = {
+        let (p, files) = native_project(Some((12, 3, 0)), None);
+        // The bundle on disk, its map (generated line 3 is line 26 of `src/conn.ts`), and the
+        // sidecar that names the script by its real path.
+        p.put(
+            "dist/bundle.js",
+            b"'use strict';\n\n\nfunction onData() {}\n//# sourceMappingURL=bundle.js.map\n",
+        );
+        p.put(
+            "dist/bundle.js.map",
+            br#"{"version":3,"file":"bundle.js","sources":["../src/conn.ts"],"names":[],"mappings":";;;AAyBA"}"#,
+        );
+        let url = format!("file://{}", p.path().join("dist/bundle.js").display());
+        p.put(
+            "in/native/scripts.json",
+            json!({"dla_scripts": 1, "scripts": {"12": url}, "maps": {"12": "bundle.js.map"}})
+                .to_string()
+                .as_bytes(),
+        );
+        (p, files)
+    };
+    let v = heap_graph(&p, &files, &[]);
+    assert_eq!(v["gate"], "pass", "{v}");
+    let root = v["root"][KEY].as_str().unwrap();
+    assert!(root.contains("created at src/conn.ts:26 "), "{root}");
+    assert!(!root.contains("bundle.js"), "{root}");
+}
+
+#[test]
+fn a_bundle_whose_map_cannot_be_followed_gives_no_line_instead_of_the_bundle_line() {
+    let (p, files) = native_project(Some((12, 3, 0)), None);
+    // The sidecar says the script has a map (inline), which the reader cannot follow.
+    p.put("dist/bundle.js", b"function onData() {}\n");
+    let url = format!("file://{}", p.path().join("dist/bundle.js").display());
+    p.put(
+        "in/native/scripts.json",
+        json!({"dla_scripts": 1, "scripts": {"12": url}, "maps": {"12": "inline"}})
+            .to_string()
+            .as_bytes(),
+    );
+    let v = heap_graph(&p, &files, &[]);
+    let root = v["root"][KEY].as_str().unwrap();
+    assert!(root.contains("is not known"), "{root}");
+    assert!(!root.contains("bundle.js"), "{root}");
+    assert!(
+        v["needed"]
+            .as_str()
+            .unwrap()
+            .contains("the line that hands them to it is not known"),
+        "{v}"
+    );
+}
+
+#[test]
+fn without_locations_the_root_says_the_line_is_not_known_and_gives_none() {
+    // The sidecar is there, the snapshot has no row for the function.
+    let sidecar =
+        json!({"dla_scripts": 1, "scripts": {"12": "file:///work/src/conn.js"}, "maps": {}});
+    let (p, files) = native_project(None, Some(sidecar));
+    let v = heap_graph(&p, &files, &[]);
+    assert_eq!(v["gate"], "pass", "{v}");
+    let root = v["root"][KEY].as_str().unwrap();
+    assert!(
+        root.starts_with("a native handle keeps an HTTPParser, which keeps a bound function"),
+        "{root}"
+    );
+    assert!(root.contains("is not known"), "{root}");
+    assert!(!root.contains("conn.js"), "{root}");
+    let needed = v["needed"].as_str().unwrap();
+    assert!(
+        needed.contains("is not known from the snapshots"),
+        "{needed}"
+    );
+    assert!(!needed.contains("conn.js:"), "{needed}");
+    // And without the sidecar, with a row: the same.
+    let (p, files) = native_project(Some((12, 118, 4)), None);
+    let v = heap_graph(&p, &files, &[]);
+    let root = v["root"][KEY].as_str().unwrap();
+    assert!(root.contains("is not known"), "{root}");
+    assert!(!root.contains("conn.js:"), "{root}");
+}
+
+#[test]
+fn a_module_variable_root_says_so_with_no_native_words_and_no_line() {
+    let p = Project::with_sources();
+    let v = heap_graph(&p, &retry(&p), &[]);
+    assert_eq!(v["gate"], "pass", "{v}");
+    let key = "static:src.scheduler.shared";
+    assert_eq!(v["passed"][0], key);
+    let root = v["root"][key].as_str().unwrap();
+    assert!(
+        root.starts_with("a module variable of the project"),
+        "{root}"
+    );
+    assert!(!root.contains("native") && !root.contains(".js:"), "{root}");
+    assert!(
+        v["kept_by"][key].as_str().unwrap().contains("shared"),
+        "{v}"
+    );
+    let needed = v["needed"].as_str().unwrap();
+    assert!(!needed.contains("native code"), "{needed}");
+}
+
+/// A project whose module keeps each object through a callback bound to it and handed to a
+/// native handle (`fs.watch`), run by the real `node` that writes three snapshots of one
+/// process and the `scripts.json` sidecar the agent writes (script ids by `Debugger`).
+/// `None` when `node` is not installed.
+fn real_native_project() -> Option<(Project, Vec<String>)> {
+    let node = std::process::Command::new("node")
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success());
+    if node.is_none() {
+        eprintln!("skipping: node is not on PATH");
+        return None;
+    }
+    let p = Project::new();
+    p.put(
+        "src/conn.js",
+        b"'use strict';\nconst fs = require('fs');\nclass Conn {\n  constructor(i) { this.id = i; this.request = new Array(400).fill(i); }\n}\nconst watchers = [];\nfunction open(file, i) {\n  const conn = new Conn(i);\n  watchers.push(fs.watch(file, function onChange() { return this.id; }.bind(conn)));\n}\nmodule.exports = { open, Conn };\n",
+    );
+    p.put(
+        "scene.js",
+        br#"'use strict';
+const fs = require('fs');
+const v8 = require('v8');
+const path = require('path');
+const inspector = require('inspector');
+const { open } = require('./src/conn.js');
+const scripts = {};
+const s = new inspector.Session();
+s.connect();
+s.on('Debugger.scriptParsed', (m) => { scripts[m.params.scriptId] = m.params.url; });
+s.post('Debugger.enable');
+const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'w'));
+fs.mkdirSync('cap', { recursive: true });
+let k = 0;
+[6, 12, 20].forEach((batch, n) => {
+  for (let i = 0; i < batch; i++) {
+    const f = path.join(dir, `f${k++}`);
+    fs.writeFileSync(f, 'x');
+    open(f, k);
+  }
+  v8.writeHeapSnapshot(path.join('cap', `heap-${n + 1}.heapsnapshot`));
+});
+fs.writeFileSync(path.join('cap', 'scripts.json'), JSON.stringify({ dla_scripts: 1, scripts, maps: {} }));
+process.exit(0);
+"#,
+    );
+    let st = std::process::Command::new("node")
+        .arg("scene.js")
+        .current_dir(p.path())
+        .status()
+        .unwrap();
+    assert!(st.success());
+    let files = (1..=3)
+        .map(|n| format!("cap/heap-{n}.heapsnapshot"))
+        .collect();
+    Some((p, files))
+}
+
+#[test]
+fn a_real_native_watcher_keeping_a_bound_callback_gives_the_line_of_the_function() {
+    let Some((p, files)) = real_native_project() else {
+        return;
+    };
+    let v = heap_graph(&p, &files, &[]);
+    assert_eq!(v["gate"], "pass", "{v}");
+    let key = "field:src.conn.Conn.request";
+    assert!(
+        v["passed"].as_array().unwrap().iter().any(|k| k == key),
+        "{v}"
+    );
+    // The path ends with the bound callback and the holder; the root is native.
+    let path = v["kept_by"][key].as_str().unwrap();
+    assert!(
+        path.ends_with("bound function (this) > Conn.request"),
+        "{path}"
+    );
+    // Line 9 of src/conn.js is where the function is made and bound.
+    let root = v["root"][key].as_str().unwrap();
+    assert!(
+        root.starts_with("a native handle keeps ")
+            && root.ends_with("created at src/conn.js:9 whose this is the Conn"),
+        "{root}"
+    );
+    let needed = v["needed"].as_str().unwrap();
+    assert!(
+        needed.starts_with("native code keeps the objects")
+            && needed.contains("is src/conn.js:9; then "),
+        "{needed}"
+    );
 }

@@ -1526,4 +1526,108 @@ mod tests {
         assert!(!is_agent_script("/p/src/agent/index.js"));
         assert!(!is_agent_script("/p/.dla/r/harness/H1/work/src/a.js"));
     }
+
+    /// Nodes: roots, `(Global handles)` keeping a parser that keeps a bound function (target at
+    /// node 5, a closure) whose `this` is a `Conn` that holds `request`.
+    fn bound_scene(locations: &str) -> Snapshot {
+        let t = build(&[
+            ("synthetic", "", 0, vec![("element", "0", 1)]),
+            (
+                "synthetic",
+                "(GC roots)",
+                0,
+                vec![("element", "0", 2), ("element", "1", 5)],
+            ),
+            (
+                "synthetic",
+                "(Global handles)",
+                0,
+                vec![("element", "2", 3)],
+            ),
+            ("native", "NativeParser", 64, vec![("element", "1", 4)]),
+            (
+                "closure",
+                "native_bind",
+                32,
+                vec![
+                    ("internal", "bound_this", 6),
+                    ("internal", "bound_function", 5),
+                ],
+            ),
+            ("closure", "onData", 24, vec![]),
+            ("object", "Conn", 32, vec![("property", "request", 7)]),
+            ("object", "Request", 2000, vec![]),
+        ]);
+        let t = t.replace("\"locations\":[]", &format!("\"locations\":[{locations}]"));
+        Snapshot::read(t.as_bytes(), t.len() as u64).unwrap()
+    }
+
+    #[test]
+    fn a_bound_function_on_the_path_has_the_site_of_its_target() {
+        // `object_index` is an offset into the node array of seven fields: node 5.
+        let s = bound_scene("35,12,118,4");
+        let h = holders_of(&s);
+        let req = h.holders.iter().find(|x| x.name == "request").unwrap();
+        let names: Vec<(&str, &str)> = req
+            .path
+            .iter()
+            .map(|p| (p.node.as_str(), p.edge.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("", "[0]"),
+                ("(GC roots)", "[0]"),
+                ("(Global handles)", "[2]"),
+                ("NativeParser", "[1]"),
+                ("native_bind", ".bound_this"),
+                ("Conn", ".request"),
+            ]
+        );
+        let sites: Vec<Option<Site>> = req.path.iter().map(|p| p.site).collect();
+        let at = Site {
+            script_id: 12,
+            line: 118,
+            column: 4,
+        };
+        assert_eq!(sites, [None, None, None, None, Some(at), None]);
+        // The site is kept in the summary file's form.
+        let json = serde_json::to_string(&req.path[4]).unwrap();
+        assert!(json.contains("\"script_id\":12"), "{json}");
+        let back: Hop = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.site, Some(at));
+        // A hop without a site has no key (the summary files of before still load).
+        assert!(
+            !serde_json::to_string(&req.path[3])
+                .unwrap()
+                .contains("site")
+        );
+    }
+
+    #[test]
+    fn a_function_without_a_location_row_and_a_node_that_is_no_function_have_no_site() {
+        // No row for the target: nothing is guessed.
+        let s = bound_scene("");
+        let h = holders_of(&s);
+        let req = h.holders.iter().find(|x| x.name == "request").unwrap();
+        assert!(req.path.iter().all(|p| p.site.is_none()), "{:?}", req.path);
+        // A row for a plain object (V8 gives instances the location of their class): not a
+        // function, no site.
+        let s = bound_scene("42,12,3,0");
+        let h = holders_of(&s);
+        let req = h.holders.iter().find(|x| x.name == "request").unwrap();
+        assert!(req.path.iter().all(|p| p.site.is_none()), "{:?}", req.path);
+        // A closure's own row is its site when it has no bound target.
+        let s = bound_scene("28,9,40,2");
+        let h = holders_of(&s);
+        let req = h.holders.iter().find(|x| x.name == "request").unwrap();
+        assert_eq!(
+            req.path[4].site,
+            Some(Site {
+                script_id: 9,
+                line: 40,
+                column: 2
+            })
+        );
+    }
 }

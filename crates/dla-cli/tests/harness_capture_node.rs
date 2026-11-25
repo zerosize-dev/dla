@@ -499,17 +499,21 @@ fn the_agent_takes_its_heap_snapshot_before_it_reads_any_weak_ref_of_the_job() {
     for (file, snap) in registry_snapshots() {
         // The agent reads a WeakRef to every tracked emitter (the sweep, the listener count) in
         // the same job; a snapshot taken after those reads has an edge from the strong roots,
-        // named `weak_refs_keep_during_job`, to every one of them that is alive.
-        let emitters: Vec<usize> = snap
+        // named `weak_refs_keep_during_job`, to V8's list of the objects read, whose elements
+        // are every one of them that is alive.
+        let kept: Vec<usize> = snap
             .job_keep_targets()
             .into_iter()
+            .flat_map(|list| {
+                std::iter::once(list).chain(snap.edges_of(list).map(|e| snap.edge_target(e)))
+            })
             .filter(|&n| snap.class_name(n) == "EventEmitter")
             .collect();
         assert!(
-            emitters.is_empty(),
+            kept.is_empty(),
             "{}: {} EventEmitter objects are kept by the job's WeakRef list: the snapshot was taken after a deref()",
             file.display(),
-            emitters.len()
+            kept.len()
         );
         // The snapshot is of the live emitters: they are there, and the module array holds them.
         let live = (0..snap.node_count())
