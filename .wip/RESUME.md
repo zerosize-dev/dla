@@ -3253,3 +3253,17 @@ unattended run at a time and no builder beside it.
   version 0.9.0-preview.9 (temp-index method, no builder in the tree now: can edit the tree).
 - Open concerns (in message 31 "Not covered"): capture per harness cost; trend output near bound;
   short series leads with capture; measured_capture and residual_capture both listed.
+
+## 04:45 UTC 2026-11-25: CI on 2e0880c failed writer_lines Node test on ubuntu and macOS
+
+- writer_lines.rs a_node_function_whose_writer_sits_in_a_branch_that_never_ran...: `harness gen
+  --next` refused with capture-first in CI (the scene's queue grows between timer drains on a
+  slow runner, past the 64 KiB floor); passed locally. Fixed by me: helper
+  `capture_if_the_gate_asks(H1)` before --next (run status lists residual_capture -> capture run +
+  every printed summary), as a model is told to. The branch is not exercised locally (growth under
+  the floor here); CI exercises it. Did NOT mutate gate.rs locally (G2 builds in the same tree).
+- EVIDENCE for the cost concern: a tiny Node scene crossed the floor on CI by timing alone. Real
+  Node runs will often hit capture-first. Measure in the real Node rerun.
+- Commit b11fe02 = 2e0880c + writer_lines.rs (+ notes): waiter u115/ci-wip-32. When green:
+  commit-snapshot-tree.sh b11fe02ac884a63a14e0cd72cb541aa71feb8812 commit-message-31.txt, push
+  main and dev, then preview.9.

@@ -241,7 +241,7 @@ tiers the order is the `score`, highest first: a sum of named weights (`rule_dla
 an insert at depth 0 or 1, `w_runtime` 20 for an insert in a function that can run many times,
 `w_startup_all` -30 when every writer runs only at start-up, `w_param_flow` 15 for a key from a
 parameter; `growth_unmatched` 25 when an insert has no delete or reset at its depth or above, as when
-only inner entries are deleted; and the rest of the table in `crates/dla-core/src/rank.rs`). Ties keep
+only inner entries are deleted; `w_many` 8 (`w_many_lots` 16) when three or four (five or more) distinct functions add to the holder at run time, `r_reset_only` 15 when every removal is a whole-container reset and something adds at run time, and, for a Go file in a directory whose name ends in `test` and is longer than `test` (`tracetest`, `httptest`), `go_support_dir` -25, a penalty and not a demotion; and the rest of the table in `crates/dla-core/src/rank.rs`). Ties keep
 the tier, then a finding with more than one origin first, then ledger order. A holder the census could
 not read (Rust, C, Kotlin, an older ledger) has no facts and scores only from what is known.
 Siblings (`N-*`) and duplicates are not ranked.

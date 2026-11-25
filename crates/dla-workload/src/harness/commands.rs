@@ -839,10 +839,14 @@ pub const PYTEST_LOOP_FILE: &str = "dla_pytest_loop.py";
 pub struct DriverSpec {
     /// Where the driver source lives inside the scratch copy (relative).
     pub work_rel: String,
-    /// JVM: fully qualified driver class. Go: package directory (relative to cwd).
+    /// JVM: fully qualified driver class. Go: package directory (relative to the module
+    /// directory `go_module_dir`; `.` for the module's own package).
     pub target: String,
     /// Build with the goleak tag (Go).
     pub goleak: bool,
+    /// Go: the module of the driver's package, relative to the scratch copy: where the build
+    /// and run commands start, and what `target` is relative to.
+    pub go_module_dir: Option<String>,
     /// Rust: crate directory, relative to the scratch copy (the workload's cwd).
     pub crate_dir: String,
     /// Rust: crate features the driver build enables (`--features a,b`).
@@ -1142,7 +1146,15 @@ pub fn plan_driver(
             }
         }
         Runtime::Go => {
-            let pkg = format!("./{}", spec.target.trim_start_matches("./"));
+            let pkg = match spec.target.trim_start_matches("./") {
+                "" | "." => ".".to_owned(),
+                t => format!("./{t}"),
+            };
+            let cwd = match spec.go_module_dir.as_deref() {
+                Some("") => ".",
+                Some(m) => m,
+                None => cwd,
+            };
             let tags: Vec<String> = if spec.goleak {
                 vec!["-tags".into(), "dlagoleak".into()]
             } else {

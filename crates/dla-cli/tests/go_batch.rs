@@ -309,6 +309,14 @@ fn a_package_that_cannot_hold_the_driver_is_skipped_and_its_candidates_stay_pend
         "{note}"
     );
     assert!(note.contains("stay pending and are not targeted"), "{note}");
+    // The line that leads the output names the skipped package and why.
+    assert!(
+        out["_attention"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("--next skipped package health (go list fails there"),
+        "{out}"
+    );
     // The skipped candidates are still pending: nothing targeted them.
     let list = command(r.dir.path())
         .args(["ledger", "list", "--all"])

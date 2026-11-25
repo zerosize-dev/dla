@@ -509,6 +509,19 @@ pub fn copy_project_for(
     scope: Option<&Scope>,
     runtime: Option<Runtime>,
 ) -> std::io::Result<CopyReport> {
+    copy_project_with(project, dest, scope, &[], runtime)
+}
+
+/// Like [`copy_project_for`], and the directories in `also` are copied as well when a `scope`
+/// cuts the copy: a Go driver for a package of one module needs the other modules of the
+/// repository that module requires (the work copy's `go.work` takes them from the copy).
+pub fn copy_project_with(
+    project: &Path,
+    dest: &Path,
+    scope: Option<&Scope>,
+    also: &[Scope],
+    runtime: Option<Runtime>,
+) -> std::io::Result<CopyReport> {
     let python = runtime == Some(Runtime::Python);
     let node = runtime == Some(Runtime::Node);
     let mut package_dirs: Vec<PathBuf> = Vec::new();
@@ -543,7 +556,8 @@ pub fn copy_project_for(
         if let Some(scope) = scope {
             let slash = dla_core::paths::to_slash(&rel);
             let at_root = rel.components().count() == 1;
-            if !at_root && !scope.includes(&slash) && !keeps_for_build(scope, &rel, &slash) {
+            let kept = |s: &Scope| s.includes(&slash) || keeps_for_build(s, &rel, &slash);
+            if !at_root && !kept(scope) && !also.iter().any(kept) {
                 report.out_of_scope += 1;
                 if let Some(lang) = Lang::from_path(&rel)
                     && !dla_census::walk::is_test_path(&slash)
@@ -1468,6 +1482,27 @@ mod tests {
         for gone in ["target", "build", "node_modules", "pkg/__pycache__"] {
             assert!(!dest.join(gone).exists(), "{gone}");
         }
+    }
+
+    #[test]
+    fn a_copy_cut_to_one_scope_also_holds_the_extra_scopes() {
+        use dla_core::state::ScopeKind;
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("p");
+        for f in ["svc/a/a.go", "lib/l.go", "other/o.go"] {
+            let path = p.join(f);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "x").unwrap();
+        }
+        let module = |path: &str| Scope {
+            kind: ScopeKind::Module,
+            path: path.into(),
+            excluded: Vec::new(),
+        };
+        let dest = d.path().join("w");
+        copy_project_with(&p, &dest, Some(&module("svc/a")), &[module("lib")], None).unwrap();
+        assert!(dest.join("svc/a/a.go").is_file() && dest.join("lib/l.go").is_file());
+        assert!(!dest.join("other").exists());
     }
 
     #[test]

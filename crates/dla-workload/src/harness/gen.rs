@@ -27,6 +27,7 @@ use dla_core::{
     probe::{FfiBoundary, LibraryProbe},
     runtime::Runtime,
     series::KeyMode,
+    state::{Scope, ScopeKind},
     toolctx::{EvidenceSpec, StageOutcome, ToolCtx},
     workload::{Workload, WorkloadKind, WorkloadReport},
 };
@@ -34,8 +35,8 @@ use regex::Regex;
 use serde_json::{Value, json};
 
 use super::{
-    AGENT, COV, DRIVER, LOGS, OUT, PROBES, WORK, commands, feature_sites, harness_dir, probes,
-    scratch, targets, templates,
+    AGENT, COV, DRIVER, LOGS, OUT, PROBES, WORK, commands, feature_sites, gomod, harness_dir,
+    probes, scratch, targets, templates,
 };
 
 /// Refusal code: a build tool or compiler is not installed.
@@ -1308,9 +1309,17 @@ fn cargo_lib(work: &Path, cwd: &str) -> Option<String> {
     Some(name.replace('-', "_"))
 }
 
+/// The package directory a Go driver is generated in, relative to the project root (`""` for
+/// the root): `--package`, else the directory with most census holders, else the package of
+/// the workload's `go run` command (named relative to the workload's working directory).
 fn go_package_dir_for(ctx: &ToolCtx, w: Option<&Workload>, pkg_opt: Option<&str>) -> String {
     if let Some(p) = pkg_opt {
-        return p.trim_start_matches("./").trim_end_matches('/').to_owned();
+        let p = p.trim_start_matches("./").trim_end_matches('/');
+        return if p == "." {
+            String::new()
+        } else {
+            p.to_owned()
+        };
     }
     let entries = probes::census_entries(ctx, Runtime::Go);
     let mut counts: std::collections::BTreeMap<String, (u32, u32)> = Default::default();
@@ -1325,8 +1334,103 @@ fn go_package_dir_for(ctx: &ToolCtx, w: Option<&Workload>, pkg_opt: Option<&str>
         .into_iter()
         .max_by_key(|(_, c)| *c)
         .map(|(d, _)| d)
-        .or_else(|| w.and_then(|w| commands::go_package_dir(&w.command)))
+        .or_else(|| {
+            w.and_then(|w| commands::go_package_dir(&w.command).map(|d| join_rel(&w.cwd, &d)))
+        })
         .unwrap_or_default()
+}
+
+/// The scopes a cut copy needs for a Go driver: the module of the package and the modules of
+/// the repository it needs, each without the nested modules that are not needed.
+fn go_needed_scopes(ctx: &ToolCtx, w: Option<&Workload>, pkg_opt: Option<&str>) -> Vec<Scope> {
+    let dir = go_package_dir_for(ctx, w, pkg_opt);
+    let Some(module) = gomod::module_dir_of(&ctx.project, &dir) else {
+        return Vec::new();
+    };
+    let needed = gomod::needed_modules(&ctx.project, &module);
+    let all: Vec<String> = gomod::modules_in(&ctx.project)
+        .into_iter()
+        .map(|(d, _)| d)
+        .collect();
+    needed
+        .iter()
+        .map(|d| {
+            let below = |o: &&String| {
+                !o.is_empty() && *o != d && (d.is_empty() || o.starts_with(&format!("{d}/")))
+            };
+            Scope {
+                kind: if d.is_empty() {
+                    ScopeKind::Repository
+                } else {
+                    ScopeKind::Module
+                },
+                path: if d.is_empty() {
+                    ".".to_owned()
+                } else {
+                    d.clone()
+                },
+                excluded: all
+                    .iter()
+                    .filter(below)
+                    .filter(|o| !needed.contains(o))
+                    .cloned()
+                    .collect(),
+            }
+        })
+        .collect()
+}
+
+/// What a Go package directory holds, as far as a driver is concerned.
+enum GoDir {
+    /// A non-test Go file that is not generated: the package clause's name.
+    Package(String),
+    /// No non-test Go file at all.
+    Empty,
+    /// Non-test Go files, every one of them generated (`Code generated ... DO NOT EDIT`).
+    OnlyGenerated(usize),
+}
+
+/// Reads `abs` for [`GoDir`].
+fn go_dir_state(abs: &Path) -> GoDir {
+    let mut names: Vec<PathBuf> = fs::read_dir(abs)
+        .ok()
+        .into_iter()
+        .flat_map(|rd| rd.flatten())
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.ends_with(".go") && !n.ends_with("_test.go") && e.path().is_file()
+        })
+        .map(|e| e.path())
+        .collect();
+    names.sort();
+    let mut generated = 0;
+    for f in &names {
+        let Ok(text) = fs::read_to_string(f) else {
+            continue;
+        };
+        let head: String = text.lines().take(40).collect::<Vec<_>>().join("\n");
+        if dla_core::vendored::generated_marker(&head).is_some() {
+            generated += 1;
+        } else if let Some(c) = GO_PACKAGE_LINE.captures(&text) {
+            return GoDir::Package(c[1].to_owned());
+        }
+    }
+    if generated > 0 {
+        GoDir::OnlyGenerated(generated)
+    } else {
+        GoDir::Empty
+    }
+}
+
+/// The reason a Go driver cannot be generated in `dir`, as the refusal or the skip note says it.
+fn go_dir_problem(state: &GoDir) -> Option<String> {
+    match state {
+        GoDir::Package(_) => None,
+        GoDir::Empty => Some("the directory has no non-test Go file".to_owned()),
+        GoDir::OnlyGenerated(n) => Some(format!(
+            "its only non-test Go files ({n}) are generated (`Code generated ... DO NOT EDIT`): the analysis leaves generated files out unless `dla run init --include` brings them back, and a driver is not generated into generated code"
+        )),
+    }
 }
 
 fn pytest_memray_available() -> bool {
@@ -1584,56 +1688,89 @@ fn build_driver(d: &DriverCtx<'_>) -> Result<DriverBuild, Refusal> {
         }
         Runtime::Go => {
             let dir = go_package_dir_for(d.ctx, d.workload, d.opts.package.as_deref());
-            let abs_dir = d.work.join(join_rel(d.cwd, &dir));
-            let package = fs::read_dir(&abs_dir)
-                .ok()
-                .into_iter()
-                .flat_map(|rd| rd.flatten())
-                .filter(|e| {
-                    let n = e.file_name().to_string_lossy().into_owned();
-                    n.ends_with(".go") && !n.ends_with("_test.go")
-                })
-                .find_map(|e| {
-                    fs::read_to_string(e.path())
-                        .ok()
-                        .and_then(|t| GO_PACKAGE_LINE.captures(&t).map(|c| c[1].to_owned()))
-                })
-                .ok_or_else(|| {
-                    refuse(
+            let abs_dir = d.work.join(&dir);
+            let package = match go_dir_state(&abs_dir) {
+                GoDir::Package(p) => p,
+                GoDir::Empty => {
+                    return Err(refuse(
                         codes::INVALID_VALUE,
-                        format!("{dir:?} holds no Go package to drive"),
+                        format!(
+                            "{:?} holds no Go package to drive",
+                            dla_core::queue::package_label(&dir)
+                        ),
                         "a package directory with .go files",
                         "dla harness gen --lang go --driver --package <dir>",
-                    )
-                })?;
+                    ));
+                }
+                state @ GoDir::OnlyGenerated(_) => {
+                    return Err(refuse(
+                        codes::INVALID_VALUE,
+                        format!(
+                            "{:?} holds no Go package to drive: {}",
+                            dla_core::queue::package_label(&dir),
+                            go_dir_problem(&state).unwrap_or_default()
+                        ),
+                        "a package directory with a hand-written non-test .go file",
+                        "dla harness gen --lang go --driver --package <dir>   (another package), or --next, which goes on to the next package of the queue",
+                    ));
+                }
+            };
+            // The driver is built and run from the module that holds the package, whatever
+            // module the workload is in; the package is named relative to that module.
+            let module = gomod::module_dir_of(d.work, &dir);
+            let module_dir = module.clone().unwrap_or_else(|| d.cwd.to_owned());
+            let in_module = match module_dir.as_str() {
+                "" | "." => dir.clone(),
+                m => dir
+                    .strip_prefix(m)
+                    .map(|r| r.trim_start_matches('/').to_owned())
+                    .unwrap_or_else(|| dir.clone()),
+            };
             out.block_notes.push(format!(
                 "The driver is in package {package} (directory {}): the hooks can read its unexported names and package variables, and no other package's.",
                 dla_core::queue::package_label(&dir)
             ));
+            if module.as_deref().is_some_and(|m| !m.is_empty()) {
+                out.block_notes.push(format!(
+                    "The package is in the Go module at {}: the driver is built and run from there.",
+                    module_dir
+                ));
+            }
             vars.push(("PACKAGE".into(), package));
             let text = fill_with(templates::GO_DRIVER, &vars)?;
             write(&d.driver.join(templates::GO_DRIVER_FILE), &text)?;
             out.hooks = templates::hooks(&text);
             out.edit = driver_rel(templates::GO_DRIVER_FILE);
-            let dest_dir = join_rel(d.cwd, &dir);
             out.sync.push((
                 d.driver.join(templates::GO_DRIVER_FILE),
-                join_rel(&dest_dir, templates::GO_DRIVER_FILE),
+                join_rel(&dir, templates::GO_DRIVER_FILE),
             ));
-            out.spec.target = dir.clone();
-            out.go_dir = Some(dir);
+            out.spec.target = if in_module.is_empty() {
+                ".".to_owned()
+            } else {
+                in_module
+            };
+            out.spec.go_module_dir = Some(module_dir.clone());
+            out.go_dir = Some(dir.clone());
+            // Workspace mode refuses `-mod=mod`.
+            let flags: &[(&str, &str)] = if d.work.join("go.work").is_file() {
+                &[("GOPROXY", "off")]
+            } else {
+                &[("GOFLAGS", "-mod=mod"), ("GOPROXY", "off")]
+            };
             let goleak = tool_exit_ok(
                 "go",
                 &["list", "-m", "go.uber.org/goleak"],
-                &d.work.join(if d.cwd == "." { "" } else { d.cwd }),
-                &[("GOFLAGS", "-mod=mod"), ("GOPROXY", "off")],
+                &d.work
+                    .join(if module_dir == "." { "" } else { &module_dir }),
+                flags,
             );
             if goleak {
                 let t = fill_with(templates::GO_GOLEAK, &vars)?;
                 write(&d.driver.join(templates::GO_GOLEAK_FILE), &t)?;
                 out.sync.push((
                     d.driver.join(templates::GO_GOLEAK_FILE),
-                    join_rel(&dest_dir, templates::GO_GOLEAK_FILE),
+                    join_rel(&dir, templates::GO_GOLEAK_FILE),
                 ));
                 out.spec.goleak = true;
                 out.tools.push("goleak".to_owned());
@@ -1794,6 +1931,8 @@ struct FocusFacts {
     why: Option<String>,
     /// A second look: the targets read `executed` flat in the earlier harness.
     second: bool,
+    /// Go `--next`: the packages the batch went past because they cannot hold a driver, and why.
+    skipped: Vec<String>,
 }
 
 /// The findings a harness is generated to reach: the `--probe` findings, then (with
@@ -1868,6 +2007,7 @@ fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, 
             None => Default::default(),
         };
         go_package = chosen.package.clone();
+        focus.skipped.clone_from(&skipped);
         if chosen.focus
             && let Some(q) = &queue
         {
@@ -2108,14 +2248,8 @@ fn test_loop_options(
 /// non-test Go file that builds on this platform, and `go list` must read it.
 fn go_package_problem(project: &Path, dir: &str) -> Option<String> {
     let abs = project.join(dir);
-    let has_file = fs::read_dir(&abs).ok().is_some_and(|rd| {
-        rd.flatten().any(|e| {
-            let n = e.file_name().to_string_lossy().into_owned();
-            n.ends_with(".go") && !n.ends_with("_test.go")
-        })
-    });
-    if !has_file {
-        return Some("the directory has no non-test Go file".to_owned());
+    if let Some(why) = go_dir_problem(&go_dir_state(&abs)) {
+        return Some(why);
     }
     let out = Command::new("go")
         .args(["list", "-f", "{{len .GoFiles}}", "."])
@@ -2564,8 +2698,16 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
     }
 
     let scope = ctx.scope()?;
-    let copied = scratch::copy_project_for(&ctx.project, &work, scope.as_ref(), Some(rt))
-        .map_err(|e| io_refusal(&work, e))?;
+    // A Go driver is built in the module of its package: when the run's scope cuts the copy,
+    // that module and the modules of the repository it needs are copied too.
+    let go_also = if rt == Runtime::Go && opts.driver && scope.is_some() {
+        go_needed_scopes(ctx, workload.as_ref(), opts.package.as_deref())
+    } else {
+        Vec::new()
+    };
+    let copied =
+        scratch::copy_project_with(&ctx.project, &work, scope.as_ref(), &go_also, Some(rt))
+            .map_err(|e| io_refusal(&work, e))?;
     for (r, n) in &copied.out_of_scope_sources {
         dla_census::record_out_of_scope(ctx, *r, *n)?;
     }
@@ -2573,6 +2715,33 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
 
     let det = detectors(ctx, rt);
     let mut gaps: Vec<String> = copied.gaps.clone();
+    if rt == Runtime::Go {
+        match gomod::write_go_work(&work).map_err(|e| io_refusal(&work.join("go.work"), e))? {
+            gomod::GoWork::Written { dirs, go, versions } => {
+                let mut list = dirs
+                    .iter()
+                    .take(6)
+                    .map(|d| if d.is_empty() { "." } else { d.as_str() })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if dirs.len() > 6 {
+                    list.push_str(", ...");
+                }
+                gaps.push(format!(
+                    "scratch copy: the project has {} Go modules ({list}) and no go.work, so one was written at the root of the copy: the modules of the repository resolve from the copy, not as released versions; the harness's go commands run in the module of the driver's package",
+                    dirs.len()
+                ));
+                if !versions.is_empty() {
+                    gaps.push(format!(
+                        "scratch copy: the modules name different Go versions ({}); the go.work names the highest, {}, because the go command refuses a workspace older than one of its modules",
+                        versions.join(", "),
+                        go.unwrap_or_default()
+                    ));
+                }
+            }
+            gomod::GoWork::Own | gomod::GoWork::NotNeeded => {}
+        }
+    }
     if let Some(w) = &workload
         && let Some(reason) = &w.not_exercisable
     {
@@ -3083,6 +3252,24 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         }
         if let Some(n) = &next_note {
             m.insert("next_note".into(), json!(n));
+        }
+        if !focus.skipped.is_empty() {
+            // The packages `--next` went past lead the output, like any other attention line.
+            let mut lines: Vec<Value> = m
+                .get("_attention")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            // The short form: the package and the start of the reason (`next_note` has the rest).
+            lines.extend(focus.skipped.iter().map(|t| {
+                let head = t.split_once("): its ").map_or(t.as_str(), |(h, _)| h);
+                let (pkg, why) = head
+                    .split_once(" cannot hold the driver (")
+                    .unwrap_or((head, ""));
+                let why = why.split_once(": ").map_or(why, |(w, _)| w);
+                json!(format!("--next skipped {pkg} ({why})"))
+            }));
+            m.insert("_attention".into(), json!(lines));
         }
         if let Some(why) = &focus.why {
             m.insert("focus".into(), json!(why));
