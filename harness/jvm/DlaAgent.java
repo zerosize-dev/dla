@@ -64,16 +64,9 @@ public final class DlaAgent {
         try {
             Module base = Object.class.getModule();
             Module self = DlaAgent.class.getModule();
-            // The same call exports jdk.internal.misc to the agent: the instance probes ask it whether
-            // a class is initialised before they read its static fields (reading one would run the
-            // class's initialiser). Without the export they only read the driver's own fields.
-            boolean open = base.isOpen("java.lang", self);
-            boolean exported = base.isExported("jdk.internal.misc", self);
-            if (!open || !exported) {
-                inst.redefineModule(base, java.util.Set.of(),
-                    exported ? java.util.Map.of() : java.util.Map.of("jdk.internal.misc", java.util.Set.of(self)),
-                    open ? java.util.Map.of() : java.util.Map.of("java.lang", java.util.Set.of(self)),
-                    java.util.Set.of(), java.util.Map.of());
+            if (!base.isOpen("java.lang", self)) {
+                inst.redefineModule(base, java.util.Set.of(), java.util.Map.of(),
+                    java.util.Map.of("java.lang", java.util.Set.of(self)), java.util.Set.of(), java.util.Map.of());
             }
         } catch (Throwable ignored) {
             // the ThreadLocal probe abstains when the maps cannot be read

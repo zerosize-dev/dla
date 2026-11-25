@@ -595,29 +595,6 @@
           ]
         },
         {
-          "description": "One instance field of the live instances of a JVM class (a subclass counts). The agent\nfinds the instances reachable from the static fields of the project's classes, the\nthread-local values of the live threads and the driver's fields, and records the\nnumber of instances, the sum of the field's sizes and the objects reachable from it.",
-          "type": "object",
-          "properties": {
-            "class": {
-              "description": "Fully qualified class name.",
-              "type": "string"
-            },
-            "field": {
-              "description": "Instance field name.",
-              "type": "string"
-            },
-            "kind": {
-              "type": "string",
-              "const": "jvm-instance"
-            }
-          },
-          "required": [
-            "kind",
-            "class",
-            "field"
-          ]
-        },
-        {
           "description": "Every module-level name of a Python module.",
           "type": "object",
           "properties": {

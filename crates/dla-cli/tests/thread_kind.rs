@@ -229,39 +229,23 @@ fn a_list_kept_per_thread_waits_for_a_second_look_that_varies_the_threads() {
     let run = ok(&s.project, &["harness", "run", "H1", "--mode", "fresh"]);
     let series = run["summary"]["series"][0].as_str().unwrap().to_owned();
     let trend = ok(&s.project, &["trend", &series]);
-    // Each list is now read on its instance (a `jvm-instance` probe): the one the thread-local
-    // clears adds an entry at every use, even on one thread, and the other stays at one entry.
-    for (owner, verdict) in [
-        ("threads.Churn.live", "grew"),
-        ("threads.Steady.live", "constant"),
-    ] {
-        let id = s.row(owner)["id"].as_str().unwrap().to_owned();
-        let t = trend["targets"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|t| t["finding"] == id.as_str())
-            .unwrap_or_else(|| panic!("no target of {owner}: {trend}"));
-        assert_eq!(t["verdict"], verdict, "{owner}: {trend}");
+    for t in trend["targets"].as_array().unwrap() {
+        assert_eq!(t["verdict"], "executed", "{trend}");
     }
 
-    // The list the thread-local clears grew on the one thread and is settled by its growth. The
-    // other read flat, which settles nothing: it waits for its second look, with the reason, while
-    // the queue is open, and `close-rest` leaves it.
-    let churn = s.row("threads.Churn.live");
-    assert_eq!(churn["queue"], "settled", "{churn}");
-    assert_eq!(churn["settled_by"], "growth", "{churn}");
-    let row = s.row("threads.Steady.live");
-    assert_eq!(row["queue"], "pending", "{row}");
-    let why = row["second_look"]
-        .as_str()
-        .unwrap_or_else(|| panic!("no second look: {row}"));
-    assert!(
-        why.contains("kept per thread; the units came from one thread"),
-        "{row}"
-    );
+    // Neither list is settled: each waits for its second look, with the reason, while the
+    // queue is open and `close-rest` leaves them.
+    for owner in ["threads.Churn.live", "threads.Steady.live"] {
+        let row = s.row(owner);
+        assert_eq!(row["queue"], "pending", "{row}");
+        let why = row["second_look"].as_str().unwrap();
+        assert!(
+            why.contains("kept per thread; the units came from one thread"),
+            "{row}"
+        );
+    }
     let st = ok(&s.project, &["run", "status"]);
-    assert_eq!(st["queue"]["jvm"]["pending"], 1, "{st}");
+    assert_eq!(st["queue"]["jvm"]["pending"], 2, "{st}");
     assert_eq!(st["queue"]["jvm"]["second_look"], true, "{st}");
     let rest = ok(&s.project, &["ledger", "close-rest"]);
     let left: Vec<&str> = rest["left"]
@@ -270,7 +254,6 @@ fn a_list_kept_per_thread_waits_for_a_second_look_that_varies_the_threads() {
         .iter()
         .map(|l| l["id"].as_str().unwrap())
         .collect();
-    // The grown one is left for the alloc-test, the waiting one for its second look.
     assert_eq!(left, ["F1", "F3"], "{rest}");
     assert_eq!(s.row("threads.Churn.live")["state"], "candidate");
     assert_eq!(s.row("threads.Steady.live")["state"], "candidate");
@@ -355,12 +338,10 @@ fn a_list_kept_per_thread_waits_for_a_second_look_that_varies_the_threads() {
     let (churn, steady) = sizes.split_once(' ').unwrap();
     assert!(churn.parse::<u32>().unwrap() >= 100, "{sizes}");
     assert_eq!(steady, "4", "{sizes}");
-    // The second look has run: the one that waited for it is settled for good, the grown one
-    // stays settled by its growth.
-    let row = s.row("threads.Steady.live");
-    assert_eq!(row["queue"], "settled", "{row}");
-    assert_eq!(row["second_look"], "done in H2", "{row}");
-    let row = s.row("threads.Churn.live");
-    assert_eq!(row["queue"], "settled", "{row}");
-    assert_eq!(row["settled_by"], "growth", "{row}");
+    // The second look has run: both are settled for good.
+    for owner in ["threads.Churn.live", "threads.Steady.live"] {
+        let row = s.row(owner);
+        assert_eq!(row["queue"], "settled", "{row}");
+        assert_eq!(row["second_look"], "done in H2", "{row}");
+    }
 }

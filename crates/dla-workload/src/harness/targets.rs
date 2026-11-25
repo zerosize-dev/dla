@@ -506,9 +506,6 @@ fn probe_text(project: &Path, a: &Asked, probes: &[ProbeSpec]) -> Option<String>
         ProbeTarget::NodeBinding { file, name } => format!("{name} in {file}"),
         ProbeTarget::JvmStatic { class, field } => format!("static field {class}.{field}"),
         ProbeTarget::JvmClass { class } => format!("the static fields of {class}"),
-        ProbeTarget::JvmInstance { class, field } => format!(
-            "instance field {class}.{field}, read on the live instances of {class} that a walk finds from the static fields of the project's classes, the thread-local values and this class's fields: keep the object that owns it in a static field of this class"
-        ),
         ProbeTarget::GoVar { package_dir, name } => {
             format!("package variable {package_dir}.{name}")
         }

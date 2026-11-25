@@ -522,14 +522,6 @@
             "null"
           ]
         },
-        "instances": {
-          "description": "Live instances found (JVM instance-field probes only): `size`, `reachable` and `bytes`\nare summed over them.",
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
         "name": {
           "description": "Short name.",
           "type": [
