@@ -732,8 +732,12 @@ impl<'a> Project<'a> {
                 if format!("/{}", fc.rel).contains("/internal/") {
                     return false;
                 }
-                // An exported method of an unexported type is reachable through the
-                // interface the type implements, so the type's own name does not matter.
+                if f.recv_type
+                    .as_deref()
+                    .is_some_and(|t| !t.starts_with(char::is_uppercase))
+                {
+                    return false;
+                }
                 !f.lit && n.starts_with(char::is_uppercase)
             }
             Fam::Python => {
