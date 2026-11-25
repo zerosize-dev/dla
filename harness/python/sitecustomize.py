@@ -1538,12 +1538,20 @@ _HEAP_SITES_CAP = 12  # sites looked at
 _HEAP_KEEP_PER_SITE = 40  # objects kept per site (a reservoir over the whole pass)
 _HEAP_DEPTH = 40  # steps from a kept object to its root, at most
 _HEAP_SECS = 60.0  # time bound of the whole capture (DLA_HEAP_SECS changes it)
+_HEAP_SCAN_SHARE = 0.6  # share of the time bound the scan may use: the rest is for the walks, which always happen
 _HEAP_WALK_NODES = 300_000  # objects one search may visit, so one object cannot use the time of all
 _HEAP_LINK_SCAN = 200_000  # entries looked at to name how a container holds an object
 _HEAP_TEXT_CAP = 80  # characters of any written text
 _heap_base = {"counts": None}  # site -> blocks at the first dump point (no project object)
 _HEAP_ATOMS = (str, int, float, bytes, bool, complex, type(None), range, bytearray)
 _HEAP_GENS = (types.GeneratorType, types.CoroutineType, types.AsyncGeneratorType)
+# Types whose objects hold other objects: the scan reads them before the rest, so that a scan the time
+# bound stops has read the holders first (the leaves hold little).
+_HEAP_CONTAINERS = frozenset((dict, list, tuple, set, frozenset, type, collections.deque, types.FrameType))
+_HEAP_FIND_SHARE = 0.5  # share of the scan's time the first look at every object may use
+_HEAP_NEAR_STEPS = 8  # holders of holders read first: how many steps from the objects found
+_HEAP_NEAR_LEVEL = 5000  # objects whose holders one step looks for, at most
+_HEAP_SITE_CACHE_CAP = 20_000  # distinct tracebacks whose site is remembered during one scan
 
 
 def _heap_secs():
@@ -1737,15 +1745,74 @@ def _heap_link(parent, child, owner, raw, names=False):
     return None
 
 
-def _heap_scan(objs, extra, targets, deadline, in_agent):
-    """The one pass over `objs`: finds the objects of the `targets` sites (reservoir per site)
-    and builds the referrer relation. `extra` are frames running on threads: the interpreter
-    makes their objects only when asked, so they are not in `objs`, and their locals have no
-    other holder. Returns a dict of what it built; `timed_out` says the bound stopped it."""
-    import random
+def _raw_site(frames):
+    """The site of a block from the raw frames `tracemalloc` keeps for it (innermost first, each
+    `(file name, line)`): the same rule as `_block_site`, without a `Traceback` object."""
+    files = _blocks["files"]
+    for frame in frames:
+        name = frame[0]
+        rel = files.get(name, 0)
+        if rel == 0:
+            rel = _block_file(name)
+            if len(files) < 20000:
+                files[name] = rel
+        if rel is not None:
+            return f"{rel}:{frame[1]}"
+    return None
+
+
+def _site_finder():
+    """`site_of(obj)`: the site of the block of `obj` (as `_block_site` says it), or None. The
+    sites of the tracebacks already seen are remembered: a heap has few distinct allocation
+    stacks and many objects, and looking a stack up in the project's files frame by frame was
+    the larger part of the scan."""
     import tracemalloc
 
-    get_tb = tracemalloc.get_object_traceback
+    raw = getattr(tracemalloc, "_get_object_traceback", None)
+    try:
+        # The raw frames are `((file name, line), ...)`, innermost first, in the interpreters this
+        # was written for; anything else is read through the public function.
+        probe = raw([0]) if raw is not None else None
+        if not (isinstance(probe, tuple) and probe and isinstance(probe[0], tuple) and isinstance(probe[0][0], str)):
+            raw = None
+    except BaseException:
+        raw = None
+    if raw is None:
+        get_tb = tracemalloc.get_object_traceback
+
+        def slow(obj):
+            tb = get_tb(obj)
+            return None if tb is None else _block_site(tb)
+
+        return slow
+    seen = {}
+
+    def site_of(obj):
+        frames = raw(obj)
+        if frames is None:
+            return None
+        site = seen.get(frames, 0)
+        if site == 0:
+            site = _raw_site(frames)
+            if len(seen) < _HEAP_SITE_CACHE_CAP:
+                seen[frames] = site
+        return site
+
+    return site_of
+
+
+def _heap_scan(objs, extra, targets, deadline, in_agent, first_ids=()):
+    """Finds the objects of the `targets` sites (reservoir per site) and builds the referrer
+    relation. A first look at every tracked object finds the objects the capture is about (at most
+    half of the time bound of the scan); the holders of what it found (`_heap_ancestors`) and the
+    objects named by `first_ids` (the module dictionaries) are then read first, then the other
+    containers, then the rest, so that a pass the time bound stops has read the holders. `extra`
+    are frames running on threads: the interpreter makes their objects only when asked, so they
+    are not in `objs`, and their locals have no other holder. Returns a dict of what it built;
+    `timed_out` says the bound stopped the pass, `found_all` that the first look stopped early."""
+    import random
+
+    site_of = _site_finder()
     is_tracked = gc.is_tracked
     referents = gc.get_referents
     atoms = _HEAP_ATOMS
@@ -1758,6 +1825,7 @@ def _heap_scan(objs, extra, targets, deadline, in_agent):
     class_dicts = {}
     scanned = 0
     timed_out = False
+    found_all = True
 
     def keep(site, obj, untracked):
         rec = found[site]
@@ -1785,12 +1853,10 @@ def _heap_scan(objs, extra, targets, deadline, in_agent):
         stack = [start]
         while stack:
             obj = stack.pop()
-            tb = get_tb(obj)
-            if tb is not None:
-                site = _block_site(tb)
-                if site is not None and site in found and id(obj) not in hits:
-                    hits.add(id(obj))
-                    keep(site, obj, 1)
+            site = site_of(obj)
+            if site is not None and site in found and id(obj) not in hits:
+                hits.add(id(obj))
+                keep(site, obj, 1)
             tp = type(obj)
             if tp in _HEAP_ATOMS:
                 continue
@@ -1804,13 +1870,40 @@ def _heap_scan(objs, extra, targets, deadline, in_agent):
                 if not is_tracked(ref):
                     stack.append(ref)
 
-    def sources():
-        for item in objs:
-            yield item, True
+    def sources(near):
         for item in extra:
             yield item, False
+        holders, rest = [], []
+        for item in objs:
+            if id(item) in near:
+                yield item, True
+            elif type(item) in _HEAP_CONTAINERS:
+                holders.append(item)
+            else:
+                rest.append(item)
+        for item in holders:
+            yield item, True
+        for item in rest:
+            yield item, True
 
-    for obj, counted in sources():
+    # 1. Where the objects were made: one cheap look at every tracked object, before anything else, so
+    # that the objects the capture is about are found whatever the rest of the pass can still do.
+    began = time.monotonic()
+    find_deadline = began + (deadline - began) * _HEAP_FIND_SHARE
+    looked = 0
+    for obj in objs:
+        looked += 1
+        if not looked & 255 and time.monotonic() > find_deadline:
+            found_all = False
+            break
+        site = site_of(obj)
+        if site is not None and site in found:
+            keep(site, obj, 0)
+    # 2. The holders of what was found, nearest first, are read first in the pass below.
+    near = _heap_ancestors([o for rec in found.values() for o in rec[3]], objs, extra, found, began + (deadline - began) * 0.75)
+    near.update(first_ids)
+
+    for obj, counted in sources(near):
         scanned += 1
         if not scanned & 127 and time.monotonic() > deadline:
             timed_out = True
@@ -1818,12 +1911,6 @@ def _heap_scan(objs, extra, targets, deadline, in_agent):
         tp = type(obj)
         if tp is types.FrameType and in_agent(obj):
             continue
-        if counted:
-            tb = get_tb(obj)
-            if tb is not None:
-                site = _block_site(tb)
-                if site is not None and site in found:
-                    keep(site, obj, 0)
         refs = referents(obj)
         if not counted:
             # The collector visits the locals of a frame only after it has finished.
@@ -1852,12 +1939,10 @@ def _heap_scan(objs, extra, targets, deadline, in_agent):
                 else:
                     other.append(obj)
             if type(ref) in atoms:
-                tb = get_tb(ref)
-                if tb is not None:
-                    site = _block_site(tb)
-                    if site is not None and site in found and key not in hits:
-                        hits.add(key)
-                        keep(site, ref, 1)
+                site = site_of(ref)
+                if site is not None and site in found and key not in hits:
+                    hits.add(key)
+                    keep(site, ref, 1)
             elif not is_tracked(ref):
                 untracked_walk(ref)
         if issubclass(tp, type):
@@ -1876,7 +1961,41 @@ def _heap_scan(objs, extra, targets, deadline, in_agent):
         "class_dicts": class_dicts,
         "scanned": scanned,
         "timed_out": timed_out,
+        "found_all": found_all,
     }
+
+
+def _heap_ancestors(seed, objs, extra, found, stop):
+    """The ids of the objects that hold `seed`, of those that hold them and so on, a few steps and
+    never many (`gc.get_referrers` looks at the whole heap once per step): where the holders of
+    the objects the capture is about are, so that they are read first. The agent's own lists are
+    left out. `stop` is a time on the monotonic clock after which no further step is taken."""
+    mine = {id(objs), id(extra), id(seed), id(found)}
+    mine.update(id(rec[3]) for rec in found.values())
+    seen = {id(o) for o in seed}
+    out = set()
+    level = list(seed)
+    mine.add(id(level))
+    for _ in range(_HEAP_NEAR_STEPS):
+        if not level or time.monotonic() > stop:
+            break
+        mine.add(id(level))
+        try:
+            holders = gc.get_referrers(*level[:_HEAP_NEAR_LEVEL])
+        except BaseException:
+            break
+        level = []
+        mine.add(id(level))
+        mine.add(id(holders))
+        for h in holders:
+            key = id(h)
+            if key in seen or key in mine or type(h) is types.FrameType:
+                continue
+            seen.add(key)
+            out.add(key)
+            level.append(h)
+        holders = None
+    return out
 
 
 def _heap_roots(in_agent):
@@ -2200,14 +2319,20 @@ def _heap_signature(rootd, steps):
     return (tuple(parts), tuple(sorted(rootd.items())) if rootd["kind"] != "frame" else ("frame", rootd.get("function")))
 
 
-def _heap_groups(kept, relation, roots, own, deadline, raw, tally):
-    """The chains of one site grouped by signature, largest first. `tally` counts what was not done."""
+def _heap_groups(kept, relation, roots, own, deadline, raw, tally, partial=False):
+    """The chains of one site grouped by signature, largest first. `tally` counts what was not done.
+    With `partial` the relation was read in part only (the time bound stopped the scan): an object
+    that no holder was read for is not known to have none, so such a search is counted in
+    `tally["partial"]` and writes no chain."""
     groups = {}
     for obj in kept:
         if time.monotonic() > deadline:
             tally["timed_out"] += 1
             continue
         status, path, root, joint = _heap_walk(obj, relation, roots, own, deadline)
+        if partial and (status == "none" or (status == "ok" and root[0] == "no-referrer")):
+            tally["partial"] += 1
+            continue
         if status == "ok":
             rootd, steps = _heap_chain(_heap_items(path, joint, relation[3]), root, raw)
             path = None
@@ -2276,7 +2401,10 @@ def _heap_build(objs, base, counts, limitations):
     """The document of the file. Everything built here is local and gone when it returns."""
     import tracemalloc
 
-    deadline = time.monotonic() + _heap_secs()
+    started = time.monotonic()
+    secs = _heap_secs()
+    deadline = started + secs
+    scan_deadline = started + secs * _HEAP_SCAN_SHARE
     raw = _heap_raw_values()
     notes = []
     picked = _heap_pick_sites(base, counts)
@@ -2301,6 +2429,7 @@ def _heap_build(objs, base, counts, limitations):
     if not raw:
         notes.append("values are not written: a dict key is shown as its type (DLA_RAW_VALUES=1 allows raw values)")
     sites = []
+    walk = {"kept": 0, "walked": 0, "not_walked": 0, "scanned": 0, "of": len(objs), "bound_secs": secs}
     if picked:
         was_on = gc.isenabled()
         gc.disable()
@@ -2318,16 +2447,23 @@ def _heap_build(objs, base, counts, limitations):
         try:
             targets = {row[0] for row in picked}
             roots = _heap_roots(in_agent)
-            scan = _heap_scan(objs, list(roots[1].values()), targets, deadline, in_agent)
+            scan = _heap_scan(objs, list(roots[1].values()), targets, scan_deadline, in_agent, set(roots[0]))
+            partial = scan["timed_out"]
             known = {}
             relation = (scan["first"], scan["more"], scan["class_dicts"], known)
             own = {id(scan), id(scan["first"]), id(scan["more"]), id(scan["found"]), id(objs), id(roots), id(relation), id(notes), id(known)}
-            tally = {"timed_out": 0, "nodes": 0, "depth": 0, "none": 0}
-            if scan["timed_out"]:
+            tally = {"timed_out": 0, "nodes": 0, "depth": 0, "none": 0, "partial": 0}
+            walk["scanned"] = scan["scanned"]
+            walk["of"] = len(objs)
+            if not scan["found_all"]:
                 notes.append(
-                    f"the time bound ({_heap_secs():g} s) stopped the scan after {scan['scanned']} of {len(objs)} tracked objects: the counts are partial and no chain was walked"
+                    f"the time bound ({secs:g} s) stopped the first look at the tracked objects: the objects found for the lines that grew are the ones it had reached"
                 )
-            for site, before, after in picked:
+            if partial:
+                notes.append(
+                    f"the time bound ({secs:g} s) stopped the scan after {scan['scanned']} of {len(objs)} tracked objects (its share is {_HEAP_SCAN_SHARE:.0%} of the bound): the counts are partial and the chains were searched in the part of the heap that was read"
+                )
+            for at, (site, before, after) in enumerate(picked):
                 tracked, untracked, seen, kept = scan["found"][site]
                 entry = {
                     "site": site,
@@ -2341,9 +2477,23 @@ def _heap_build(objs, base, counts, limitations):
                     entry["note"] = (
                         "no object was found for this site: the blocks do not belong to an object any Python container refers to, so native code holds them or a reference was lost there"
                     )
-                entry["chains"] = [] if scan["timed_out"] else _heap_groups(kept, relation, roots, own, deadline, raw, tally)
+                # The lines are walked in the order of their growth, each with an equal share of the
+                # time that is left, so that the first objects of every line are walked.
+                now = time.monotonic()
+                share = now + max(0.0, deadline - now) / (len(picked) - at)
+                mine = {"timed_out": 0, "nodes": 0, "depth": 0, "none": 0, "partial": 0}
+                entry["chains"] = _heap_groups(kept, relation, roots, own, min(deadline, share), raw, mine, partial)
+                not_walked = mine["timed_out"] + mine["nodes"] + mine["partial"]
+                entry["walked"] = len(kept) - not_walked
+                entry["not_walked"] = not_walked
+                walk["kept"] += len(kept)
+                walk["walked"] += entry["walked"]
+                walk["not_walked"] += not_walked
+                for key, n in mine.items():
+                    tally[key] += n
                 sites.append(entry)
             for key, text in (
+                ("partial", "{} kept objects were not walked: the scan stopped before it had read what holds them"),
                 ("timed_out", "the time bound ({}s) stopped the walk: {} kept objects have no chain"),
                 ("nodes", "a search stopped at {} visited objects: {} kept objects have no chain"),
                 ("depth", "no root within {} steps for {} kept objects (written with root kind depth-limit)"),
@@ -2351,7 +2501,7 @@ def _heap_build(objs, base, counts, limitations):
             ):
                 if tally[key]:
                     if key == "timed_out":
-                        notes.append(text.format(f"{_heap_secs():g} ", tally[key]))
+                        notes.append(text.format(f"{secs:g} ", tally[key]))
                     elif key == "nodes":
                         notes.append(text.format(_HEAP_WALK_NODES, tally[key]))
                     elif key == "depth":
@@ -2367,6 +2517,7 @@ def _heap_build(objs, base, counts, limitations):
         "dla_pyretain": 1,
         "frames": tracemalloc.get_traceback_limit(),
         "sites": sites,
+        "walk": walk,
         "limitations": notes,
     }
 

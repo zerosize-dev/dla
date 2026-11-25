@@ -24,7 +24,7 @@ use crate::{
 pub enum HarnessCmd {
     /// Write a loop harness for a workload into the run directory (runs nothing).
     Gen(GenArgs),
-    /// Build and run a harness, writing one series per key mode.
+    /// Build and run a harness, writing one series per key mode. A test loop (pytest, JUnit) ends by itself within DLA_COMMAND_SECS (default 420 s), capture included: do not wrap it in `timeout`. After a cut command, `dla run stop` stops what it left (the next run of the harness does too).
     Run(RunArgs),
 }
 

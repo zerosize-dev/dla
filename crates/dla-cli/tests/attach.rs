@@ -983,7 +983,7 @@ esac"#,
     assert_eq!(code, 2, "{v}");
     let msg = v["error"]["message"].as_str().unwrap();
     assert!(
-        msg.contains("JFR.stop") && msg.contains("dla run abort"),
+        msg.contains("JFR.stop") && msg.contains("dla run stop"),
         "{msg}"
     );
     let st = p.state();
@@ -1000,6 +1000,16 @@ esac"#,
             .any(|c| c.as_str().unwrap().contains("JFR.stop")),
         "{rec}"
     );
+    // What the message names runs what is left and keeps the run going.
+    let data = p.data.path().display().to_string();
+    let (code, v) = run_with(
+        p.path(),
+        &[("DLA_DATA_DIR", data.as_str())],
+        &["run", "stop"],
+    );
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["status"], "active", "{v}");
+    assert!(stopped.exists(), "dla run stop did not run JFR.stop: {v}");
 }
 
 #[test]

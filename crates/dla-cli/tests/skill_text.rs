@@ -819,13 +819,13 @@ fn the_python_test_loop_is_never_put_under_a_shell_timeout_and_a_registration_ta
     let stages = read("skills/detect-leak-anywhere/references/stages.md");
     assert!(
         python.contains(
-            "The loop runs up to its time limit of 1800 s. Run `dla harness run <H>` for it as a plain foreground command with the tool's longest timeout. When the tool moves the command to the background because it runs long, wait for the notice that it ended and do other read-only work meanwhile. Never start it with the shell's `&` or `nohup` and never put it under `timeout`: a shell background job is killed when the command returns, and a cut run writes no series."
+            "A run with `--capture` ends by itself within `DLA_COMMAND_SECS` (default 420 s, seven minutes): the loop is given what is left after about 10 s of start-up and the time the capture may take (`DLA_HEAP_SECS` plus 12 s), cuts its rounds (not below 3, so its allocation profiles and the retention record are taken) and then drops the slowest test files to fit, and `_attention` says what was shortened. A plain loop runs up to its limit of 1800 s (30 minutes) per key mode, or `DLA_COMMAND_SECS` when that is set, and the tool may move it to the background: wait for it. Run `dla harness run <H>` for it as a plain foreground command with the tool's longest timeout. When the tool moves the command to the background because it runs long, wait for the notice that it ended and do other read-only work meanwhile. Never start it with the shell's `&` or `nohup` and never put it under `timeout`: a shell background job is killed when the command returns, and a cut run writes no series."
         ),
         "python.md does not keep the loop out of the shell's timeout"
     );
     assert!(
         stages.contains(
-            "The Python test loop runs up to its time limit of 1800 s. Run `dla harness run <H>` for it as a plain foreground command with the tool's longest timeout. When the tool moves the command to the background because it runs long, wait for the notice that it ended and do other read-only work meanwhile. Never start it with the shell's `&` or `nohup` and never put it under `timeout`: a shell background job is killed when the command returns, and a cut run writes no series."
+            "The Python test loop (and the JUnit repeat harness) with `--capture` ends by itself within `DLA_COMMAND_SECS` (default 420 s, seven minutes), and `_attention` says what it shortened; a plain loop runs up to its limit per key mode (1800 s for the pytest loop), or `DLA_COMMAND_SECS` when that is set, and the tool may move it to the background: wait for it. Run `dla harness run <H>` for it as a plain foreground command with the tool's longest timeout. When the tool moves the command to the background because it runs long, wait for the notice that it ended and do other read-only work meanwhile. Never start it with the shell's `&` or `nohup` and never put it under `timeout`: a shell background job is killed when the command returns, and a cut run writes no series."
         ),
         "stages.md does not keep the loop out of the shell's timeout"
     );
@@ -1142,5 +1142,58 @@ fn the_texts_say_a_function_that_ran_is_not_a_writer_line_that_ran() {
         "| A function that ran was read as a writer line that ran (a Go library the tool had not been run on) |",
     ] {
         assert!(verify.contains(want), "VERIFY.md lacks the row: {want}");
+    }
+}
+
+#[test]
+fn the_texts_say_a_cut_command_is_stopped_with_run_stop_and_not_aborted() {
+    // Line breaks do not matter: every text is read with its whitespace collapsed.
+    let read = |p: &str| {
+        fs::read_to_string(root().join(p))
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let python = read("skills/detect-leak-anywhere/references/python.md");
+    let stages = read("skills/detect-leak-anywhere/references/stages.md");
+    let readme = read("harness/python/README.md");
+    let cut = "A command that was cut anyway leaves its process running: `dla run stop` stops it and the run goes on (the next `dla harness run` of the same harness stops it at its start too, and says so in `_attention`); `dla run abort` ends the run for good, so it is never the answer to a cut command.";
+    for (name, text) in [("python.md", &python), ("stages.md", &stages)] {
+        assert!(
+            text.contains(cut),
+            "{name} does not say how a cut command is cleaned up"
+        );
+        assert!(
+            text.contains("A run made with `--capture` after a full series exists is for the capture: it does not print `SERIES TOO SHORT`"),
+            "{name} does not say that a capture run is not a short series"
+        );
+    }
+    assert!(
+        stages.contains("A command that was cut or timed out (a `harness run` over its timeout): `dla run stop` stops the processes DLA started")
+            && stages.contains("`dla run abort --reason \"<why>\"` does the same and ends the run: it is marked aborted, the gate and the queue count it as over and nothing more can be recorded in it that counts"),
+        "stages.md does not separate dla run stop from dla run abort"
+    );
+    // The line of the skill the model reads on every run: a cut command is stopped, not aborted.
+    assert!(
+        skill().contains("Cut command: `dla run stop`; `dla run abort` ends the run for good."),
+        "SKILL.md does not send a cut command to dla run stop"
+    );
+    assert!(
+        python.contains("the scan gets 60 percent of it, then every named line gets an equal share of the rest for its walks, and the record counts the kept objects it walked and did not walk")
+            && python.contains("`WALK CUT SHORT`"),
+        "python.md does not say what the retention walk does with its bound"
+    );
+    for want in [
+        "for a plain loop the limit of the manifest (1800 s) or, when `DLA_COMMAND_SECS` is set, that less about 10 s of start-up; with `--capture` always `DLA_COMMAND_SECS`, default 420 s",
+        "the note `the test loop cut its rounds from <n> to <m>` says it",
+        "The scan looks first at every tracked object for the sites that grew",
+        "the record says in `walk` (`kept`, `walked`, `not_walked`, `scanned`, `of`, `bound_secs`, and `walked` and `not_walked` for each site) how much was done",
+        "`dla summarize heap-graph` then says `WALK CUT SHORT` in `_attention`",
+    ] {
+        assert!(
+            readme.contains(want),
+            "harness/python/README.md lacks: {want}"
+        );
     }
 }

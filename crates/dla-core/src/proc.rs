@@ -158,6 +158,38 @@ pub fn is_alive(pid: u32) -> bool {
     }
 }
 
+/// Grace between SIGTERM and SIGKILL, and the wait after each signal, of [`stop_started`].
+pub const STOP_GRACE: Duration = Duration::from_secs(2);
+
+/// Waits until `pid` is gone or `limit` has passed; returns whether it is gone.
+pub fn wait_gone(pid: u32, limit: Duration) -> bool {
+    let start = Instant::now();
+    while is_alive(pid) {
+        if start.elapsed() >= limit {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    true
+}
+
+/// Stops a process DLA started: SIGTERM to its group, a grace period, SIGKILL. The caller has
+/// verified the identity (`identity_matches`) before. `Err` says why it survived.
+pub fn stop_started(pid: u32) -> Result<(), String> {
+    let term = kill_group(pid, "TERM") || kill_pid(pid, "TERM");
+    if term && wait_gone(pid, STOP_GRACE) {
+        return Ok(());
+    }
+    let kill = kill_group(pid, "KILL") || kill_pid(pid, "KILL");
+    if wait_gone(pid, STOP_GRACE) {
+        Ok(())
+    } else if kill {
+        Err(format!("pid {pid} survived SIGKILL"))
+    } else {
+        Err(format!("could not signal pid {pid}"))
+    }
+}
+
 /// Whether the live process is the one `record` describes: the record has a start
 /// time, the caller could read the live one, and the two are within
 /// [`IDENTITY_TOLERANCE_SECS`]. Anything unverifiable is a mismatch, so a caller that

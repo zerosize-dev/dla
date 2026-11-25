@@ -8,8 +8,11 @@ counts the live traced blocks per project line at every checkpoint (`py.blocks@<
 
 Rounds: DLA_WARMUP warm-up rounds, then DLA_ROUNDS measured rounds of DLA_STEP units each (the
 defaults are baked in at generation time; the step is never below 1). The time limit of the
-process is DLA_TIME_LIMIT_SECS: from the first unit the loop estimates the whole series and, when it
-would not fit, drops the slowest test files (a limitation says which).
+process is DLA_TIME_LIMIT_SECS (`dla harness run` sets it from DLA_COMMAND_SECS, less the start-up and,
+with --capture, the capture's own time): from the first unit the loop estimates the whole series and,
+when it would not fit, lowers the step, then cuts the number of rounds (only with a capture, not below
+CAPTURE_MIN_ROUNDS: its allocation profiles), then drops the slowest test files (a limitation says which).
+The time of the checkpoints so far counts too: a checkpoint of a capture is not free.
 
 A run that pytest ends early is not a unit. From the second run on, when the exit code of
 `pytest.main` is neither 0 (all passed) nor 1 (some tests failed), or the run executed no test (an
@@ -48,6 +51,12 @@ TESTS = @@DLA_TESTS@@
 # the exit, as the generic driver and the JUnit loop keep.
 LIMIT_SECS = float(os.environ.get("DLA_TIME_LIMIT_SECS") or "0")
 _T0 = time.monotonic()
+
+# A run with --capture takes its allocation profiles at the checkpoints and its retention record at
+# the last: at least this many rounds must run for 3 profiles and the record. A run without a
+# capture never cuts its rounds: it drops test files, or stops when one file alone does not fit.
+CAPTURING = bool((os.environ.get("DLA_CAPTURE") or "").strip())
+CAPTURE_MIN_ROUNDS = 3
 
 # Bounds of what a unit may write to the harness log: the first unit, and the first later unit that
 # has a failure.
@@ -325,8 +334,9 @@ def main(counts):
     dropped = []
     first_failure_noted = False
     shown_later = False
-    state = {"first": 0.0, "since_secs": 0.0, "since_units": 0, "estimate": 0.0}
+    state = {"first": 0.0, "since_secs": 0.0, "since_units": 0, "estimate": 0.0, "ckpt_secs": 0.0, "ckpts": 0}
     file_secs = {}
+    noted = set()
     collect_noted = []  # test files named in a note as failing to collect
     cut_runs = []  # the numbers of the runs that ended as a dead unit although pytest ended them early
 
@@ -335,16 +345,51 @@ def main(counts):
             return state["since_secs"] / state["since_units"]
         return state["estimate"] or state["first"]
 
+    def note_once(text):
+        if text not in noted:
+            noted.add(text)
+            dla.note(text)
+            _say(text)
+
+    def checkpoint_secs():
+        """What one checkpoint takes (the mean of those written so far): a capture's profiles are
+        taken there."""
+        return state["ckpt_secs"] / state["ckpts"] if state["ckpts"] else 0.0
+
+    def cut_rounds(round_no, in_round, per, ckpt, budget, floor):
+        """Cuts `total` to the rounds that fit (not below `floor`) and tells the agent, which reads
+        DLA_ROUNDS to place its allocation profiles. Returns True when the rounds were cut."""
+        nonlocal total
+        # Every round after this one costs its runs and its checkpoint.
+        by_time = int(max(0.0, budget - per * (step - in_round)) // (per * step + ckpt))
+        fits = max(floor, round_no + by_time)
+        if fits >= total:
+            return False
+        was = total
+        total = fits
+        os.environ["DLA_ROUNDS"] = str(max(0, total - WARMUP))
+        why = (
+            f"the test loop cut its rounds from {was} to {total}: one run takes {per:.1f} s and the "
+            f"{LIMIT_SECS:g} s time limit would cut the process"
+            + (" (the run is for the capture: its profiles and the retention record need 3 rounds)" if CAPTURING else "")
+        )
+        dla.note(why)
+        _say(why)
+        return True
+
     def fit(round_no, in_round):
-        """Lowers `step` (never below 1), then drops the slowest test files, when the units left
+        """Lowers `step` (never below 1), cuts the rounds (a run with a capture first, not below
+        the rounds its profiles need), then drops the slowest test files, when the units left
         would not fit the time limit. Returns True when files were dropped."""
         nonlocal step
         if not LIMIT_SECS > 0 or done == 0:
             return False
         left = total - round_no
         per = max(per_unit(), 1e-6)
+        ckpt = checkpoint_secs()
         budget = LIMIT_SECS * 0.85 - 5 - (time.monotonic() - _T0)
-        need = per * (step - in_round + step * left)
+        runs = per * (step - in_round + step * left)
+        need = runs + ckpt * left
         if need <= budget:
             return False
         units = int(budget / per) if budget > 0 else 0
@@ -356,16 +401,21 @@ def main(counts):
                 "the process (the x axis is still the cumulative run count)"
             )
             step = lowered
-        need = per * (step - in_round + step * left)
+        runs = per * (step - in_round + step * left)
         changed = False
-        if need > budget and len(active) > 1:
+        if CAPTURING and runs + ckpt * left > budget and total > max(round_no, CAPTURE_MIN_ROUNDS):
+            # A run for the capture needs its profiles, not a long series: the rounds go first.
+            if cut_rounds(round_no, in_round, per, ckpt, budget, max(round_no, CAPTURE_MIN_ROUNDS)):
+                left = total - round_no
+                runs = per * (step - in_round + step * left)
+        if runs + ckpt * left > budget and len(active) > 1:
             every = sum(file_secs.get(f, 0.0) for f in active)
             share = 1.0
-            while need > budget and len(active) > 1 and every > 0:
+            while runs + ckpt * left > budget and len(active) > 1 and every > 0:
                 slowest = max(active, key=lambda f: (file_secs.get(f, 0.0), f))
                 secs = file_secs.get(slowest, 0.0)
                 active.remove(slowest)
-                need = need * (1.0 - secs / every)
+                runs = runs * (1.0 - secs / every)
                 share *= 1.0 - secs / every
                 every -= secs
                 why = (
@@ -382,7 +432,8 @@ def main(counts):
                 state["estimate"] = max(1e-6, per * share)
                 state["since_secs"] = 0.0
                 state["since_units"] = 0
-        if need > budget:
+        need = runs + ckpt * left
+        if need > budget and not CAPTURING:
             # One file alone does not fit. A first reading holds the one-time costs (the imports of
             # the project): judge it only when a second run is out of the question or a steady
             # reading exists.
@@ -393,9 +444,17 @@ def main(counts):
                     f"test file(s) needs {need:.0f} s for the runs left and {max(0.0, budget):.0f} s "
                     "remain; choose fewer or faster test files (--tests) or raise timeout_secs in harness.json",
                 )
+        elif need > budget and state["since_units"] >= 1:
+            note_once(
+                f"the time limit is short for a capture: {total} rounds of {len(active)} test file(s) need "
+                f"{need:.0f} s and {max(0.0, budget):.0f} s remain; the profiles and the retention record are "
+                "taken with the rounds that are left (the process limit has the margin)"
+            )
         return changed
 
-    for round_no in range(1, total + 1):
+    round_no = 0
+    while round_no < total:
+        round_no += 1
         dla.mark_phase(f"pytest unit (round {round_no} of {total}, runs {done + 1} to {done + step})")
         n = 0
         while n < step:
@@ -513,7 +572,10 @@ def main(counts):
                 f"{len(cut_runs)} unit(s) of the loop were cut by pytest and counted as dead "
                 f"(run {', '.join(str(r) for r in cut_runs)}) after {counts['repeats']} repeat(s) in the loop"
             )
+        t_ckpt = time.monotonic()
         dla.checkpoint(done, last=round_no == total)
+        state["ckpt_secs"] += time.monotonic() - t_ckpt
+        state["ckpts"] += 1
         if round_no < total:
             fit(round_no + 1, 0)
     counts["files"] = len(active)
