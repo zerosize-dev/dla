@@ -397,11 +397,15 @@ fn two_rust_drivers_that_never_run_the_writer_settle_it_and_the_remedy_says_so()
         &rust_fill(START_DRAIN, "gated::submit(key as u32);"),
     );
     assert_eq!(r.verdict("S1")["verdict"], "writer_not_executed");
-    // The focus harness with another driver that still closes the guard.
+    // The focus harness with another driver that still closes the guard, by another set-up
+    // (the same set-up would leave the target pending: see the Node scene below).
     r.driver(
         "rust",
         "dla_harness.rs",
-        &rust_fill(START_DRAIN, "gated::submit(key as u32 + 1);"),
+        &rust_fill(
+            "    gated::start_drain();\n    let _again = 1;\n    State {}",
+            "gated::submit(key as u32 + 1);",
+        ),
     );
     let v = r.verdict("S3");
     assert_eq!(v["verdict"], "writer_not_executed", "{v}");
@@ -590,4 +594,117 @@ fn a_node_driver_that_never_drains_runs_the_writer() {
     assert_ne!(v["verdict"], "writer_not_executed", "{v}");
     let rec = r.executed("H1", "S1");
     assert!(rec["lines"][0]["count"].as_u64().unwrap() > 0, "{rec}");
+}
+
+// ---------------------------------------------------------------------------------------
+// A guarded writer is "not reached" only after drivers with different set-ups missed it
+
+/// The Node driver with the set-up lines `setup` and the unit `unit`.
+fn node_fill_with(setup: &'static str, unit: &'static str) -> impl Fn(String) -> String {
+    move |t| {
+        t.replace(
+            "  throw new Error('DLA-HOOK setup has not been filled in');",
+            &format!("  state.q = projectRequire('src/queue.js');\n{setup}"),
+        )
+        .replace(
+            "  throw new Error('DLA-HOOK unit has not been filled in');",
+            unit,
+        )
+    }
+}
+
+const NODE_DRAIN: &str = "  state.q.startDrain();";
+
+#[test]
+fn two_drivers_with_one_setup_do_not_settle_a_guarded_writer_a_third_with_another_setup_does() {
+    if !have("node", "--version") || !have("git", "--version") {
+        return;
+    }
+    let r = Proj::new(node_project, "node");
+    r.driver(
+        "node",
+        "dla-harness.cjs",
+        &node_fill_with(NODE_DRAIN, "  state.q.submit(key);"),
+    );
+    assert_eq!(r.verdict("S1")["verdict"], "writer_not_executed");
+    r.capture_if_the_gate_asks("H1");
+    // The focus harness copies the set-up and loops the unit: the lines still do not run.
+    r.driver(
+        "node",
+        "dla-harness.cjs",
+        &node_fill_with(
+            "  // the same set-up as H1\n  state.q.startDrain();",
+            "  for (let n = 0; n < 8; n++) state.q.submit(key * 8 + n);",
+        ),
+    );
+    assert_eq!(r.verdict("S3")["verdict"], "writer_not_executed");
+    // Two different drivers missed it, with one set-up: it stays pending, and says why.
+    let row = r.row();
+    assert!(row.get("settled_by").is_none(), "{row}");
+    let focus = row["focus"].as_str().unwrap();
+    assert!(
+        focus.contains("F1: H1 and H2 missed its adding lines with the same set-up")
+            && focus.contains("change `setup()` too")
+            && focus.contains("or resolve F1 with the reason the state cannot be reached"),
+        "{row}"
+    );
+    let rest = r.dla(&["ledger", "close-rest"]);
+    assert_eq!(rest.json["closed"], 0, "{}", rest.text);
+    assert!(
+        rest.text.contains("with the same set-up"),
+        "close-rest names the set-up: {}",
+        rest.text
+    );
+    // The trend names it in its next step.
+    let trend = r.dla(&["trend", "S3"]);
+    assert!(
+        trend.text.contains("with the same set-up"),
+        "{}",
+        trend.text
+    );
+    // The next focus harness's block says it, beside the guard line.
+    r.capture_if_the_gate_asks("H2");
+    let next = r.dla(&["harness", "gen", "--lang", "node", "--driver", "--next"]);
+    let block =
+        fs::read_to_string(r.p.join(next.json["summary"]["edit"].as_str().unwrap())).unwrap();
+    assert!(
+        block.contains("missed its adding lines with the same set-up; the guard above them (line 11: if (draining) {)"),
+        "{block}"
+    );
+    // A third driver whose set-up differs and still closes the guard lets the target close.
+    let h = next.json["summary"]["harness"].as_str().unwrap().to_owned();
+    let edit = r.p.join(next.json["summary"]["edit"].as_str().unwrap());
+    let text = node_fill_with(
+        "  state.q.startDrain();\n  state.also = 1;",
+        "  state.q.submit(key + 5);",
+    )(fs::read_to_string(&edit).unwrap());
+    fs::write(&edit, text).unwrap();
+    r.dla(&["harness", "run", &h, "--mode", "both"]);
+    assert_eq!(r.verdict("S5")["verdict"], "writer_not_executed");
+    let row = r.row();
+    assert_eq!(row["settled_by"], "not_reached", "{row}");
+    let rest = r.dla(&["ledger", "close-rest"]);
+    assert_eq!(rest.json["closed"], 1, "{}", rest.text);
+}
+
+#[test]
+fn a_driver_whose_setup_leaves_the_guard_open_grows_the_holder_the_others_missed() {
+    if !have("node", "--version") || !have("git", "--version") {
+        return;
+    }
+    let r = Proj::new(node_project, "node");
+    r.driver(
+        "node",
+        "dla-harness.cjs",
+        &node_fill_with(NODE_DRAIN, "  state.q.submit(key);"),
+    );
+    assert_eq!(r.verdict("S1")["verdict"], "writer_not_executed");
+    r.capture_if_the_gate_asks("H1");
+    // The set-up leaves out what closes the guard: the writer lines run and the holder grows.
+    r.driver(
+        "node",
+        "dla-harness.cjs",
+        &node_fill_with("", "  state.q.submit(key);"),
+    );
+    assert_eq!(r.verdict("S3")["verdict"], "grew");
 }

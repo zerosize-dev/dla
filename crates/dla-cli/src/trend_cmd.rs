@@ -752,8 +752,27 @@ fn missed_targets_entry(
     } else {
         String::new()
     };
+    // A guarded writer that drivers with one set-up have missed stays pending: say so.
+    let held: Vec<String> = dla_core::RunView::load(&ctx.run_dir)
+        .map(|view| {
+            let ix = dla_core::queue::Index::of(&view);
+            missed
+                .iter()
+                .filter_map(|id| {
+                    let id = id.parse::<dla_core::FindingId>().ok()?;
+                    let h = ix.setup_hold(&id)?;
+                    Some(dla_core::queue::setup_hold_sentence(&id, &h, None))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let held = if held.is_empty() {
+        String::new()
+    } else {
+        format!(". {}", held.join(". "))
+    };
     Some(format!(
-        "{h} missed {} target(s): {}{more}; give them a harness of their own (3 at most): dla harness gen --lang {} --driver --next",
+        "{h} missed {} target(s): {}{more}{held}; give them a harness of their own (3 at most): dla harness gen --lang {} --driver --next",
         missed.len(),
         shown.join(", "),
         m.runtime.as_str()

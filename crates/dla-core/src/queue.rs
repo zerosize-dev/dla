@@ -213,6 +213,9 @@ struct DeclaredRun {
     test_loop: bool,
     /// The driver digest of the run, or the harness id when none was recorded.
     driver_key: String,
+    /// The digest of the `DLA-HOOK setup` body of the run; `None` for a run recorded without
+    /// one (an older run): it counts as different from every other set-up.
+    setup_key: Option<String>,
     verdict: Option<Verdict>,
     /// The reason text the trend gave for the verdict.
     detail: Option<String>,
@@ -272,6 +275,29 @@ pub struct Miss {
     pub detail: String,
     /// The writer lines and how often each ran, when the verdict is `writer_not_executed`.
     pub writers: Vec<crate::trend::WriterCount>,
+}
+
+/// The one sentence that says why a target stays pending after drivers missed its adding lines
+/// with the same set-up. `guard` is the first guard line already computed for the target, as
+/// `line N: <text>`.
+pub fn setup_hold_sentence(id: &FindingId, harnesses: &[String], guard: Option<&str>) -> String {
+    let who = match harnesses {
+        [] => "the drivers".to_owned(),
+        [one] => one.clone(),
+        [a, b] => format!("{a} and {b}"),
+        more => format!(
+            "{} and {}",
+            more[..more.len() - 1].join(", "),
+            more[more.len() - 1]
+        ),
+    };
+    let above = guard.map_or_else(
+        || "the guard above them".to_owned(),
+        |g| format!("the guard above them ({g})"),
+    );
+    format!(
+        "{id}: {who} missed its adding lines with the same set-up; {above} may need a state the set-up removes: change `setup()` too (for example, leave out what consumes or resets that state), or resolve {id} with the reason the state cannot be reached"
+    )
 }
 
 /// The most targets of a focus harness (and so of a FOCUSED harness).
@@ -401,7 +427,9 @@ impl Index {
             let Some(m) = manifests.get(h) else { continue };
             ix.run.insert(h.clone());
             let report = latest.get(series.as_str());
-            let key = crate::harness::run_record_of(run_dir, h, series)
+            let record = crate::harness::run_record_of(run_dir, h, series);
+            let setup_key = record.as_ref().and_then(|r| r.setup_digest.clone());
+            let key = record
                 .and_then(|r| r.driver_digest)
                 .unwrap_or_else(|| h.clone());
             for t in report.map(|r| r.targets.as_slice()).unwrap_or_default() {
@@ -427,6 +455,7 @@ impl Index {
                     hook_driver: m.is_hook_driver(),
                     test_loop: m.is_test_loop(),
                     driver_key: key.clone(),
+                    setup_key: setup_key.clone(),
                     verdict,
                     detail,
                     writers,
@@ -501,13 +530,58 @@ impl Index {
         // Rust: a feature of the crate with gated sites that no harness enabled keeps the
         // target open, however many drivers missed it: the code behind the feature cannot run
         // in a build without it, so the misses say nothing about the target.
+        // A guarded writer (the function ran, its adding lines did not) is not settled by
+        // drivers that share one set-up: a state the set-up removes cannot be opened by a
+        // change of the unit.
         if keys.len() >= 2
             && missed.iter().any(|r| r.focused)
             && self.untried_features(id).is_none()
+            && !self.same_setup_hold(id)
         {
             return Standing::Settled(Why::NotReached);
         }
         Standing::Pending
+    }
+
+    /// True when `id` is held open only by the set-up rule: some run read it
+    /// `writer_not_executed` and no two of the drivers that missed it have different set-ups.
+    fn same_setup_hold(&self, id: &FindingId) -> bool {
+        let missed = self.misses(id);
+        missed
+            .iter()
+            .any(|r| r.verdict == Some(Verdict::WriterNotExecuted))
+            && !missed.iter().enumerate().any(|(i, a)| {
+                missed[i + 1..]
+                    .iter()
+                    .any(|b| match (&a.setup_key, &b.setup_key) {
+                        (Some(x), Some(y)) => x != y,
+                        // A run without the key is unknown: it never blocks.
+                        _ => true,
+                    })
+            })
+    }
+
+    /// The harnesses that missed `id`, when only the set-up rule keeps it pending: two or more
+    /// drivers (one of them focused) missed its adding lines with one set-up, and nothing else
+    /// holds it open. The sentence for it is [`setup_hold_sentence`].
+    pub fn setup_hold(&self, id: &FindingId) -> Option<Vec<String>> {
+        let missed = self.misses(id);
+        let keys: std::collections::BTreeSet<&str> =
+            missed.iter().map(|r| r.driver_key.as_str()).collect();
+        let held = self.standing(id) == Standing::Pending
+            && keys.len() >= 2
+            && missed.iter().any(|r| r.focused)
+            && self.untried_features(id).is_none()
+            && self.same_setup_hold(id);
+        held.then(|| {
+            let mut names: Vec<String> = Vec::new();
+            for r in &missed {
+                if !names.contains(&r.harness) {
+                    names.push(r.harness.clone());
+                }
+            }
+            names
+        })
     }
 
     /// Rust: the features of the crate of `id` with gated sites that none of the harnesses that
@@ -2254,22 +2328,227 @@ mod tests {
         s: &str,
         verdicts: &[(u32, Verdict)],
     ) {
+        ran_with_setup(run, h, targets, driver, s, verdicts, true);
+    }
+
+    /// `ran`, and whether the run record has the set-up digest (an older record has none).
+    fn ran_with_setup(
+        run: &Run,
+        h: &str,
+        targets: &[u32],
+        driver: &str,
+        s: &str,
+        verdicts: &[(u32, Verdict)],
+        record_setup: bool,
+    ) {
         run.harness(&manifest(h, targets, true));
         let d = run.dir.path().join("harness").join(h).join("driver");
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("dla_harness.py"), driver).unwrap();
         run.series(s, h);
         let digest = crate::harness::driver_digest(run.dir.path(), h).unwrap();
+        let mut rec = json!({"series": [s], "driver_digest": digest});
+        if record_setup {
+            rec["setup_digest"] = json!(crate::harness::setup_digest(run.dir.path(), h));
+        }
         std::fs::write(
             run.dir
                 .path()
                 .join("harness")
                 .join(h)
                 .join(format!("run-{s}.json")),
-            json!({"series": [s], "driver_digest": digest}).to_string(),
+            rec.to_string(),
         )
         .unwrap();
         run.trend(&format!("T{}", &s[1..]), s, verdicts);
+    }
+
+    /// A hook driver text: a set-up body and a unit body.
+    fn hook_driver(setup: &str, unit: &str) -> String {
+        format!(
+            "def setup():\n    # DLA-HOOK setup: build it\n    {setup}\n\n\ndef unit(i, key):\n    # DLA-HOOK unit: do it\n    {unit}\n"
+        )
+    }
+
+    const W: Verdict = Verdict::WriterNotExecuted;
+
+    #[test]
+    fn two_drivers_with_one_setup_that_missed_the_adding_lines_leave_the_target_pending() {
+        let (run, _) = Run::new(1);
+        ran(
+            &run,
+            "H1",
+            &[1, 2, 3, 4],
+            &hook_driver("a = 1", "u(1)"),
+            "S1",
+            &[(1, W)],
+        );
+        // A focused harness, another unit, the same set-up body (comments and spacing apart).
+        ran(
+            &run,
+            "H2",
+            &[1],
+            &hook_driver(
+                "a   =  1\n    # same set-up, new words",
+                "for _ in range(8): u(1)",
+            ),
+            "S2",
+            &[(1, W)],
+        );
+        let view = run.reload();
+        assert_eq!(pending_of(&view), ["F1"]);
+        let ix = Index::of(&view);
+        let id = FindingId::new(1);
+        assert_eq!(ix.standing(&id), Standing::Pending);
+        let held = ix.setup_hold(&id).unwrap();
+        assert_eq!(held, ["H1", "H2"]);
+        let text = setup_hold_sentence(&id, &held, Some("line 37: if full {"));
+        assert!(
+            text.starts_with("F1: H1 and H2 missed its adding lines with the same set-up; the guard above them (line 37: if full {) may need a state the set-up removes: change `setup()` too"),
+            "{text}"
+        );
+        assert!(text.ends_with("or resolve F1 with the reason the state cannot be reached"));
+    }
+
+    #[test]
+    fn two_drivers_with_different_setups_that_missed_the_adding_lines_settle_not_reached() {
+        let (run, _) = Run::new(1);
+        ran(
+            &run,
+            "H1",
+            &[1, 2, 3, 4],
+            &hook_driver("a = 1", "u(1)"),
+            "S1",
+            &[(1, W)],
+        );
+        ran(
+            &run,
+            "H2",
+            &[1],
+            &hook_driver("a = 2", "u(1)"),
+            "S2",
+            &[(1, W)],
+        );
+        let view = run.reload();
+        assert!(pending_of(&view).is_empty());
+        let ix = Index::of(&view);
+        assert_eq!(
+            ix.standing(&FindingId::new(1)),
+            Standing::Settled(Why::NotReached)
+        );
+        assert!(ix.setup_hold(&FindingId::new(1)).is_none());
+    }
+
+    #[test]
+    fn a_third_driver_with_another_setup_lets_a_held_target_settle() {
+        let (run, _) = Run::new(1);
+        ran(
+            &run,
+            "H1",
+            &[1, 2, 3, 4],
+            &hook_driver("a = 1", "u(1)"),
+            "S1",
+            &[(1, W)],
+        );
+        ran(
+            &run,
+            "H2",
+            &[1],
+            &hook_driver("a = 1", "u(2)"),
+            "S2",
+            &[(1, W)],
+        );
+        assert_eq!(pending_of(&run.reload()), ["F1"]);
+        ran(
+            &run,
+            "H3",
+            &[1],
+            &hook_driver("a = 3", "u(2)"),
+            "S3",
+            &[(1, W)],
+        );
+        assert!(pending_of(&run.reload()).is_empty());
+    }
+
+    #[test]
+    fn two_drivers_with_one_setup_that_never_ran_the_code_still_settle_as_before() {
+        for v in [Verdict::NotExecuted, Verdict::NotLoaded] {
+            let (run, _) = Run::new(1);
+            ran(
+                &run,
+                "H1",
+                &[1, 2, 3, 4],
+                &hook_driver("a = 1", "u(1)"),
+                "S1",
+                &[(1, v)],
+            );
+            ran(
+                &run,
+                "H2",
+                &[1],
+                &hook_driver("a = 1", "u(2)"),
+                "S2",
+                &[(1, v)],
+            );
+            let view = run.reload();
+            assert!(pending_of(&view).is_empty(), "{v:?}");
+            assert_eq!(
+                Index::of(&view).standing(&FindingId::new(1)),
+                Standing::Settled(Why::NotReached)
+            );
+        }
+    }
+
+    #[test]
+    fn runs_recorded_without_a_setup_digest_never_hold_a_target() {
+        let (run, _) = Run::new(1);
+        let one = hook_driver("a = 1", "u(1)");
+        ran_with_setup(&run, "H1", &[1, 2, 3, 4], &one, "S1", &[(1, W)], false);
+        ran_with_setup(
+            &run,
+            "H2",
+            &[1],
+            &hook_driver("a = 1", "u(2)"),
+            "S2",
+            &[(1, W)],
+            false,
+        );
+        let view = run.reload();
+        assert!(pending_of(&view).is_empty());
+        assert_eq!(
+            Index::of(&view).standing(&FindingId::new(1)),
+            Standing::Settled(Why::NotReached)
+        );
+        // One old record and one new one: unknown is different.
+        let (run, _) = Run::new(1);
+        ran_with_setup(&run, "H1", &[1, 2, 3, 4], &one, "S1", &[(1, W)], false);
+        ran(
+            &run,
+            "H2",
+            &[1],
+            &hook_driver("a = 1", "u(2)"),
+            "S2",
+            &[(1, W)],
+        );
+        assert!(pending_of(&run.reload()).is_empty());
+    }
+
+    #[test]
+    fn the_setup_body_is_the_code_between_its_marker_and_the_next_one() {
+        let (run, _) = Run::new(1);
+        run.harness(&manifest("H1", &[1], true));
+        let d = run.dir.path().join("harness").join("H1").join("driver");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("dla_harness.py"),
+            hook_driver("a = 1\n    # note\n    b = 2", "u(1)"),
+        )
+        .unwrap();
+        let code = crate::harness::setup_code(run.dir.path(), "H1").unwrap();
+        assert!(code.starts_with("a=1b=2"), "{code}");
+        assert!(!code.contains("u(1)"), "{code}");
+        std::fs::write(d.join("dla_harness.py"), "no marker\n").unwrap();
+        assert!(crate::harness::setup_code(run.dir.path(), "H1").is_none());
     }
 
     #[test]

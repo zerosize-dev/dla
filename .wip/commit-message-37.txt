@@ -1,0 +1,32 @@
+A guarded writer is not reached until drivers with different set-ups have missed it
+
+A real run on a Rust library reached the holder of its documented leak, a Vec whose adding lines
+run only when a ring buffer is full. The buffer fills only when nothing drains it, and the
+driver's set-up installed the library's consumer, which drains it. The trend read
+`writer_not_executed`, and the focus harness's target block named the guard lines and said that
+"a state that normal set-up removes needs a set-up that does not remove it". The model filled
+the focus harness with the same set-up and a unit that sent eight times more. The lines ran 0
+times again. Two different drivers, one of them focused, had missed the target, so it settled as
+not reached and `close-rest` closed it after 3 of 167 budget minutes.
+
+- A target whose misses include `writer_not_executed` settles as not reached only when two of
+  the drivers that missed it have different set-ups. The set-up is the code of the
+  `DLA-HOOK setup` body, with comments and whitespace removed: the same rule in every
+  runtime's template. Its digest is recorded in the run record next to the driver digest.
+  Until then the target stays pending, the way a Rust target with an untried feature does,
+  and the queue closes it as before when the budget reaches its floor. A target whose code did
+  not run (`not_executed`, `not_loaded`) keeps the old rule. A run record without the digest
+  counts as a different set-up, so older runs settle as before.
+- One sentence names the drivers, the guard above the adding lines and the two ways on: change
+  `setup()` too, or resolve the target with the reason the state cannot be reached. It is in
+  the focus harness's target block, the queue row of `dla ledger list`, the `close-rest` reason
+  and the trend's `next` line.
+
+Tests: queue unit tests (one set-up with other units stays pending; different set-ups settle; a
+third driver with another set-up settles a held target; `not_executed` and old records settle as
+before) and a Node scene of the whole flow, in which a set-up that leaves the consumer out reads
+`grew`. An existing Rust scene's second driver now changes its set-up too. Mutations of the rule
+(always different, or keyed to the wrong verdict) are caught.
+
+Not covered. Helper code between the two hooks counts as set-up. Python, Go and JVM scenes of
+the flow were not written.

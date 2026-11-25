@@ -669,6 +669,7 @@ pub fn add_writer_gaps(
     project: &Path,
     targets: &mut [Target],
     misses: &std::collections::BTreeMap<FindingId, dla_core::queue::Miss>,
+    holds: &std::collections::BTreeMap<FindingId, Vec<String>>,
 ) {
     for t in targets {
         let Some(m) = misses
@@ -686,6 +687,16 @@ pub fn add_writer_gaps(
         for w in &m.writers {
             lines.extend(dla_census::guards::writer_lines(
                 project, &w.file, w.line, w.count,
+            ));
+        }
+        // Drivers with one set-up missed the lines: the unit alone cannot open a guard whose
+        // state the set-up fixes.
+        if let Some(harnesses) = holds.get(&t.id) {
+            let guard = lines
+                .iter()
+                .find_map(|l| l.trim_start().strip_prefix("above it, "));
+            lines.push(dla_core::queue::setup_hold_sentence(
+                &t.id, harnesses, guard,
             ));
         }
         t.writer_gap = lines;
