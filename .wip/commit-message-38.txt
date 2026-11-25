@@ -1,0 +1,79 @@
+Dump growth stays a lead, the Node heap graph names its holder, a guarded writer needs a new set-up
+
+A real run on a Node library measured its documented leak, about 15 KB per request, and lost
+it in two ways. `dla summarize heap-graph` tied the growth to holders of a per-request object,
+and every discriminator favored leak. `dla ledger close-rest` then closed those findings as "not
+ranked, not targeted". The model read the snapshots with its own shortest-path script, and every
+path went through the agent's own WeakRef list, so it called the growth a measuring artifact. It
+stopped at 47 of 180 minutes, facing 154 open items, 60 of them the same 20 listener columns
+listed once per run of one harness.
+
+- Growth a dump series measured is a lead (`grown::dump_grown`). It counts for a leak-side root
+  that is open, or closed `unresolved` or `suspected_static_only`: a passing growth record of
+  authority `dump` with a passed column that names a finding, or a dump discriminator that
+  favors leak. `close-rest` leaves it, `ledger resolve` refuses it, and the gate lists it with
+  the summarizer's own route (sibling, refute, test, confirm). That holds even when an earlier
+  close-rest closed it. It is lifted by a newer dump discriminator that does not favor leak, or
+  a newer alloc-test bound to the finding that favors non-leak. An alloc-test that favors leak
+  does not lift it: on a driver not made for the finding it gives no confirm route, and the dump
+  is about the holder. The harness comes from the capture files of the dumps. Every dump
+  summarizer prints this route, so the rule is not Node's.
+- The Node agent takes its captures right after its forced collection and before it reads any
+  WeakRef in the job (the listener sweep, the listener count, the probes). A `deref()` keeps its
+  target on the job's list, and V8 writes that list into the snapshot as a strong-roots edge to
+  every tracked emitter. The values are read as before, after one more collection when a
+  capture was taken, so the capture's own garbage is not counted.
+- `dla summarize heap-graph` (Node) prints `kept_by`, the short retention path of up to three
+  passing holders, and `root`, what the root is: a native handle, a module variable, a global, a
+  registration. For a native handle that keeps a bound function or closure of the project, it
+  gives the line the function is defined at, from the snapshot's locations table, the
+  `scripts.json` sidecar and source maps. Only a project file gives a line. `native_hint` carries
+  that line, with the `dla ledger annotate --site` command of the tied finding, in a sentence the
+  bounded output never cuts.
+- The final gate lists a growing per-site column once per harness, on the newest trend, naming
+  the older trends in which it grew. A finding whose fix is its confirm with its evidence
+  (`dla ledger confirm <F> --evidence <E>`) ranks with the measured growth, not behind the
+  open items.
+
+On the ledger of the real run, the gate now has 68 actions instead of 155, and the four closed
+findings of the dump growth come back as actions three to six. A replay of the run's driver with
+the new agent has no job-keep edge in its snapshots. The same shortest-path script now shows
+the holder as a native handle, then a parser, then a bound callback, then the object. The new
+summary names the project line of that callback.
+
+Not covered. The queue still comes before measured growth. A callback's line is where its
+function is defined, not where `bind` ran. A dump lead whose dumps came from two harnesses has
+no harness in its commands.
+
+A second run, on a Rust library, lost its documented holder another way.
+
+A real run on a Rust library reached the holder of its documented leak, a Vec whose adding lines
+run only when a ring buffer is full. The buffer fills only when nothing drains it, and the
+driver's set-up installed the library's consumer, which drains it. The trend read
+`writer_not_executed`, and the focus harness's target block named the guard lines and said that
+"a state that normal set-up removes needs a set-up that does not remove it". The model filled
+the focus harness with the same set-up and a unit that sent eight times more. The lines ran 0
+times again. Two different drivers, one of them focused, had missed the target, so it settled as
+not reached and `close-rest` closed it after 3 of 167 budget minutes.
+
+- A target whose misses include `writer_not_executed` settles as not reached only when two of
+  the drivers that missed it have different set-ups. The set-up is the code of the
+  `DLA-HOOK setup` body, with comments and whitespace removed: the same rule in every
+  runtime's template. Its digest is recorded in the run record next to the driver digest.
+  Until then the target stays pending, the way a Rust target with an untried feature does,
+  and the queue closes it as before when the budget reaches its floor. A target whose code did
+  not run (`not_executed`, `not_loaded`) keeps the old rule. A run record without the digest
+  counts as a different set-up, so older runs settle as before.
+- One sentence names the drivers, the guard above the adding lines and the two ways on: change
+  `setup()` too, or resolve the target with the reason the state cannot be reached. It is in
+  the focus harness's target block, the queue row of `dla ledger list`, the `close-rest` reason
+  and the trend's `next` line.
+
+Tests: queue unit tests (one set-up with other units stays pending; different set-ups settle; a
+third driver with another set-up settles a held target; `not_executed` and old records settle as
+before) and a Node scene of the whole flow, in which a set-up that leaves the consumer out reads
+`grew`. An existing Rust scene's second driver now changes its set-up too. Mutations of the rule
+(always different, or keyed to the wrong verdict) are caught.
+
+Not covered. Helper code between the two hooks counts as set-up. Python, Go and JVM scenes of
+the flow were not written.

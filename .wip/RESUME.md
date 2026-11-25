@@ -3533,3 +3533,40 @@ unattended run at a time and no builder beside it.
   (commit-snapshot-tree.sh uses -p main, so commit 36 then 37).
 - r3-otel-python started 19:26 UTC (pid 17051) on preview.9 rig while both CI runs go (no
   builder beside it; do not edit skills/hooks/data while it runs). Waiter bm6wi7fca.
+- CI 43b5bc2 FAILED (run 45680656103): (1) dla-report golden test: my rank rule matched the
+  generic "dla ledger confirm F2 or dla ledger refute F2" -> narrowed to
+  confirms_with_evidence (confirm <F> --evidence); test extended. My local run had skipped
+  dla-report. (2) Windows: H's node_path unit test wrote raw C:\ paths into JSON -> fixed with
+  serde_json + file:/// URL. (3) ubuntu alloc_test a_flat_file_backed_column... read leak
+  (os.rss_file plateau growth-continues) = F's area, flaky (#110); watch the next run.
+  Dynamic was cancelled by the next push (concurrency).
+- Combined snapshot 0958a56 (G+H+I+J+fixes) WITH CI; waiter u115/ci-wip-41. One commit to main
+  with messages 36+37 combined (write commit-message-38.txt).
+
+## 20:12 UTC 2026-11-25: r3-otel-python FOUND; r3-otel-go started
+
+- r3-otel-python (preview.9, 39 of 180 min, INCOMPLETE 130 open): FOUND. F250 confirmed:
+  _ProxyMeterProvider._meters at metrics/_internal/__init__.py:173, writer :174 (key: holder list
+  :157, adder :174 append), growth py.blocks 2/iter, mechanism "appends a new _ProxyMeter on every
+  get_meter call, no dedupe, until a real MeterProvider is set". Verifier: leak too (L-COLLECT),
+  disputes holder kind only. Gap: trigger chain via TracerProvider.get_tracer not named (H13 unit
+  called get_meter directly). Also confirmed: F197 at-fork registrations per BatchProcessor;
+  F206/F215 disputed (N-INTENT). Early stop again (39 min).
+- Kept /root/dla-real/r3-otel-python-keep; run dir deleted.
+- Set A on preview.9 so far: interceptors PARTLY, fastrace NOT, otel-python FOUND.
+- r3-otel-go started ~20:12 (waiter). CI 0958a56 waiter u115/ci-wip-41.
+
+## 20:30 UTC 2026-11-25: r3-otel-go NOT FOUND (early stop); builder K started
+
+- r3-otel-go (preview.9): 7 of 180 min, INCOMPLETE 32 open, 9 confirmed-but-disputed (name-keyed
+  caches: meterProvider.meters, tracerProvider.tracers etc., verifier N-INTENT). The documented
+  holder F234 meter.instruments (meter.go:95, 14 writers listed correctly, remover :131) stayed a
+  candidate: rank 60 of 140, never targeted (32 targeted in 7 min; would have reached it in ~15).
+  Model stopped 3x with "I'm stopping, so the stop hook will probably block again".
+- CROSS-CUTTING CAUSE: early stop in all 4 reruns (47, 3, 39, 7 min of 180). SKILL.md line 106
+  teaches the release ("lets the third attempt go"). Builder K (sonnet):
+  wip-notes/stop-early-brief.md: no count toward STOP_LIMIT while budget over floor + nothing-
+  fits false + an open queue; reason names queue command and `dla run abort --reason`; SKILL
+  sentence replaced within byte budget.
+- Kept /root/dla-real/r3-otel-go-keep; run dir deleted. Set A on preview.9: interceptors PARTLY,
+  fastrace NOT, otel-python FOUND, otel-go NOT (early stop). logstash still to run.
