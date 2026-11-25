@@ -332,6 +332,29 @@ fn one(inp: &Inputs<'_>, m: &HarnessManifest, f: &FindingId) -> TargetVerdict {
                 }
                 format!("{class}.{field}")
             }
+            dla_core::harness::ProbeTarget::JvmInstance { class, field } => {
+                // The agent says `class not loaded: <class>` for a class that is not loaded. Any
+                // other reason it gives (no live instance found, no such field) is a probe that
+                // measured nothing of a class that did load: the coverage speaks, and the detail
+                // says why the field was not read.
+                let said = format!("class not loaded: {class}");
+                if !inp.series.limitations.iter().any(|l| l.ends_with(&said)) {
+                    let prefix = format!("probe {class}.{field}: ");
+                    let why = inp
+                        .series
+                        .limitations
+                        .iter()
+                        .find_map(|l| l.strip_prefix(&prefix))
+                        .unwrap_or("the probe read no instance");
+                    let mut v = coverage_verdict(inp, f);
+                    v.detail = format!(
+                        "the instance field {class}.{field} was not measured ({why}); {}",
+                        v.detail
+                    );
+                    return v;
+                }
+                format!("{class}.{field}")
+            }
             dla_core::harness::ProbeTarget::JvmClass { class } => {
                 // The agent says `class not loaded: <class>` (the class as the probe spells it)
                 // for a class that is not loaded, and nothing for a class that is loaded but has

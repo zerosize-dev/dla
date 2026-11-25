@@ -211,6 +211,16 @@ pub enum ProbeTarget {
         /// Field name.
         field: String,
     },
+    /// One instance field of the live instances of a JVM class (a subclass counts). The agent
+    /// finds the instances reachable from the static fields of the project's classes, the
+    /// thread-local values of the live threads and the driver's fields, and records the
+    /// number of instances, the sum of the field's sizes and the objects reachable from it.
+    JvmInstance {
+        /// Fully qualified class name.
+        class: String,
+        /// Instance field name.
+        field: String,
+    },
     /// Every module-level name of a Python module.
     PyModule {
         /// Module name.
@@ -1306,6 +1316,10 @@ pub struct DumpProbe {
     /// Classes a probed class loader defined (JVM `ClassLoader` holders only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub classes: Option<f64>,
+    /// Live instances found (JVM instance-field probes only): `size`, `reachable` and `bytes`
+    /// are summed over them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instances: Option<f64>,
     /// Why it could not be read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

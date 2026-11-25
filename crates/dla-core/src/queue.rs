@@ -234,8 +234,15 @@ impl DeclaredRun {
     /// One flat reading of a first pass: a hook driver read `executed`; the test loop read
     /// `executed` or `constant`. A fixed command's flat reading says nothing about other call
     /// orders, so it is one reading, and the second look is what follows it.
-    fn flat_reading(&self) -> bool {
-        (self.hook_driver && self.verdict == Some(Verdict::Executed))
+    ///
+    /// A thread-keyed holder read on its instance (a `jvm-instance` probe) has a column, so a
+    /// first-pass hook driver reads it `constant` rather than `executed`: that is the same flat
+    /// reading of one thread, not a miss (`thread_keyed`); a second-look harness's `constant`,
+    /// whose units took their threads from the key, is the answer that ends the wait.
+    fn flat_reading(&self, thread_keyed: bool) -> bool {
+        (self.hook_driver
+            && (self.verdict == Some(Verdict::Executed)
+                || (thread_keyed && self.verdict == Some(Verdict::Constant))))
             || (self.test_loop
                 && matches!(self.verdict, Some(Verdict::Executed | Verdict::Constant)))
     }
@@ -480,7 +487,10 @@ impl Index {
         let runs = self.declared.get(id).map_or(&[][..], Vec::as_slice);
         // `unknown` (the run had no coverage data) says nothing about the target's code: it
         // counts as a driver run for the two-drivers rule below, not as a settled target.
-        if runs.iter().any(|r| r.flat_reading()) {
+        if runs
+            .iter()
+            .any(|r| r.flat_reading(self.is_thread_keyed(id)))
+        {
             return Standing::Settled(Why::Executed);
         }
         // Not reached: missed by two different drivers, at least one of the runs a focused
@@ -535,13 +545,16 @@ impl Index {
         // One flat reading: a hook driver that read `executed`, or the test loop (the project's
         // own tests) that read `executed` or `constant`. Only a hand-written focus harness ends
         // the wait (`done` below).
-        let executed: Vec<&DeclaredRun> = runs.iter().filter(|r| r.flat_reading()).collect();
+        let thread_keyed = self.is_thread_keyed(id);
+        let executed: Vec<&DeclaredRun> = runs
+            .iter()
+            .filter(|r| r.flat_reading(thread_keyed))
+            .collect();
         if moved || executed.is_empty() || self.missed_in(id).is_some() {
             return SecondLook::No;
         }
         // A thread-keyed holder is not settled by another driver of the same one thread: only a
         // second-look harness, whose unit takes its threads from the key, ends the wait.
-        let thread_keyed = self.is_thread_keyed(id);
         let done = runs.iter().filter(live).find(|r| {
             r.verdict.is_some()
                 && (r.second_look
@@ -577,13 +590,16 @@ impl Index {
 
     /// The runs of hook-driver harnesses (not entry-path) that missed `id`.
     fn misses(&self, id: &FindingId) -> Vec<&DeclaredRun> {
+        let thread_keyed = self.is_thread_keyed(id);
         self.declared
             .get(id)
             .map_or(&[][..], Vec::as_slice)
             .iter()
             .filter(|r| {
                 !r.entry
-                    && ((r.hook_driver && r.verdict.is_some_and(is_miss))
+                    && ((r.hook_driver
+                        && r.verdict.is_some_and(is_miss)
+                        && !r.flat_reading(thread_keyed))
                         // The test loop's flat reading is `constant` or `executed`; the rest is
                         // a miss, as for a driver.
                         || (r.test_loop
@@ -2697,6 +2713,40 @@ mod tests {
         assert_eq!(q.second[&FindingId::new(2)].harness, "H1");
         assert!(Index::of(&view).is_thread_keyed(&FindingId::new(2)));
         assert!(!Index::of(&view).is_thread_keyed(&FindingId::new(1)));
+    }
+
+    #[test]
+    fn a_thread_keyed_target_read_constant_by_a_hook_driver_waits_like_one_read_executed() {
+        let (run, _) = Run::new(2);
+        thread_class(&run, 2);
+        // F1 and F2 both have a column that stayed flat over the one thread of the units.
+        ran(
+            &run,
+            "H1",
+            &[1, 2],
+            "a",
+            "S1",
+            &[(1, Verdict::Constant), (2, Verdict::Constant)],
+        );
+        let view = run.reload();
+        let q = queues(&view, None).remove(0);
+        // A flat column of a hook driver settles neither; only the thread-keyed one is a
+        // candidate for the second look, with the reason.
+        assert_eq!(pending_of(&view), ["F1", "F2"]);
+        assert_eq!(q.second.len(), 1, "{:?}", q.second);
+        assert_eq!(q.second[&FindingId::new(2)].detail, THREAD_REASON);
+        assert!(Index::of(&view).missed_in(&FindingId::new(2)).is_none());
+        // The second look's own flat column, with the threads taken from the key, ends the wait
+        // and is no miss either.
+        looked(&run, "H2", &[2], "b", "S2", &[(2, Verdict::Constant)]);
+        let view = run.reload();
+        let ix = Index::of(&view);
+        assert_eq!(
+            ix.second_look(&FindingId::new(2)),
+            SecondLook::Done("H2".into())
+        );
+        assert!(ix.missed_in(&FindingId::new(2)).is_none());
+        assert_eq!(pending_of(&view), ["F1"]);
     }
 
     #[test]
