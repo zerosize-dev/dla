@@ -3320,3 +3320,12 @@ unattended run at a time and no builder beside it.
   builder (brief K) BEFORE the JVM rerun.
 - Commit message 33 ready. Order: 91196f4 (G2) green -> main (msg 32 + note-order line); then J
   tree for CI -> main (msg 33); then preview.9; then brief K.
+
+## 07:50 UTC 2026-11-25: J's tree recorded; builder K started
+
+- J's checked tree (+ my recovery.md fix + G2's gen.rs fix) = snapshot 4243d43 ([skip ci]). Its CI
+  comes AFTER 91196f4 (G2) lands: make a non-skip commit with tree 4243d43 (commit-tree, parent =
+  wip/progress head) and push; then commit-snapshot-tree.sh <that sha> commit-message-33.txt.
+- BUILDER K started (Sonnet): wip-notes/jvm-instance-brief.md (jvm-instance probe: walk from project
+  statics, thread-locals of live threads, driver state / JUnit harness instance; targets_for gives it
+  to instance-field containers; real case on u107/logstash-try copy; whole dynamic run). Scratch u132.
