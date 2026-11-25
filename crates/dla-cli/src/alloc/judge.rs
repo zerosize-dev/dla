@@ -344,6 +344,11 @@ pub struct Purge {
     pub drop: Option<f64>,
     /// The verdict.
     pub verdict: PurgeVerdict,
+    /// Whether this purge kind can give this column's memory back at all. `false` for a
+    /// column of a region no purge releases (file-backed pages, process peaks, virtual sizes):
+    /// the reading stays in the evidence, but it says nothing about the column, so the
+    /// column is judged on its plateau alone (see [`combine`]).
+    pub applies: bool,
 }
 
 /// The purge test: `drop` against `growth` (`before` minus the end-of-warm-up value).
@@ -384,20 +389,31 @@ pub fn purge(
         growth,
         drop,
         verdict,
+        applies: true,
     }
 }
 
 impl Purge {
-    /// The evidence form.
+    /// The evidence form; `applies` is written only when it is false.
     pub fn to_json(&self) -> Value {
-        json!({
+        let mut v = json!({
             "kind": self.kind,
             "before": self.before.map(round),
             "after": self.after.map(round),
             "growth": self.growth.map(round),
             "drop": self.drop.map(round),
             "verdict": self.verdict.as_str(),
-        })
+        });
+        if !self.applies {
+            v["applies"] = json!(false);
+        }
+        v
+    }
+
+    /// The same reading marked as one that does not apply to its column.
+    pub fn not_applicable(mut self) -> Self {
+        self.applies = false;
+        self
     }
 
     /// The N-* hypothesis a release supports.
@@ -475,7 +491,9 @@ pub fn gc(pre: &[(f64, f64)], post: &[(f64, f64)], reference: f64) -> Option<Gc>
 /// that the growth is not headroom, not that it goes on: a plateau together with it stands when
 /// the main window's rises, scaled to the extra window (`expected_rises`), say at least
 /// [`MIN_EXPECTED_RISES`] more would have shown; below that, or with no count (`None`), the
-/// plateau window may be too short to have shown one and the two are inconclusive.
+/// plateau window may be too short to have shown one and the two are inconclusive. A purge
+/// that does not apply to the column (`Purge::applies`: a region no purge gives back) is left
+/// out altogether: the column is its plateau's, an `Inconclusive` one included.
 pub fn combine(
     plateau: PlateauVerdict,
     purge: Option<&Purge>,
@@ -487,6 +505,9 @@ pub fn combine(
     if plateau == PlateauVerdict::NeverGrew {
         return (Favors::Inconclusive, Vec::new());
     }
+    // A purge that cannot give this column's memory back (file-backed pages under a heap trim)
+    // neither released nor retained anything of it: the column is judged on its plateau alone.
+    let purge = purge.filter(|p| p.applies);
     let released = purge.filter(|p| p.verdict == PurgeVerdict::Released);
     let headroom = gc.is_some_and(|g| g.headroom);
     if released.is_some() || headroom {
@@ -921,6 +942,55 @@ mod tests {
         assert_eq!(
             combine(PlateauVerdict::Inconclusive, None, None, None).0,
             Favors::Inconclusive
+        );
+    }
+
+    #[test]
+    fn a_purge_that_does_not_apply_to_the_column_leaves_it_to_its_plateau() {
+        // Retained, as the page cache of mapped files is by a heap trim: the reading says
+        // nothing of the column, so an undecided plateau is not read as a leak.
+        let kept = purge("trim", Some(100.0), Some(99.0), Some(20.0), 0.0).not_applicable();
+        assert_eq!(kept.verdict, PurgeVerdict::Retained);
+        for plateau in [PlateauVerdict::Inconclusive, PlateauVerdict::NotRun] {
+            assert_eq!(
+                combine(plateau, Some(&kept), None, None),
+                (Favors::Inconclusive, Vec::new()),
+                "{plateau:?}"
+            );
+        }
+        // A plateau stands whatever the count of rises says (nothing is held against it).
+        assert_eq!(
+            combine(PlateauVerdict::Plateau, Some(&kept), None, Some(0.0)).0,
+            Favors::NonLeak
+        );
+        // A release that cannot be the purge's does not turn growth into a non-leak.
+        let released = purge("trim", Some(100.0), Some(40.0), Some(20.0), 0.0).not_applicable();
+        assert_eq!(
+            combine(PlateauVerdict::Continues, Some(&released), None, None).0,
+            Favors::Leak
+        );
+        assert_eq!(
+            combine(PlateauVerdict::Inconclusive, Some(&released), None, None).0,
+            Favors::Inconclusive
+        );
+        // The reading stays in the evidence, marked.
+        assert_eq!(kept.to_json()["applies"], false);
+        assert_eq!(kept.to_json()["verdict"], "retained");
+        assert!(
+            purge("trim", Some(100.0), Some(99.0), Some(20.0), 0.0)
+                .to_json()
+                .get("applies")
+                .is_none()
+        );
+        // The same reading of a column the purge does apply to is a leak, as before.
+        let applies = purge("trim", Some(100.0), Some(99.0), Some(20.0), 0.0);
+        assert_eq!(
+            combine(PlateauVerdict::Inconclusive, Some(&applies), None, None),
+            (Favors::Leak, vec!["leak".to_owned()])
+        );
+        assert_eq!(
+            combine(PlateauVerdict::Continues, Some(&kept), None, None).0,
+            Favors::Leak
         );
     }
 
