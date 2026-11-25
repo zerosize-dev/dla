@@ -141,6 +141,33 @@ impl Proj {
         gen_out
     }
 
+    /// [`Proj::driver`], and the first series its run wrote (the fresh one). A capture the
+    /// gate asked for writes a series of its own, so the numbers are read, never assumed.
+    fn driver_series(&self, lang: &str, file: &str, fill: &dyn Fn(String) -> String) -> String {
+        let gen_out = self.dla(&["harness", "gen", "--lang", lang, "--driver", "--next"]);
+        let h = gen_out.json["summary"]["harness"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let edit = self
+            .p
+            .join(gen_out.json["summary"]["edit"].as_str().unwrap());
+        assert!(edit.ends_with(file), "{edit:?}");
+        let text = fill(fs::read_to_string(&edit).unwrap());
+        assert!(!text.contains("has not been filled in"), "{text}");
+        fs::write(&edit, text).unwrap();
+        self.run_series(&h)
+    }
+
+    /// Runs harness `h` in both key modes and returns the first series it wrote.
+    fn run_series(&self, h: &str) -> String {
+        let run = self.dla(&["harness", "run", h, "--mode", "both"]);
+        run.json["summary"]["series"][0]
+            .as_str()
+            .unwrap_or_else(|| panic!("no series: {}", run.text))
+            .to_owned()
+    }
+
     /// The verdict of finding `F1` in `dla trend <series>`.
     fn verdict(&self, series: &str) -> Value {
         let t = self.dla(&["trend", series]);
@@ -621,15 +648,15 @@ fn two_drivers_with_one_setup_do_not_settle_a_guarded_writer_a_third_with_anothe
         return;
     }
     let r = Proj::new(node_project, "node");
-    r.driver(
+    let s1 = r.driver_series(
         "node",
         "dla-harness.cjs",
         &node_fill_with(NODE_DRAIN, "  state.q.submit(key);"),
     );
-    assert_eq!(r.verdict("S1")["verdict"], "writer_not_executed");
+    assert_eq!(r.verdict(&s1)["verdict"], "writer_not_executed");
     r.capture_if_the_gate_asks("H1");
     // The focus harness copies the set-up and loops the unit: the lines still do not run.
-    r.driver(
+    let s2 = r.driver_series(
         "node",
         "dla-harness.cjs",
         &node_fill_with(
@@ -637,7 +664,7 @@ fn two_drivers_with_one_setup_do_not_settle_a_guarded_writer_a_third_with_anothe
             "  for (let n = 0; n < 8; n++) state.q.submit(key * 8 + n);",
         ),
     );
-    assert_eq!(r.verdict("S3")["verdict"], "writer_not_executed");
+    assert_eq!(r.verdict(&s2)["verdict"], "writer_not_executed");
     // Two different drivers missed it, with one set-up: it stays pending, and says why.
     let row = r.row();
     assert!(row.get("settled_by").is_none(), "{row}");
@@ -656,7 +683,7 @@ fn two_drivers_with_one_setup_do_not_settle_a_guarded_writer_a_third_with_anothe
         rest.text
     );
     // The trend names it in its next step.
-    let trend = r.dla(&["trend", "S3"]);
+    let trend = r.dla(&["trend", &s2]);
     assert!(
         trend.text.contains("with the same set-up"),
         "{}",
@@ -679,8 +706,8 @@ fn two_drivers_with_one_setup_do_not_settle_a_guarded_writer_a_third_with_anothe
         "  state.q.submit(key + 5);",
     )(fs::read_to_string(&edit).unwrap());
     fs::write(&edit, text).unwrap();
-    r.dla(&["harness", "run", &h, "--mode", "both"]);
-    assert_eq!(r.verdict("S5")["verdict"], "writer_not_executed");
+    let s3 = r.run_series(&h);
+    assert_eq!(r.verdict(&s3)["verdict"], "writer_not_executed");
     let row = r.row();
     assert_eq!(row["settled_by"], "not_reached", "{row}");
     let rest = r.dla(&["ledger", "close-rest"]);
@@ -693,18 +720,18 @@ fn a_driver_whose_setup_leaves_the_guard_open_grows_the_holder_the_others_missed
         return;
     }
     let r = Proj::new(node_project, "node");
-    r.driver(
+    let s1 = r.driver_series(
         "node",
         "dla-harness.cjs",
         &node_fill_with(NODE_DRAIN, "  state.q.submit(key);"),
     );
-    assert_eq!(r.verdict("S1")["verdict"], "writer_not_executed");
+    assert_eq!(r.verdict(&s1)["verdict"], "writer_not_executed");
     r.capture_if_the_gate_asks("H1");
     // The set-up leaves out what closes the guard: the writer lines run and the holder grows.
-    r.driver(
+    let s2 = r.driver_series(
         "node",
         "dla-harness.cjs",
         &node_fill_with("", "  state.q.submit(key);"),
     );
-    assert_eq!(r.verdict("S3")["verdict"], "grew");
+    assert_eq!(r.verdict(&s2)["verdict"], "grew");
 }

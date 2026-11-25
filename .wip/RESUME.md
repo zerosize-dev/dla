@@ -3570,3 +3570,11 @@ unattended run at a time and no builder beside it.
   sentence replaced within byte budget.
 - Kept /root/dla-real/r3-otel-go-keep; run dir deleted. Set A on preview.9: interceptors PARTLY,
   fastrace NOT, otel-python FOUND, otel-go NOT (early stop). logstash still to run.
+- K DONE, checked: gate_hooks 49/49, skill_text 32/32; my mutation (drop nothing-fits exception)
+  caught; MY FIX: worker reason has no `dla run abort` (abort ends the whole run); worker test
+  asserts its absence. SKILL.md 18429 bytes (limit 18432), Before-you-stop at 9208.
+- CI 0958a56 (run 45685790947): clippy+test FAILED ubuntu+macos: writer_lines J scenes read
+  hard-coded series (S3/S5); on CI the gate asks a capture first (residual), the capture writes
+  a series, numbers shift. FIXED: driver_series/run_series helpers read the series each run
+  wrote. Windows passed (sidecar fix works); dla-report golden passed.
+- Full `cargo test --workspace` running locally (ws-test.log) before the next CI push.

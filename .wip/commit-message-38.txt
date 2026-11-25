@@ -1,4 +1,4 @@
-Dump growth stays a lead, the Node heap graph names its holder, a guarded writer needs a new set-up
+Measured growth stays a lead, a guarded writer needs a new set-up, and a run with budget left keeps going
 
 A real run on a Node library measured its documented leak, about 15 KB per request, and lost
 it in two ways. `dla summarize heap-graph` tied the growth to holders of a per-request object,
@@ -77,3 +77,18 @@ before) and a Node scene of the whole flow, in which a set-up that leaves the co
 
 Not covered. Helper code between the two hooks counts as set-up. Python, Go and JVM scenes of
 the flow were not written.
+
+Four unattended runs on real libraries (Node, Rust, Python, Go), each with a 3-hour budget,
+ended after 47, 3, 39 and 7 minutes with ranked candidates never measured. In the Go run the
+documented holder was candidate 60 of 140, about 15 minutes away. Each time the model stopped
+three times in a row against the hook's "minutes remain: measure what is open", and the hook let
+the third attempt through. SKILL.md even said so.
+
+- While the budget is over its floor, nothing was refused for time with nothing smaller that
+  fits, and a queue is open, a stop attempt is not counted toward the hook's three-attempt
+  release: it is blocked, never stamped. The block names the queue's next command and, for the
+  run (not a worker's slice), `dla run abort --reason "<why>"` as the deliberate way to end it.
+  Under the floor, after a refusal for time, or with no open queue, the old rule holds. The
+  SKILL.md sentence that advertised the release says the new rule instead, and the recovery
+  reference describes it.
+
