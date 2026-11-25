@@ -3379,3 +3379,11 @@ unattended run at a time and no builder beside it.
   (4243d43's with the corrected J sentence + the short-series row) + notes. Waiter u115/ci-wip-36.
   When green: commit-snapshot-tree.sh cd80aaa759695db4002dd8b874768070c07cab66
   commit-message-33.txt; push. Then K: full working tree snapshot for CI -> main (message 34).
+- CI on cd80aaa (run 45606289724): ubuntu clippy-and-test failed on two known flakes:
+  alloc_test.rs a_flat_file_backed_column... (2nd time in a row on ubuntu) and alloc_test_jvm.rs
+  an_unbound_alloc_test... (task 99). Re-ran failed jobs. The os.rss_file flake is now frequent:
+  give it a builder (task 110) before 1.0.0-rc.1.
+- K's CI candidate is snapshot 98e9fea (working tree at 11:00 = J + K + my fixes). BUILDER F
+  started (Sonnet): wip-notes/flaky-alloc-brief.md (os.rss_file trim purge does not apply;
+  MIN_EXPECTED_RISES window extension; 20 runs under load before/after; whole dynamic run).
+  Scratch u133. K's commit later = tree 98e9fea (non-skip commit-tree), F's edits stay out.
