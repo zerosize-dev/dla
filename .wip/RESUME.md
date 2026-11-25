@@ -3418,3 +3418,18 @@ unattended run at a time and no builder beside it.
 - Next: when builder F is done (no builder beside an unattended run), rerun set A one at a time:
   interceptors (Node TS), fastrace (Rust), otel-python, otel-go, logstash (JVM). Keys in
   wip-notes/start-run.sh; waiter u107/wait-run.sh <name> 7000.
+
+## 17:00 UTC 2026-11-25: builder F done and checked; F's tree in CI; reruns next
+
+- F: purge `applies` flag (pick::purge_does_not_apply: os.rss_file, os.vm_hwm, os.vm_data,
+  native.peak_bytes, go.total); combine leaves such a purge out; alloc-test widens the extra window
+  (points_needed, max 2 widenings, cap 8x, window_fits deadline). JVM test 1/20 -> 0/20 under load;
+  whole dynamic 63/64 + xfail; jvm-pool-warmup 3/3. Checked by me: mutation (wider_window never
+  fires) caught. Version files synced to preview.9 in the tree.
+- F's tree snapshot ed198f4 pushed for CI (waiter u115/ci-wip-38). When green:
+  commit-snapshot-tree.sh ed198f498b3bfcbdeacb7b9a8f12f9412e6cd63e commit-message-35.txt; push.
+- NOW: start the set A reruns on the preview.9 rig, one at a time, nothing heavy beside them.
+- r3-interceptors started 16:54 UTC (pid 11667) on the preview.9 rig; waiter (7000 s, restart if
+  it times out: run limit 12600 s). NOTHING HEAVY BESIDE IT. Then fastrace, otel-python, otel-go,
+  logstash, one at a time. Kept records: copy report/state/ledger/gate + transcript via
+  /root/dla-real/redact.py into /root/dla-real/r3-<name>-keep; delete the run dir after reading.

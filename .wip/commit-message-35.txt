@@ -1,0 +1,35 @@
+An alloc-test leaves out a purge that cannot release a column, and lengthens a window that alone keeps it from deciding
+
+Two verdicts of `dla alloc-test` flipped under load and cost CI rounds.
+
+- A purge frees heap: `trim` and `trim-native-heap` the malloc heap, `gc`
+  the managed heap, `free-os-memory` and the allocator purges their own
+  heaps. None of them releases file-backed pages (the binary, its
+  libraries, mapped files) or lowers a peak or a reservation. So for
+  `os.rss_file`, `os.vm_hwm`, `os.vm_data`, `native.peak_bytes` and
+  `go.total` a purge always reads "retained" and says nothing. Such a
+  purge is now left out (`applies: false` in the evidence), and the
+  column is judged on its plateau alone: a plateau that cannot decide
+  gives an inconclusive column, not a leak. Before, a slow rise of
+  file-backed memory on a flat run, read as an undecided plateau, voted
+  leak through its "retained" purge. Growth that continues still reads
+  leak. A file-backed leak too slow for the plateau test now reads
+  inconclusive, never non-leak.
+- When a plateau with a purge that kept the growth is held back only by
+  a window too short for three expected rises, the alloc-test runs the
+  extra points again with the window that would decide (the number of
+  points it used to print as a hint), at most twice and to eight times
+  the first window, and only when the deadline allows it. Each widening
+  is named in the limitations; a refusal for time keeps the first result.
+
+Under three busy loops on four cores, 20 runs each: the JVM test that ran
+a command's workload unbound failed 1 of 20 before and 0 of 20 after; the
+file-backed test failed 0 of 20 before and after (its failure needs a
+chance pass of the first trend, so it is pinned by unit tests built from
+the record of the CI failure). The whole dynamic acceptance passes, and
+the JVM pool fixture with the same mechanism passed alone 3 of 3.
+
+Not covered. `os.rss_shmem` and `os.swap` have the same mismatch and were
+not changed. A widened window on a runtime that is still warming up can
+read continuing growth: the plateau rule working as it should, but the
+widening is not free.
