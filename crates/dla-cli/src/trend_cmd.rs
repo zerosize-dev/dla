@@ -520,6 +520,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         && let Some((entry, attention)) = capture_entry(ctx, &main.series.id)
     {
         next.insert(0, entry);
+        next.truncate(MAX_NEXT);
         out.insert("_attention".into(), json!([attention]));
     }
     if let Some(hint) = holders_hint(ctx, &main.series, &next) {
