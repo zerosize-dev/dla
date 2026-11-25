@@ -3204,3 +3204,14 @@ unattended run at a time and no builder beside it.
   run_line_capture_first + test and Part 5 texts written, NOT compiled; left: full dla-cli run,
   adapt failing scenes (second_look one_flat_run... fails with capture-first), tests for parts 1/2,
   checks, the whole dynamic run.
+
+## 01:55 UTC 2026-11-25: builder X stopped (partial, context large); builder X2 finishes
+
+- X delivered the same partial report three times and said it could not go on. Done by X: parts 3
+  (Node heap summary: growing sockets now under (Global handles) -> HTTPParser ->
+  MockHttpSocket.request; 0 of 200 holders via the job edge) and 4 (close-rest), mutation-tested;
+  parts 1, 2 coded; part 5 texts and bench policy written. I stopped X (TaskStop).
+- Its runall.sh (u123, per-file dla-cli tests, summary.txt) still runs as an orphan.
+- BUILDER X2 (Sonnet, background): wip-notes/growth-first-finish-brief.md: wait for runall, settle
+  failing tests (capture in the scene or keep it under the floor; never weaken), tests for parts
+  1/2 with mutations, checks, WHOLE dynamic run, delete u123/proj. Scratch u130.
