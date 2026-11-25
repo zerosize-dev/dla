@@ -3526,3 +3526,10 @@ unattended run at a time and no builder beside it.
 - Kept: /root/dla-real/r3-fastrace-keep (redacted + H2/H3 drivers). Run dir deleted.
 - Plan: CI 43b5bc2 green -> main; J verify -> CI -> main; then preview.10 with all of it (decide
   whether to wait for J), reruns otel-python, otel-go, logstash, interceptors, fastrace.
+- J DONE, checked: queue 63/63, writer_lines 9/9 (+queue 13, rust_driver 16); my mutation (rule
+  keyed to NotLoaded) caught by the Node scene; edited Rust test keeps its asserts (2nd driver
+  set-up changed). Snapshot 5854d11 (G+H+I+me+J) pushed WITH CI; waiter u115/ci-wip-40.
+  Message 37 for J. Order to main: 43b5bc2 (msg 36) first, then 5854d11 (msg 37) on top
+  (commit-snapshot-tree.sh uses -p main, so commit 36 then 37).
+- r3-otel-python started 19:26 UTC (pid 17051) on preview.9 rig while both CI runs go (no
+  builder beside it; do not edit skills/hooks/data while it runs). Waiter bm6wi7fca.

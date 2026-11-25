@@ -31,8 +31,9 @@ listed once per run of one harness.
   that line, with the `dla ledger annotate --site` command of the tied finding, in a sentence the
   bounded output never cuts.
 - The final gate lists a growing per-site column once per harness, on the newest trend, naming
-  the older trends in which it grew. A finding whose fix is its confirm ranks with the measured
-  growth, not behind the open items.
+  the older trends in which it grew. A finding whose fix is its confirm with its evidence
+  (`dla ledger confirm <F> --evidence <E>`) ranks with the measured growth, not behind the
+  open items.
 
 On the ledger of the real run, the gate now has 68 actions instead of 155, and the four closed
 findings of the dump growth come back as actions three to six. A replay of the run's driver with

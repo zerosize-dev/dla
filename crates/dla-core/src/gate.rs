@@ -126,6 +126,16 @@ fn open_items_named(fix: &str) -> Vec<String> {
         .collect()
 }
 
+/// True when `fix` runs a confirm with its evidence (`dla ledger confirm <F> --evidence <E>`):
+/// the route of a finding a measurement decided for leak. The generic hint of a finding under
+/// test (`dla ledger confirm F2 or dla ledger refute F2`) names no evidence and is not one.
+fn confirms_with_evidence(fix: &str) -> bool {
+    fix.match_indices("dla ledger confirm ").any(|(i, m)| {
+        let mut words = fix[i + m.len()..].split_whitespace();
+        words.next().is_some() && words.next() == Some("--evidence")
+    })
+}
+
 /// Groups `all` into actions. A whole-process column or residual row whose fix names an open
 /// item that is itself listed waits on that open item; a finding whose fix is the batch
 /// command of a listed queue item waits on the queue; the rest with the same kind and fix are
@@ -176,7 +186,7 @@ pub fn actions(all: &[Missing]) -> Actions {
         "growth" => 2,
         // A finding a measurement decided for leak, or whose growth a dump measured, waits only
         // on its alloc-test or on its confirm: its route is the fix.
-        "finding" if m.fix.contains("alloc-test") || m.fix.contains("dla ledger confirm") => 2,
+        "finding" if m.fix.contains("alloc-test") || confirms_with_evidence(&m.fix) => 2,
         "trigger" => 3,
         "open_item" => 4,
         // Findings still to close come before the checklist and the other bookkeeping.
@@ -4120,6 +4130,12 @@ mod action_rank_tests {
                 "node",
                 "dla harness gen --lang node --driver --next",
             ),
+            // The generic hint of a finding under test is no confirm route.
+            item(
+                "finding",
+                "F8",
+                "dla ledger confirm F8 or dla ledger refute F8 (with --evidence)",
+            ),
             item(
                 "growth",
                 "F3",
@@ -4133,6 +4149,9 @@ mod action_rank_tests {
         let mut measured = ids[1..3].to_vec();
         measured.sort();
         assert_eq!(measured, ["F2", "F3"], "{ids:?}");
-        assert_eq!(ids[3..], ["O1", "F9"], "{ids:?}");
+        assert_eq!(ids[3], "O1", "{ids:?}");
+        let mut plain = ids[4..].to_vec();
+        plain.sort();
+        assert_eq!(plain, ["F8", "F9"], "{ids:?}");
     }
 }

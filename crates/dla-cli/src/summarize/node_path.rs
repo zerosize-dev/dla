@@ -557,12 +557,24 @@ mod tests {
         )
         .unwrap();
         fs::write(d.path().join("dist/c.js"), "a\n\n\nfn()\n").unwrap();
-        let sidecar = format!(
-            r#"{{"scripts":{{"7":"file://{}","8":"file://{}"}},"maps":{{"7":"b.js.map","8":"inline"}}}}"#,
-            d.path().join("dist/b.js").display(),
-            d.path().join("dist/c.js").display()
-        );
-        fs::write(d.path().join("in/scripts.json"), sidecar).unwrap();
+        // The URL the agent writes: `file:///C:/x/b.js` on Windows, `file:///x/b.js` elsewhere,
+        // escaped as JSON.
+        let url = |p: &Path| {
+            let s = p.to_string_lossy().replace('\\', "/");
+            if s.starts_with('/') {
+                format!("file://{s}")
+            } else {
+                format!("file:///{s}")
+            }
+        };
+        let sidecar = serde_json::json!({
+            "scripts": {
+                "7": url(&d.path().join("dist").join("b.js")),
+                "8": url(&d.path().join("dist").join("c.js")),
+            },
+            "maps": {"7": "b.js.map", "8": "inline"},
+        });
+        fs::write(d.path().join("in/scripts.json"), sidecar.to_string()).unwrap();
         let mut side = Sidecar::beside(&d.path().join("in/heap-1.heapsnapshot"));
         assert_eq!(
             side.line(site(7, 3), d.path()).as_deref(),
