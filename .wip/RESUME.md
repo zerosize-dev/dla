@@ -3470,3 +3470,16 @@ unattended run at a time and no builder beside it.
 - After G: replay with the new preload into g-replay/new and check job-keep list has no
   MockHttpSocket and BFS shows Global handles path. Then delete /root/dla-real/r3-interceptors and
   g-replay snapshots (literal paths).
+
+## 18:30 UTC 2026-11-25: F on main; H checked; G running
+
+- F's tree ed198f4 CI 15/15 green (run 45658944747) -> main a10c54c (message 35), pushed main and
+  dev. NOTE: dynamic acceptance took 91 min (was 72): F's widenings cost ~25%; limit 120 min.
+  Measure which fixtures widen before the next release.
+- Builder H DONE, checked by me: summarize_node 34/34; my mutation (drop the unfollowable-map
+  arm in node_path::Sidecar::line) caught by
+  a_bundle_whose_map_cannot_be_followed_gives_no_line_instead_of_the_bundle_line; line base OK
+  (zero-based locations and sourcemap, +1 once). Real-data check pending (replay after G).
+  Stale comment in dla-preload.cjs: scripts.json "informational (no dla adapter reads it)" -> fix
+  after G.
+- Builder I brief ready (wip-notes/one-item-brief.md): start after G (gate.rs).
