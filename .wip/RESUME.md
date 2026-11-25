@@ -3234,3 +3234,8 @@ unattended run at a time and no builder beside it.
   files), pushed main and dev. Not released (preview.8 is the last release; next one after X2).
 - Next: builder X2 (growth-first finish) report -> verify -> CI -> main; then G2, J; then set A
   reruns one at a time; then set B and Jetty.
+- runall (u123) ALLDONE: failing files focus(1), holder_first(1), node_short(1), py_site_columns(3),
+  queue(1), second_look(1), trigger(1): the new residual rows / capture-first fire in many scenes.
+  CONCERN to measure in the real Node rerun: capture-first is per harness; if most harnesses show
+  >= 64 KiB unattributed heap growth, a run takes a capture per harness before each next batch
+  (cost). The dynamic acceptance does not show it (its policy never runs gen --next itself).
