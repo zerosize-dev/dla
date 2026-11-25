@@ -3160,3 +3160,10 @@ unattended run at a time and no builder beside it.
   and found the leak (pillow-3/-6), the narrowed loop missed it (pillow-4), and the tool moves a
   long foreground command to the background by itself. Sent T back: plain runs keep the manifest
   cap (1800 s) unless DLA_COMMAND_SECS is set; capture runs keep the 420 s plan; texts/pins/VERIFY.
+
+## 01:00 UTC 2026-11-25: 0.9.0-preview.8 published
+
+- CI on 8c2e5e2 (dev branch run 45513895084): 15/15. release.yml (run 45521020784): all jobs
+  green; tag v0.9.0-preview.8 on 8c2e5e2; pre-release with 5 archives, 5 .sha256, SHA256SUMS.
+- STILL TO DO: sync the working tree's version files to preview.8 once builder T has finished
+  (see the 23:57 entry), before any snapshot goes to main.
