@@ -1069,14 +1069,20 @@ fn dump_grown(view: &RunView, out: &mut Vec<Grown>) {
         };
         let (at, _, column, series, _) = lead;
         // The newest decisive record decides: a newer dump discriminator that does not favor
-        // leak, or any newer alloc-test bound to the family, lifts the lead.
+        // leak lifts the lead, and so does a newer alloc-test bound to the family whose newest
+        // one favors non-leak. An alloc-test that favors leak, or cannot tell, does not: the dump
+        // discriminator is about this holder, and an alloc-test that favors leak gives a
+        // confirm route only on a driver made for the finding (`route_to_confirm`), so lifting
+        // the lead on it would let `close-rest` close a finding that two measurements call a leak.
         let later = &records[at + 1..];
         let lifted = later.iter().any(|e| {
             e.kind == EvidenceKind::Discriminator
                 && e.authority == Authority::Dump
                 && favors_of(e) != Some(Favors::Leak)
                 && finding_of(e).is_some_and(|f| family.contains(&f))
-        }) || !bound_alloc_tests(later, &family).is_empty();
+        }) || bound_alloc_tests(later, &family)
+            .last()
+            .is_some_and(|(_, f)| *f == Favors::NonLeak);
         if lifted {
             continue;
         }
@@ -2212,14 +2218,30 @@ mod tests {
             dump_disc(&mut l, lift, "F1", "S4");
             assert!(grown_unmeasured(&no_trend_view(l)).is_empty(), "{lift}");
         }
-        // A newer alloc-test bound to the family, whichever way it favors.
-        for favors in ["non-leak", "leak"] {
+        // A newer alloc-test bound to the family that favors non-leak lifts it.
+        let (_d, mut l) = scene();
+        dump_growth(&mut l, "S4", "F1");
+        dump_disc(&mut l, "leak", "F1", "S4");
+        alloc_test(&mut l, "non-leak", "H1");
+        assert!(grown_unmeasured(&no_trend_view(l)).is_empty());
+        // One that favors leak, or cannot tell, does not: on a harness that is not a driver
+        // made for the finding it gives no confirm route, and the dump still says leak.
+        for favors in ["leak", "inconclusive"] {
             let (_d, mut l) = scene();
             dump_growth(&mut l, "S4", "F1");
             dump_disc(&mut l, "leak", "F1", "S4");
             alloc_test(&mut l, favors, "H1");
-            assert!(grown_unmeasured(&no_trend_view(l)).is_empty(), "{favors}");
+            let g = grown_unmeasured(&no_trend_view(l));
+            assert_eq!(g.len(), 1, "{favors}");
+            assert!(g[0].dump.is_some(), "{favors}");
         }
+        // The newest alloc-test decides among several.
+        let (_d, mut l) = scene();
+        dump_growth(&mut l, "S4", "F1");
+        dump_disc(&mut l, "leak", "F1", "S4");
+        alloc_test(&mut l, "leak", "H1");
+        alloc_test(&mut l, "non-leak", "H1");
+        assert!(grown_unmeasured(&no_trend_view(l)).is_empty());
         // The non-leak discriminator names the sibling: the family is read.
         let (_d, mut l) = scene();
         dump_growth(&mut l, "S4", "F1");

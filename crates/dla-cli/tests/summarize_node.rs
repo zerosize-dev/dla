@@ -1928,7 +1928,7 @@ fn a_native_handle_that_keeps_a_bound_callback_names_the_project_line_that_binds
     );
     assert_eq!(
         v["root"][KEY],
-        "a native handle keeps an HTTPParser, which keeps a bound function created at src/conn.js:119 whose this is the Conn",
+        "a native handle keeps an HTTPParser, which keeps a bound function of a function defined at src/conn.js:119 whose this is the Conn",
         "{v}"
     );
     // The next step starts with the mechanism and the line, and still ends with the confirm
@@ -1942,6 +1942,15 @@ fn a_native_handle_that_keeps_a_bound_callback_names_the_project_line_that_binds
     assert!(
         needed.contains(&format!("dla ledger confirm {id} --evidence ")),
         "{needed}"
+    );
+    // The line, in the one sentence the bounded output never cuts, with the command that
+    // names it as the site of the tied finding.
+    assert_eq!(
+        v["native_hint"],
+        format!(
+            "native code keeps these objects: it holds a callback whose function is defined at src/conn.js:119 and that is bound to them or closes over them; name as the site the line that hands that callback to native code (where it is stored or bound), or this one: dla ledger annotate {id} --site src/conn.js:119"
+        ),
+        "{v}"
     );
     // The summary file keeps the whole path, with the site of the function.
     let dir = p.run_dir.join("summaries");
@@ -1979,7 +1988,7 @@ fn a_bundled_callback_is_mapped_through_its_source_map_to_the_source_file() {
     let v = heap_graph(&p, &files, &[]);
     assert_eq!(v["gate"], "pass", "{v}");
     let root = v["root"][KEY].as_str().unwrap();
-    assert!(root.contains("created at src/conn.ts:26 "), "{root}");
+    assert!(root.contains("defined at src/conn.ts:26 "), "{root}");
     assert!(!root.contains("bundle.js"), "{root}");
 }
 
@@ -2140,7 +2149,7 @@ fn a_real_native_watcher_keeping_a_bound_callback_gives_the_line_of_the_function
     let root = v["root"][key].as_str().unwrap();
     assert!(
         root.starts_with("a native handle keeps ")
-            && root.ends_with("created at src/conn.js:9 whose this is the Conn"),
+            && root.ends_with("defined at src/conn.js:9 whose this is the Conn"),
         "{root}"
     );
     let needed = v["needed"].as_str().unwrap();

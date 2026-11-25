@@ -353,10 +353,13 @@ fn root_of(
     } else {
         "function"
     };
-    let created = match &line {
-        Some(l) => format!("created at {l}"),
-        None => {
-            "(its creation line is not known: no location of it maps to a project file)".to_owned()
+    // V8 records where a function is defined, not where `bind` ran: for a bound function the
+    // line is its target's.
+    let created = match (&line, what) {
+        (Some(l), "bound function") => format!("of a function defined at {l}"),
+        (Some(l), _) => format!("defined at {l}"),
+        (None, _) => {
+            "(the line its function is defined at is not known: no location of it maps to a project file)".to_owned()
         }
     };
     let this = (path[i].edge == ".bound_this")
@@ -520,7 +523,7 @@ mod tests {
         assert_eq!(k.line.as_deref(), Some("src/conn.js:119"));
         assert_eq!(
             k.root,
-            "a native handle keeps an HTTPParser, which keeps a bound function created at src/conn.js:119 whose this is the Conn"
+            "a native handle keeps an HTTPParser, which keeps a bound function of a function defined at src/conn.js:119 whose this is the Conn"
         );
         // Node's own script, a script the sidecar does not know and a function with no row
         // map to no line.
@@ -529,7 +532,8 @@ mod tests {
             let k = describe(&h, true, &mut side, d.path());
             assert!(k.native && k.line.is_none(), "{s:?}");
             assert!(
-                k.root.contains("(its creation line is not known"),
+                k.root
+                    .contains("(the line its function is defined at is not known"),
                 "{}",
                 k.root
             );

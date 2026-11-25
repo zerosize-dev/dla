@@ -3483,3 +3483,23 @@ unattended run at a time and no builder beside it.
   Stale comment in dla-preload.cjs: scripts.json "informational (no dla adapter reads it)" -> fix
   after G.
 - Builder I brief ready (wip-notes/one-item-brief.md): start after G (gate.rs).
+
+## 19:30 UTC 2026-11-25: G, H, I done and checked; my fixes; full tests running
+
+- G checked: grown_dump 5/5, harness_capture_node 6/6; my mutation (drop Unresolved from
+  dump_grown state filter) caught by a_finding_closed_before_its_dump_growth_is_listed...
+  MY FIXES on G: (1) an alloc-test that favors leak no longer lifts a dump lead (only newest
+  bound alloc-test favoring non-leak lifts; unit test updated); docs VERIFY/stages updated.
+  (2) preload: extra gcFn() after captures were taken (capture garbage out of values).
+  (3) stale scripts.json note fixed (my first edit had an apostrophe in a JS string: broke all
+  Node tests; fixed).
+- I checked (site_item per harness, newest trend); MY FIX: gate::actions ranks a `finding` whose
+  fix contains "dla ledger confirm" at 2 (with growth); test action_rank_tests (mutation caught).
+- H checked; MY FIX: `native_hint` (KEPT_WHOLE in out.rs) carries the line + annotate command;
+  wording "defined at" (V8 location = function definition, not the bind call). Real data:
+  MockHttpSocket.ts:509 (onRequestHeaders arrow field) - documented lines are 117-134 (binds).
+- REAL DATA: gate on r3 copy: preview.9 155 actions (121 trend_column) -> new 68 (30), F129-F132
+  are actions 3-6. Replay with new agent: 0 job-keep edges; model's BFS shows (Global handles) >
+  HTTPParser > native_bind.bound_this > MockHttpSocket.
+- Commit message 36 written. Full tests (core, parsers, workload, cli) running -> then snapshot
+  WITH CI -> wait -> commit to main -> version preview.10 -> release -> reruns.

@@ -1317,6 +1317,21 @@ fn series_part(
         None => needed_text,
     };
     out.insert("needed".into(), json!(needed_text));
+    // The line a native handle's callback is defined at, in one sentence the bounded output
+    // never cuts (`native_hint` is kept whole by `out::emit`): the `needed` and `root` texts
+    // are cut to fit, and a cut line names no line.
+    if let Some(line) = top_kept.and_then(|k| k.line.as_deref()) {
+        let finding = shown
+            .first()
+            .and_then(|&i| tie_for(&passed[i].0))
+            .map_or_else(|| "<finding>".to_owned(), |t| t.finding.to_string());
+        out.insert(
+            "native_hint".into(),
+            json!(format!(
+                "native code keeps these objects: it holds a callback whose function is defined at {line} and that is bound to them or closes over them; name as the site the line that hands that callback to native code (where it is stored or bound), or this one: dla ledger annotate {finding} --site {line}"
+            )),
+        );
+    }
     // The retention path of the shown holders, in the printed output only: the evidence
     // result is held to its own bound, and the summary files carry the full path.
     let paths: Vec<(String, Kept)> = shown
@@ -1764,7 +1779,7 @@ mod tests {
             Kept {
                 kept_by: "(Global handles) > HTTPParser[1] > bound function (this) > Conn.request"
                     .into(),
-                root: "a native handle keeps an HTTPParser, which keeps a bound function created at src/conn.js:119 whose this is the Conn".into(),
+                root: "a native handle keeps an HTTPParser, which keeps a bound function of a function defined at src/conn.js:119 whose this is the Conn".into(),
                 native: true,
                 line: Some("src/conn.js:119".into()),
             },

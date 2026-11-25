@@ -1261,7 +1261,7 @@ function startScriptWatch() {
       scriptUrls.set(String(p.scriptId), { url: p.url, map });
     });
     post('Debugger.enable');
-    captureNotes.push('--capture heap enables the inspector Debugger domain for the run to record script ids; scripts.json is informational (no dla adapter reads it, snapshots name their scripts), and the Debugger adds some overhead');
+    captureNotes.push('--capture heap enables the inspector Debugger domain for the run to record script ids; dla summarize heap-graph reads scripts.json to map the script ids of the function locations in a snapshot to files, and the Debugger adds some overhead');
   } catch (err) {
     captureNotes.push(`script ids could not be recorded: ${err && err.message}`);
   }
@@ -1684,6 +1684,8 @@ function build(phase, x, last) {
         gcFn();
         gcFn();
         takeCaptures();
+        // what the captures built (the profile, its JSON) is garbage the values must not count
+        if (captures.length > 0) gcFn();
         // the weak references of dead emitters are garbage the agent itself leaves behind
         if (sweepListenerRefs() > 0) gcFn();
         rec.gc_forced = true;

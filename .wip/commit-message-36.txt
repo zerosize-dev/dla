@@ -1,0 +1,45 @@
+Growth measured over dumps stays a lead, and the Node heap graph shows who keeps it
+
+A real run on a Node library measured its documented leak, about 15 KB per request, and lost
+it in two ways. `dla summarize heap-graph` tied the growth to holders of a per-request object,
+and every discriminator favored leak. `dla ledger close-rest` then closed those findings as "not
+ranked, not targeted". The model read the snapshots with its own shortest-path script, and every
+path went through the agent's own WeakRef list, so it called the growth a measuring artifact. It
+stopped at 47 of 180 minutes, facing 154 open items, 60 of them the same 20 listener columns
+listed once per run of one harness.
+
+- Growth a dump series measured is a lead (`grown::dump_grown`). It counts for a leak-side root
+  that is open, or closed `unresolved` or `suspected_static_only`: a passing growth record of
+  authority `dump` with a passed column that names a finding, or a dump discriminator that
+  favors leak. `close-rest` leaves it, `ledger resolve` refuses it, and the gate lists it with
+  the summarizer's own route (sibling, refute, test, confirm). That holds even when an earlier
+  close-rest closed it. It is lifted by a newer dump discriminator that does not favor leak, or
+  a newer alloc-test bound to the finding that favors non-leak. An alloc-test that favors leak
+  does not lift it: on a driver not made for the finding it gives no confirm route, and the dump
+  is about the holder. The harness comes from the capture files of the dumps. Every dump
+  summarizer prints this route, so the rule is not Node's.
+- The Node agent takes its captures right after its forced collection and before it reads any
+  WeakRef in the job (the listener sweep, the listener count, the probes). A `deref()` keeps its
+  target on the job's list, and V8 writes that list into the snapshot as a strong-roots edge to
+  every tracked emitter. The values are read as before, after one more collection when a
+  capture was taken, so the capture's own garbage is not counted.
+- `dla summarize heap-graph` (Node) prints `kept_by`, the short retention path of up to three
+  passing holders, and `root`, what the root is: a native handle, a module variable, a global, a
+  registration. For a native handle that keeps a bound function or closure of the project, it
+  gives the line the function is defined at, from the snapshot's locations table, the
+  `scripts.json` sidecar and source maps. Only a project file gives a line. `native_hint` carries
+  that line, with the `dla ledger annotate --site` command of the tied finding, in a sentence the
+  bounded output never cuts.
+- The final gate lists a growing per-site column once per harness, on the newest trend, naming
+  the older trends in which it grew. A finding whose fix is its confirm ranks with the measured
+  growth, not behind the open items.
+
+On the ledger of the real run, the gate now has 68 actions instead of 155, and the four closed
+findings of the dump growth come back as actions three to six. A replay of the run's driver with
+the new agent has no job-keep edge in its snapshots. The same shortest-path script now shows
+the holder as a native handle, then a parser, then a bound callback, then the object. The new
+summary names the project line of that callback.
+
+Not covered. The queue still comes before measured growth. A callback's line is where its
+function is defined, not where `bind` ran. A dump lead whose dumps came from two harnesses has
+no harness in its commands.
