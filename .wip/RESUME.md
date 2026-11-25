@@ -3329,3 +3329,16 @@ unattended run at a time and no builder beside it.
 - BUILDER K started (Sonnet): wip-notes/jvm-instance-brief.md (jvm-instance probe: walk from project
   statics, thread-locals of live threads, driver state / JUnit harness instance; targets_for gives it
   to instance-field containers; real case on u107/logstash-try copy; whole dynamic run). Scratch u132.
+
+## 08:30 UTC 2026-11-25: CI on 91196f4 failed node_short (ubuntu, macOS); fixed; 1cd3e7e in CI
+
+- node_short.rs (on main since f2f5347, a FLAKE there too): a 4-point Node run's heap crossed the
+  64 KiB floor on CI, so trend led with the capture instead of SERIES TOO SHORT. Fixed by me in
+  gate.rs uncaptured_residuals: `too_short_for_the_gate` (points after warm-up < min_points 8) ->
+  no capture item. residual_capture.rs scene has 10 points now (scene_points), new test
+  a_series_too_short_for_the_gate_demands_no_capture_whatever_its_growth. VERIFY row added (also
+  appended to the working tree's VERIFY.md). Commit message 32 has an "Also" paragraph for it.
+- 1cd3e7e = 91196f4 + gate.rs + residual_capture.rs + VERIFY row (waiter u115/ci-wip-35). When
+  green: commit-snapshot-tree.sh 1cd3e7e commit-message-32.txt; push. Then J's tree 4243d43 +
+  these three files for CI (J's working-tree versions: gate.rs, residual_capture.rs unchanged by J;
+  VERIFY.md = 4243d43's + my row).

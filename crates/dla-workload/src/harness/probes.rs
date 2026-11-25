@@ -11,6 +11,7 @@
 //! | Runtime | Census candidate | Probe |
 //! |---|---|---|
 //! | JVM | `static*` owner `pkg.Class.FIELD` | `JvmStatic`; plus `JvmClass` for every class holding a candidate |
+//! | JVM | `container-field`, `registry-field` owner `pkg.Class.field` (an instance field, lifetime `object`) | `JvmInstance` first, then the `JvmClass` of the owner |
 //! | Python | `module-global`, `module-pointer` owner `a.b.NAME` | `PyGlobal`; `class-attr`, `cache-decorator` -> `PyAttr`; `PyModule` for every module with a candidate |
 //! | Node | any holder in a file | `NodeModule` for the file, with the file's top-level names |
 //! | Go | package variable | `GoVar`, driver mode only |
@@ -381,6 +382,11 @@ fn go_field_kind(kind: &str) -> bool {
     matches!(kind, "container-field" | "registry-field")
 }
 
+/// Census kinds of a JVM instance field that holds entries (a probe reads its size).
+fn jvm_instance_kind(kind: &str) -> bool {
+    matches!(kind, "container-field" | "registry-field")
+}
+
 /// Targets for one candidate, specific ones first.
 fn targets_for(
     project: &Path,
@@ -397,6 +403,15 @@ fn targets_for(
             if let Some((class, field)) = jvm_class_of(&c.owner) {
                 if c.kind.contains("static") {
                     specific.push(ProbeTarget::JvmStatic {
+                        class: class.to_owned(),
+                        field: field.to_owned(),
+                    });
+                } else if jvm_instance_kind(&c.kind) {
+                    // An instance field is not a static field of its class: the class probe
+                    // reads none of it. The census kind says it is one (a `static` kind is
+                    // handled above, and the lifetime `object` of the annotation is the same
+                    // fact: the census gives it to exactly these kinds).
+                    specific.push(ProbeTarget::JvmInstance {
                         class: class.to_owned(),
                         field: field.to_owned(),
                     });
@@ -1064,6 +1079,42 @@ mod tests {
                 class: "shop.OrderCache".into()
             }]
         );
+        // An instance field of a container kind is read on the live instances of its class,
+        // ahead of the class probe; a registry field likewise.
+        for kind in ["container-field", "registry-field"] {
+            let (sp, md) = targets_for(
+                d.path(),
+                Runtime::Jvm,
+                &c(kind, "shop.Registry.items", "src/shop/Registry.java:5"),
+                false,
+                None,
+            );
+            assert_eq!(
+                sp,
+                [ProbeTarget::JvmInstance {
+                    class: "shop.Registry".into(),
+                    field: "items".into()
+                }],
+                "{kind}"
+            );
+            assert_eq!(
+                md,
+                [ProbeTarget::JvmClass {
+                    class: "shop.Registry".into()
+                }]
+            );
+        }
+        // Kinds that are not an instance holder of entries get the class probe only.
+        for kind in ["closure-field", "spawned-unit-field", "thread-local", ""] {
+            let (sp, _) = targets_for(
+                d.path(),
+                Runtime::Jvm,
+                &c(kind, "shop.Registry.items", "src/shop/Registry.java:5"),
+                false,
+                None,
+            );
+            assert!(sp.is_empty(), "{kind}: {sp:?}");
+        }
         let (sp, md) = targets_for(
             d.path(),
             Runtime::Python,

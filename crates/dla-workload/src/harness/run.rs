@@ -3712,7 +3712,7 @@ fn run_loaded(
                 .unused
                 .iter()
                 .map(|i| {
-                    let (name, _, meaning) = dla_core::harness::SECOND_LOOK_SLOTS[*i];
+                    let (name, _, meaning) = dla_core::harness::second_look_slots(true)[*i];
                     format!("{name} ({meaning})")
                 })
                 .collect();
@@ -3728,9 +3728,17 @@ fn run_loaded(
                 )
             } else {
                 format!(
-                    "the unit of harness {} does not use slot variable(s): {}",
+                    "the unit of harness {} does not use slot variable(s): {}{}",
                     manifest.id,
-                    names.join("; ")
+                    names.join("; "),
+                    if slots
+                        .unused
+                        .contains(&dla_core::harness::SECOND_LOOK_SLOTS.len())
+                    {
+                        " (threads: a target of this harness is kept per thread, so a unit that stays on the caller's thread reads flat, and this slot cannot be given up)"
+                    } else {
+                        ""
+                    }
                 )
             };
             return Err(Refusal::new(

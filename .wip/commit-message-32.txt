@@ -51,7 +51,10 @@ trend` its coverage. Before, the first answered that the directory "holds
 no Go package to drive".
 
 Also: test scenes and texts that echoed names of the library's sources use
-neutral names.
+neutral names. A heap residual row of a series that has fewer points than
+the trend gate needs no longer demands a capture: nothing of such a series
+can pass, so the longer run comes first. A Node test of a four-point run
+failed on CI because the runner's timing pushed its heap past the floor.
 
 The whole dynamic acceptance passes: 63 of 64 fixtures and the expected
 failure. The static acceptance passes on all 64.

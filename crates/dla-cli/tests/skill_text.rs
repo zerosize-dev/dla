@@ -1285,3 +1285,93 @@ fn the_texts_say_how_a_go_package_of_a_nested_module_is_driven_and_what_ranks_it
     }
     assert!(!read("skills/detect-leak-anywhere/SKILL.md").contains("go_support_dir"));
 }
+
+#[test]
+fn the_texts_say_a_holder_kept_per_thread_needs_units_from_many_threads_and_a_second_look() {
+    let read = |p: &str| {
+        fs::read_to_string(root().join(p))
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let refs = "skills/detect-leak-anywhere/references";
+    let stages = read(&format!("{refs}/stages.md"));
+    for want in [
+        "A holder kept per thread (a thread-local, a container of a class that owns one, a container that a thread-local's initializer fills) is not settled by a flat run whose units came from one thread",
+        "it waits for its second look at once, with the reason `kept per thread; the units came from one thread`, even while first-pass candidates are pending, and `dla ledger close-rest` leaves it",
+        "Only a second look settles it: another driver on the same one thread does not",
+        "Its unit skeleton has a sixth slot, `threads` (the caller's thread, a small fixed pool, the runtime's shared pool where it has one, a new thread per unit that ends), which the unit must use and which cannot be given up",
+    ] {
+        assert!(stages.contains(want), "stages.md lacks: {want}");
+    }
+    for (file, wants) in [
+        (
+            "jvm.md",
+            &[
+                "an initializer that runs again after the thread-local was cleared adds an entry for the same live thread",
+                "tasks of the common fork-join pool, on an executor service with a few threads and on a new thread per unit that ends, not only on the caller's thread",
+            ][..],
+        ),
+        (
+            "python.md",
+            &[
+                "a container filled in the `__init__` of a `threading.local` subclass",
+                "the units must run on a `ThreadPoolExecutor` and on a new thread per unit that ends, not only on the caller's thread",
+            ][..],
+        ),
+        (
+            "rust.md",
+            &[
+                "A `thread_local!` holder, and a container of a module or type that owns one, is kept per thread",
+                "a new thread per unit (`std::thread::spawn`, joined) and on a small pool of threads that live across units",
+            ][..],
+        ),
+        (
+            "node.md",
+            &[
+                "An `AsyncLocalStorage` holder, and a container of a module or class that owns one, is kept per context or thread",
+                "`worker_threads` (a new worker per unit that ends, and a few that live across units) and in separate async contexts",
+            ][..],
+        ),
+        (
+            "go.md",
+            &[
+                "Go has no thread-local: per-goroutine state is a map keyed by an id, and the census records no key types",
+                "run its units as goroutines, one per unit, and as a few goroutines that live across units",
+            ][..],
+        ),
+    ] {
+        let text = read(&format!("{refs}/{file}"));
+        for want in wants {
+            assert!(text.contains(want), "{file} lacks: {want}");
+        }
+    }
+    let verify = fs::read_to_string(root().join("docs/VERIFY.md")).unwrap();
+    assert!(
+        verify.contains("| A holder kept per thread read flat from one thread and was closed (a JVM library the tool had not been run on) | corrected |"),
+        "VERIFY.md lacks the row"
+    );
+    let jvm = read(&format!("{refs}/jvm.md"));
+    for want in [
+        "gets a `jvm-instance` probe ahead of the class probe: the class probe reads only the static fields of the owner class",
+        "by one walk from the static fields of the driver's class, the values of the thread-locals of every live platform thread and the static fields of the project's initialized classes",
+        "So `setup` must keep the object that owns the field in a static field of the driver class, or in a thread-local of the thread that runs the units",
+        "The walk never loads or initializes a class and calls no method of a project class; it stops at 1,000,000 objects or 5 seconds",
+    ] {
+        assert!(jvm.contains(want), "jvm.md lacks: {want}");
+    }
+    let readme = read("harness/jvm/README.md");
+    for want in [
+        "`probes`, `JvmInstance { class, field }`: an instance field of the live instances of a class (a",
+        "no method of a project class is called and no class is loaded",
+        "When no instance is found the record has an `error`, no figures and `instances: 0`",
+    ] {
+        assert!(readme.contains(want), "README.md lacks: {want}");
+    }
+    assert!(
+        verify.contains("| A JVM probe read static fields only, so a list held in an instance field read flat (a JVM library the tool had not been run on) | corrected |"),
+        "VERIFY.md lacks the instance-field row"
+    );
+    assert!(!read("skills/detect-leak-anywhere/SKILL.md").contains("kept per thread"));
+}

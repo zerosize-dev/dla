@@ -866,6 +866,7 @@ public final class DlaDump {
         List<?> specs = parsed instanceof Map<?, ?> m && m.get("probes") instanceof List<?> l ? l
             : parsed instanceof List<?> l2 ? l2 : List.of();
         Map<String, Class<?>> loaded = null;
+        List<InstanceTarget> instanceTargets = new ArrayList<>();
         for (Object o : specs) {
             if (!(o instanceof Map<?, ?> spec)) {
                 continue;
@@ -891,6 +892,24 @@ public final class DlaDump {
                             out.add(probeOne(id, cname, f, lim));
                         }
                     }
+                } else if (kind.equals("jvminstance")) {
+                    String fname = str(target.get("field"));
+                    Field f = null;
+                    for (Class<?> k = c; k != null && f == null; k = k.getSuperclass()) {
+                        try {
+                            f = k.getDeclaredField(fname);
+                        } catch (NoSuchFieldException e) {
+                            // the next superclass
+                        }
+                    }
+                    if (f == null) {
+                        out.add(instanceRecord(id, fname, cname + "." + fname, null, 0, 0, 0, "no such field"));
+                    } else if (Modifier.isStatic(f.getModifiers())) {
+                        out.add(instanceRecord(id, fname, cname + "." + fname, null, 0, 0, 0,
+                            "the field is static: a jvm-static probe reads it"));
+                    } else {
+                        instanceTargets.add(new InstanceTarget(id, cname, f, c));
+                    }
                 } else if (kind.equals("jvmstatic")) {
                     String fname = str(target.get("field"));
                     Field f = null;
@@ -905,6 +924,15 @@ public final class DlaDump {
                 }
             } catch (Throwable t) {
                 out.add(probeRecord(id, null, null, null, 0, 0, null, t.toString()));
+            }
+        }
+        if (!instanceTargets.isEmpty()) {
+            try {
+                instanceProbes(instanceTargets, lim, out);
+            } catch (Throwable t) {
+                for (InstanceTarget it : instanceTargets) {
+                    out.add(instanceRecord(it.id, it.field.getName(), it.path, null, 0, 0, 0, t.toString()));
+                }
             }
         }
         return out;
@@ -1133,6 +1161,438 @@ public final class DlaDump {
                 + " (the agent opens java.base/java.lang itself with Instrumentation.redefineModule;"
                 + " it failed here, or this JDK keeps the thread maps elsewhere)");
             return probeRecord(id, f.getName(), path, null, 0, 0, null, why);
+        }
+    }
+
+    // ------------------------------------------------------------------ instance probes
+
+    /**
+     * Upper bound of the objects one instance walk visits (every checkpoint walks once, for all the
+     * jvm-instance probes together). A walk of the static fields of a small service reaches a few
+     * thousand objects; a million keeps the walk under a second on a library with a large object
+     * graph and well above what a leak a few hundred units old needs.
+     */
+    private static final long INSTANCE_WALK_OBJECTS =
+        envLong("DLA_INSTANCE_WALK_OBJECTS") == null ? 1_000_000L : envLong("DLA_INSTANCE_WALK_OBJECTS");
+    /** Upper bound of the time of one instance walk, in milliseconds. */
+    private static final long INSTANCE_WALK_MILLIS =
+        envLong("DLA_INSTANCE_WALK_MS") == null ? 5_000L : envLong("DLA_INSTANCE_WALK_MS");
+
+    /** One jvm-instance probe: the field of the live instances of a class. */
+    private static final class InstanceTarget {
+        final String id;
+        final String cname;
+        final String path;
+        final Field field;
+        final Class<?> cls;
+        final List<Object> found = new ArrayList<>();
+
+        InstanceTarget(String id, String cname, Field field, Class<?> cls) {
+            this.id = id;
+            this.cname = cname;
+            this.field = field;
+            this.cls = cls;
+            this.path = cname + "." + field.getName();
+        }
+    }
+
+    private static Map<String, Object> instanceRecord(String id, String name, String path, Long size, long reachable,
+            long bytes, long instances, String error) {
+        Map<String, Object> r = probeRecord(id, name, path, size, reachable, bytes, null, error);
+        r.put("instances", instances);
+        return r;
+    }
+
+    /**
+     * The jvm-instance probes of one checkpoint: one breadth-first walk from the roots finds the
+     * live instances of every probed class (a subclass counts), then each probe reads its field of
+     * the instances it found. The roots, nearest first: the static fields of the driver's own
+     * class, the values of the thread-locals of every live platform thread, and the static fields
+     * of the project's loaded classes. The walk never loads a class, never initialises one (a static
+     * field of a class that is not initialised yet is not read: reading it would run the class's
+     * initialiser) and calls no method of a project class: a collection or map of the JDK is
+     * iterated, an object of any other class is read field by field. It stops at
+     * {@link #INSTANCE_WALK_OBJECTS} objects or {@link #INSTANCE_WALK_MILLIS} milliseconds and says so
+     * in the limitations, with the instances it had found by then.
+     */
+    private static void instanceProbes(List<InstanceTarget> targets, List<String> lim, List<Object> out) {
+        Instrumentation in = inst;
+        if (in == null) {
+            for (InstanceTarget t : targets) {
+                String why = "no Instrumentation: the loaded classes cannot be listed, so the live instances cannot be found";
+                lim.add("probe " + t.path + ": " + why);
+                out.add(instanceRecord(t.id, t.field.getName(), t.path, null, 0, 0, 0, why));
+            }
+            return;
+        }
+        long start = System.nanoTime();
+        long deadline = start + INSTANCE_WALK_MILLIS * 1_000_000L;
+        InstanceWalk walk = new InstanceWalk(targets, INSTANCE_WALK_OBJECTS);
+        List<String> notes = new ArrayList<>();
+        // The driver's own static fields first: the state the units work on.
+        List<Class<?>> loadedRoots = rootClasses(in, notes);
+        for (Class<?> c : loadedRoots) {
+            if (isDriverClass(c)) {
+                walk.addStaticRoots(c, true);
+            }
+        }
+        // Then the values the live platform threads keep in thread-locals.
+        try {
+            for (Thread t : Thread.getAllStackTraces().keySet()) {
+                for (String mapField : new String[] {"threadLocals", "inheritableThreadLocals"}) {
+                    for (Object v : threadLocalValues(t, mapField)) {
+                        walk.offer(v);
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            notes.add("thread-local values unreadable (" + t + "): thread-locals are not roots of the walk");
+        }
+        // Then the static fields of the other classes of the project.
+        for (Class<?> c : loadedRoots) {
+            if (!isDriverClass(c)) {
+                walk.addStaticRoots(c, false);
+            }
+        }
+        walk.run(deadline);
+        if (walk.stopped != null) {
+            notes.add("the instance walk stopped at " + walk.stopped
+                + ": the instances found by then are counted, one not reached yet is missing");
+        }
+        if (walk.uninitialised > 0 && walk.initCheck == null) {
+            notes.add("cannot tell whether a class is initialised on this JDK: only the static fields of the driver's class are roots");
+        }
+        for (String n : notes) {
+            lim.add("jvm-instance walk: " + n);
+        }
+        for (InstanceTarget t : targets) {
+            out.add(instanceFigures(t, walk, lim));
+        }
+    }
+
+    private static Map<String, Object> instanceFigures(InstanceTarget t, InstanceWalk walk, List<String> lim) {
+        String name = t.field.getName();
+        if (t.found.isEmpty()) {
+            String why = "no live instance of " + t.cname + " found from the static fields of the project's classes, the thread-locals of the live threads and the driver's fields ("
+                + walk.count + " objects walked" + (walk.stopped == null ? "" : ", walk stopped at " + walk.stopped) + "): nothing measured";
+            lim.add("probe " + t.path + ": " + why);
+            return instanceRecord(t.id, name, t.path, null, 0, 0, 0, why);
+        }
+        try {
+            t.field.setAccessible(true);
+            long sum = 0;
+            boolean sized = false;
+            Walker w = new Walker();
+            int read = 0;
+            for (Object o : t.found) {
+                Object v;
+                try {
+                    v = t.field.get(o);
+                } catch (Throwable ignored) {
+                    continue;
+                }
+                read++;
+                Long s = sizeOf(v);
+                if (s != null) {
+                    sum += s;
+                    sized = true;
+                }
+                w.add(v);
+            }
+            w.run();
+            if (read == 0) {
+                String why = "the field of the " + t.found.size() + " instance(s) found could not be read";
+                lim.add("probe " + t.path + ": " + why);
+                return instanceRecord(t.id, name, t.path, null, 0, 0, t.found.size(), why);
+            }
+            if (w.truncated) {
+                lim.add("probe " + t.path + " walk truncated at " + MAX_OBJECTS + " objects");
+            }
+            return instanceRecord(t.id, name, t.path, sized ? Long.valueOf(sum) : null, w.count, w.bytes,
+                t.found.size(), null);
+        } catch (Throwable e) {
+            return instanceRecord(t.id, name, t.path, null, 0, 0, t.found.size(), e.toString());
+        }
+    }
+
+    private static boolean isDriverClass(Class<?> c) {
+        String n = c.getName();
+        String simple = n.substring(n.lastIndexOf('.') + 1);
+        return simple.equals("DlaLoop") || simple.equals("DlaJUnitLoop");
+    }
+
+    /** Loaded classes whose static fields are roots, by name: the driver's and the project's own. */
+    private static List<Class<?>> rootClasses(Instrumentation in, List<String> notes) {
+        Path project = projectRoot();
+        List<String> packages = projectPackages();
+        java.util.TreeMap<String, Class<?>> own = new java.util.TreeMap<>();
+        for (Class<?> c : in.getAllLoadedClasses()) {
+            try {
+                Boolean known;
+                synchronized (ROOT_CLASS) {
+                    known = ROOT_CLASS.get(c);
+                }
+                if (known == null) {
+                    known = rootClass(c, project, packages);
+                    synchronized (ROOT_CLASS) {
+                        ROOT_CLASS.put(c, known);
+                    }
+                }
+                if (known) {
+                    own.put(c.getName() + "@" + System.identityHashCode(c), c);
+                }
+            } catch (Throwable ignored) {
+                // skip this class
+            }
+        }
+        return new ArrayList<>(own.values());
+    }
+
+    private static final Map<Class<?>, Boolean> ROOT_CLASS = new java.util.WeakHashMap<>();
+    private static final Map<Class<?>, Field[]> ROOT_STATICS = new java.util.WeakHashMap<>();
+
+    private static boolean rootClass(Class<?> c, Path project, List<String> packages) throws Exception {
+        String n = c.getName();
+        ClassLoader l = c.getClassLoader();
+        if (c.isArray() || c.isHidden() || c.isPrimitive() || n.contains("$$Lambda") || n.startsWith("dla.harness.")
+            || l == null || l == ClassLoader.getPlatformClassLoader()
+            || n.startsWith("java.") || n.startsWith("jdk.") || n.startsWith("sun.")) {
+            return false;
+        }
+        if (isDriverClass(c) || isProjectClass(c, project, packages)) {
+            return true;
+        }
+        // The project's own tests (a JUnit driver's test classes) lie under the project too.
+        var source = c.getProtectionDomain().getCodeSource();
+        return source != null && source.getLocation() != null && project != null
+            && locationUnder(source.getLocation().toExternalForm(), project)
+            && !n.startsWith("org.springframework.boot.loader.");
+    }
+
+    private static Field[] staticRootFields(Class<?> c) {
+        synchronized (ROOT_STATICS) {
+            Field[] known = ROOT_STATICS.get(c);
+            if (known != null) {
+                return known;
+            }
+        }
+        List<Field> out = new ArrayList<>();
+        try {
+            for (Field f : c.getDeclaredFields()) {
+                if (probeField(f)) {
+                    try {
+                        f.setAccessible(true);
+                        out.add(f);
+                    } catch (Throwable ignored) {
+                        // not accessible: not a root
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+            // a class whose field types cannot be resolved has no roots
+        }
+        Field[] arr = out.toArray(new Field[0]);
+        synchronized (ROOT_STATICS) {
+            ROOT_STATICS.put(c, arr);
+        }
+        return arr;
+    }
+
+    private static volatile Object unsafeInternal;
+    private static volatile java.lang.reflect.Method shouldBeInitialized;
+    private static volatile boolean initCheckTried;
+
+    /**
+     * True when the class is initialised, false when it is not, null when this JDK does not tell
+     * (jdk.internal.misc.Unsafe is exported to the agent's module by DlaAgent; without it the answer
+     * is unknown). Reading a static field of a class that is not initialised would run its
+     * initialiser, which is project code.
+     */
+    private static Boolean initialised(Class<?> c) {
+        if (!initCheckTried) {
+            initCheckTried = true;
+            try {
+                Class<?> u = Class.forName("jdk.internal.misc.Unsafe");
+                Object unsafe = u.getMethod("getUnsafe").invoke(null);
+                java.lang.reflect.Method m = u.getMethod("shouldBeInitialized", Class.class);
+                unsafeInternal = unsafe;
+                shouldBeInitialized = m;
+            } catch (Throwable ignored) {
+                // unknown
+            }
+        }
+        java.lang.reflect.Method m = shouldBeInitialized;
+        if (m == null) {
+            return null;
+        }
+        try {
+            return !(Boolean) m.invoke(unsafeInternal, c);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** Every value of the thread's thread-local maps (the map of the thread and the inheritable one). */
+    private static List<Object> threadLocalValues(Thread t, String mapField) throws Exception {
+        List<Object> out = new ArrayList<>();
+        Field mf = Thread.class.getDeclaredField(mapField);
+        mf.setAccessible(true);
+        Object map = mf.get(t);
+        if (map == null) {
+            return out;
+        }
+        Field tf = map.getClass().getDeclaredField("table");
+        tf.setAccessible(true);
+        Object[] table = (Object[]) tf.get(map);
+        if (table == null) {
+            return out;
+        }
+        Field vf = null;
+        for (Object e : table) {
+            if (e == null) {
+                continue;
+            }
+            if (vf == null) {
+                vf = e.getClass().getDeclaredField("value");
+                vf.setAccessible(true);
+            }
+            Object v = vf.get(e);
+            if (v != null) {
+                out.add(v);
+            }
+        }
+        return out;
+    }
+
+    /** The cached answer: does the class belong to the JDK (its collections may be iterated by API). */
+    private static final Map<Class<?>, Boolean> JDK_CLASS = new java.util.WeakHashMap<>();
+
+    private static boolean jdkClass(Class<?> c) {
+        synchronized (JDK_CLASS) {
+            Boolean b = JDK_CLASS.get(c);
+            if (b == null) {
+                b = isJdk(c);
+                JDK_CLASS.put(c, b);
+            }
+            return b;
+        }
+    }
+
+    /** A breadth-first walk of the object graph that collects the instances of the probed classes. */
+    private static final class InstanceWalk {
+        final List<InstanceTarget> targets;
+        final long maxObjects;
+        final IdentityHashMap<Object, Object> seen = new IdentityHashMap<>();
+        final ArrayDeque<Object> queue = new ArrayDeque<>();
+        long count;
+        String stopped;
+        int uninitialised;
+        Boolean initCheck = Boolean.TRUE;
+
+        InstanceWalk(List<InstanceTarget> targets, long maxObjects) {
+            this.targets = targets;
+            this.maxObjects = maxObjects;
+        }
+
+        /** Adds the objects the static fields of c hold; a class that is not initialised is not read. */
+        void addStaticRoots(Class<?> c, boolean driver) {
+            Field[] fields = staticRootFields(c);
+            if (fields.length == 0) {
+                return;
+            }
+            // The driver's class is running its own code: it is initialised.
+            if (!driver) {
+                Boolean init = initialised(c);
+                if (init == null) {
+                    initCheck = null;
+                    uninitialised++;
+                    return;
+                }
+                if (!init) {
+                    return;
+                }
+            }
+            for (Field f : fields) {
+                try {
+                    offer(f.get(null));
+                } catch (Throwable ignored) {
+                    // unreadable: not a root
+                }
+            }
+        }
+
+        void offer(Object o) {
+            if (o == null || stopped != null || !walkable(o) || skip(o) || seen.put(o, PRESENT) != null) {
+                return;
+            }
+            if (count >= maxObjects) {
+                stopped = "the bound of " + maxObjects + " objects";
+                return;
+            }
+            count++;
+            for (InstanceTarget t : targets) {
+                if (t.cls.isInstance(o)) {
+                    t.found.add(o);
+                }
+            }
+            queue.add(o);
+        }
+
+        /**
+         * Whether the walk looks at the object: what a plain walk descends into, and the instances
+         * of a project class that extends a reference type (its own fields count, the referent does not).
+         */
+        private boolean walkable(Object o) {
+            return descend(o) || (o instanceof Reference<?> && !jdkClass(o.getClass()));
+        }
+
+        void run(long deadline) {
+            long steps = 0;
+            while (!queue.isEmpty() && stopped == null) {
+                if ((++steps & 1023) == 0 && System.nanoTime() > deadline) {
+                    stopped = "the time bound of " + INSTANCE_WALK_MILLIS + " ms";
+                    return;
+                }
+                Object o = queue.poll();
+                try {
+                    expand(o);
+                } catch (Throwable ignored) {
+                    // concurrent modification or inaccessible state: keep what was found
+                }
+            }
+        }
+
+        private void expand(Object o) throws Exception {
+            if (o instanceof Object[] arr) {
+                for (Object e : arr) {
+                    offer(e);
+                }
+                return;
+            }
+            Class<?> c = o.getClass();
+            if (jdkClass(c)) {
+                if (o instanceof Map<?, ?> m) {
+                    for (Map.Entry<?, ?> e : m.entrySet()) {
+                        offer(e.getKey());
+                        offer(e.getValue());
+                    }
+                } else if (o instanceof Collection<?> col) {
+                    for (Object e : col) {
+                        offer(e);
+                    }
+                } else if (o instanceof Optional<?> opt) {
+                    offer(opt.orElse(null));
+                } else if (o instanceof AtomicReference<?> ref) {
+                    offer(ref.get());
+                } else if (o instanceof Map.Entry<?, ?> e) {
+                    offer(e.getKey());
+                    offer(e.getValue());
+                }
+                return;
+            }
+            for (Field f : fieldsOf(c)) {
+                offer(f.get(o));
+            }
         }
     }
 
