@@ -174,6 +174,8 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
 - Purges: `trim-native-heap` (DiagnosticCommand) and `gc`.
 - The harness never attaches: it reads NMT and the histogram in-process.
 
+A holder kept per thread (a `ThreadLocal`, a list or map of a class that owns one, a container that the initializer of a `ThreadLocal` fills) grows with the threads the units come from, and an initializer that runs again after the thread-local was cleared adds an entry for the same live thread: the driver block says so for such a target, and the units must run as tasks of the common fork-join pool, on an executor service with a few threads and on a new thread per unit that ends, not only on the caller's thread (the project's own tests and every driver run units there, so such a target stays pending after the first pass).
+
 ## Attach backends (`dla attach jcmd --pid <P> --op <op>`)
 | Op | Tier | Notes |
 |---|---|---|

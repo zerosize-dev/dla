@@ -1,0 +1,47 @@
+A holder kept per thread waits for a second look whose units come from many threads
+
+From the miss on a JVM library in the unattended test on projects the tool
+had never seen. The documented leak is a list of a helper class that keeps
+one entry per thread: a thread-local's initializer adds the entry, and it
+goes when its thread dies. On the runtime's shared fork-join pool the
+workers clear their thread-locals before each task, so the initializer
+runs again for the same live thread and the list grows without bound; on
+one thread it stays flat. The loop over the project's tests ran the
+initializer once per test thread, the target read `executed`, every
+column was flat, and the queue settled it. Four minutes in, `dla ledger
+close-rest` closed it with 57 others before any second look, and the
+second-look recipe said nothing about threads.
+
+- The census records two facts: whether a holder's owner class also owns
+  a thread-local (`thread_class`), and whether a writer site lies in a
+  thread-local initializer (`thread_init`: on the JVM the lambda or method
+  reference given to `withInitial`, and an `initialValue` method; in
+  Python the `__init__` of a subclass of `threading.local`). A target is
+  kept per thread when its holder is a thread-local, its owner class owns
+  one, or an adding site is in such an initializer.
+- A first-pass run counts as one thread: the driver templates run units on
+  the caller's thread unless a hook starts threads, and the agents' thread
+  counts include the runtime's own threads. A target kept per thread that
+  such a run read flat is not settled: it waits for its second look at
+  once, with the reason "kept per thread; the units came from one thread",
+  and `close-rest` leaves it. Only a second-look harness ends the wait.
+- Its driver block says that units must come from many threads and from
+  pooled ones, with the forms of each runtime (a shared pool where the
+  runtime has one, a small fixed pool, a new thread per unit that ends).
+  The second-look skeleton gets a sixth slot, `threads`, which `dla
+  harness run` refuses to leave unused and which cannot be given up.
+
+Shown on a two-class JVM project with a real build: a class whose `use()`
+removes its thread-local after each call grows on a fixed pool of four
+threads (198 entries), a class that never removes stays at four entries,
+and both stay pending after a flat first pass on one thread.
+
+The whole dynamic acceptance passes: 63 of 64 fixtures and the expected
+failure.
+
+Not covered. The JVM probe reads static fields only: an instance field
+of a long-lived object, as in the run above, is read as "class loaded"
+and is never measured, so the test measures the list sizes itself. A map
+keyed by a thread or a thread id is not recognised (the census records no
+key types). The Rust `thread_local!` initializer has no writer-site facts.
+Not run on the real library. The Python detection is a scan of the text.

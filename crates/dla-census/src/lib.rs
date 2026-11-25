@@ -44,6 +44,7 @@ pub mod parse;
 mod pyimports;
 pub mod sites;
 pub mod statement;
+pub mod threads;
 pub mod usage;
 pub mod vocab;
 pub mod walk;
@@ -87,7 +88,7 @@ pub fn census(ctx: &ToolCtx, lang: Runtime) -> Result<StageOutcome, Refusal> {
     found.raws.retain(|r| inside(&r.file));
     let usages = usage::find(&found.raws, &files);
     let analysed = sites::analyse(&found.raws, &usages, &files);
-    let entries: Vec<CensusEntry> = found
+    let mut entries: Vec<CensusEntry> = found
         .raws
         .iter()
         .zip(&usages)
@@ -112,6 +113,7 @@ pub fn census(ctx: &ToolCtx, lang: Runtime) -> Result<StageOutcome, Refusal> {
             }
         })
         .collect();
+    threads::mark(&mut entries, &files);
 
     let stage = ctx.stage_dir("census")?;
     let raw_name = format!("census/{}.json", lang.as_str());

@@ -1096,6 +1096,7 @@ mod tests {
                     param: false,
                     constant: false,
                     exported: false,
+                    thread_init: false,
                 }],
                 ..Default::default()
             },

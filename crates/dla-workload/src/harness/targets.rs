@@ -93,6 +93,9 @@ pub struct Target {
     pub writer_gap: Vec<String>,
     /// The harness whose run read the target `writer_not_executed` (empty when none did).
     pub writer_gap_in: String,
+    /// The holder is kept per thread (see `dla_core::census::HolderFacts::thread_keyed`): it
+    /// grows with the number of distinct threads or thread lifetimes the units come from.
+    pub thread_keyed: bool,
 }
 
 /// The crate features a Rust site lies behind, and whether the driver build enables them.
@@ -646,6 +649,10 @@ pub fn describe(
                 feature_command: String::new(),
                 writer_gap: Vec::new(),
                 writer_gap_in: String::new(),
+                thread_keyed: dla_core::census::thread_keyed(
+                    f.and_then(|f| f.holder),
+                    ann.map(|a| &a.facts),
+                ),
             }
         })
         .collect()
@@ -909,6 +916,10 @@ impl Target {
                 dla_core::features::lead(&sites, &self.feature_command)
             ));
         }
+        if self.thread_keyed {
+            // The explanation is printed once above the targets of the block.
+            out.push(format!("  threads: {THREAD_POINTER}"));
+        }
         if self.key_note.is_some() {
             // The explanation is printed once above the targets of the block.
             out.push(format!("  key: {KEY_POINTER}"));
@@ -943,6 +954,7 @@ impl Target {
             "sibling_of": self.sibling_of,
             "writer_functions": self.entry.as_ref().map(|e| &e.writer_functions),
             "writer_gap": (!self.writer_gap.is_empty()).then_some(&self.writer_gap),
+            "thread_keyed": self.thread_keyed.then_some(true),
             "feature_gate": self.feature_gate.as_ref().map(FeatureGate::text),
             "feature_sites": (!self.gated_sites().is_empty()).then(|| {
                 dla_core::features::lead(&self.gated_sites(), &self.feature_command)
@@ -964,6 +976,39 @@ pub const ENTRY_RULES: [&str; 6] = [
     "- a unit covers the life of the objects it touches: create, derive (also from derived objects), use, cancel or close, drop or release, and not always in the same order (vary it by key)",
     "- write one line in VARIES.txt next to the driver: what a caller varies per unit; dla harness run refuses the harness until it is written",
 ];
+
+/// What a thread-keyed target's line says; the paragraph is printed once above the targets.
+const THREAD_POINTER: &str = "this holder is kept per thread (see Threads above)";
+
+/// The paragraph of the block about targets whose holder is kept per thread, once, above the
+/// targets: the units have to come from many threads and from pooled threads, and the concrete
+/// forms in the language of the driver.
+pub fn thread_note(rt: dla_core::runtime::Runtime) -> String {
+    use dla_core::runtime::Runtime;
+    let forms = match rt {
+        Runtime::Jvm => {
+            "run units as tasks of the runtime's common fork-join pool, on an executor service with a few threads that live across units, and on a new thread per unit that ends (start it and join it)"
+        }
+        Runtime::Python => {
+            "run units on a thread pool executor with a few threads that live across units, and on a new thread per unit that ends"
+        }
+        Runtime::Rust => {
+            "run units on a new thread per unit (std::thread::spawn, joined), and on a small pool of threads that live across units"
+        }
+        Runtime::Node => {
+            "run units in worker threads (a new worker per unit that ends, and a few workers that live across units) and in separate async contexts"
+        }
+        Runtime::Go => {
+            "run units in goroutines, one per unit, and in a few goroutines that live across units"
+        }
+        Runtime::Native => {
+            "run units on a new thread per unit that ends, and on a few threads that live across units"
+        }
+    };
+    format!(
+        "Threads: a target marked `threads:` below is kept per thread, so it grows with the number of distinct threads or thread lifetimes the units come from, and a unit on the caller's thread alone reads flat. The units must come from many threads and from pooled threads, not only from the caller's thread: {forms}."
+    )
+}
 
 /// The line of a broad batch's block about targets whose code does not run, and the helper
 /// that takes order and depth from the key.
@@ -1011,26 +1056,49 @@ const SECOND_LOOK_TODOS: [&str; 5] = [
     "  - one long-lived object reused across units next to a fresh one per unit",
 ];
 
+fn number_word(n: usize) -> String {
+    match n {
+        5 => "five".to_owned(),
+        6 => "six".to_owned(),
+        n => n.to_string(),
+    }
+}
+
 /// The lines of a second-look harness's block, above its targets.
 pub fn second_look_notes(
     missed: &std::collections::BTreeMap<FindingId, dla_core::queue::Miss>,
     asked: &[Asked],
     helper: &str,
+    threads: bool,
 ) -> Vec<String> {
     let mut out = vec![
         "Second look: one flat run of one driver settled these targets (their code ran and their holder stayed flat), and budget is left. A flat reading of one arbitrary unit says that unit does not leak; a leak that needs a sequence stays hidden. This harness needs a DIFFERENT driver: dla harness run refuses hooks equal to an earlier harness's, and a VARIES.txt line per target (what this driver does that the first did not).".to_owned(),
         "To vary, at least some of:".to_owned(),
     ];
     out.extend(SECOND_LOOK_TODOS.iter().map(|l| (*l).to_owned()));
+    let slots = dla_core::harness::second_look_slots(threads);
+    let names: Vec<&str> = slots.iter().map(|s| s.0).collect();
     out.push(format!(
-        "Write the unit as CHOICES, not as one fixed sequence: a fixed sequence runs one case for every unit, and a leak that needs another order never shows. The unit hook below starts with five slot variables taken from the key with {helper}(key, slot, n) (depth, ending, when, order, outcome; each line says its options). Every slot variable must be used by the unit: a slot left out is a whole dimension of sequences never tried, and dla harness run refuses the harness. A slot that truly does not apply to the API of the targets is given up only by replacing its line with a comment `slot <name>: not applicable: <reason>` (at most {} of the {})",
+        "Write the unit as CHOICES, not as one fixed sequence: a fixed sequence runs one case for every unit, and a leak that needs another order never shows. The unit hook below starts with {} slot variables taken from the key with {helper}(key, slot, n) ({}; each line says its options). Every slot variable must be used by the unit: a slot left out is a whole dimension of sequences never tried, and dla harness run refuses the harness. A slot that truly does not apply to the API of the targets is given up only by replacing its line with a comment `slot <name>: not applicable: <reason>` (at most {} of the {}{})",
+        number_word(slots.len()),
+        names.join(", "),
         dla_core::harness::SLOTS_GIVEN_UP_MAX,
-        dla_core::harness::SECOND_LOOK_SLOTS.len()
+        dla_core::harness::SECOND_LOOK_SLOTS.len(),
+        if threads {
+            "; the threads slot cannot be given up, because the holder is kept per thread and a unit that stays on the caller's thread reads flat"
+        } else {
+            ""
+        }
     ));
     for a in asked {
         if let Some(m) = missed.get(&a.id) {
+            let why = if m.detail == dla_core::queue::THREAD_REASON {
+                format!(" ({})", m.detail)
+            } else {
+                String::new()
+            };
             out.push(format!(
-                "  {} was read flat in {}: read the unit of that harness (harness/{}/driver) and do something else",
+                "  {} was read flat in {}{why}: read the unit of that harness (harness/{}/driver) and do something else",
                 a.id, m.harness, m.harness
             ));
         }
@@ -1163,6 +1231,7 @@ mod tests {
             feature_command: String::new(),
             writer_gap: Vec::new(),
             writer_gap_in: String::new(),
+            thread_keyed: false,
             key_note: None,
         }
     }
@@ -1190,6 +1259,62 @@ mod tests {
             "    # Also: a unit covers the life of the objects it touches: create, derive (also from derived objects), use, cancel or close, drop or release, and not always in the same order (vary it by key)\n"
         ));
         assert!(text.starts_with("\"\"\"Fill"), "{text}");
+    }
+
+    #[test]
+    fn a_thread_keyed_target_is_marked_and_the_paragraph_names_the_forms_of_each_runtime() {
+        use dla_core::runtime::Runtime;
+        let mut t = target();
+        assert!(!t.lines().iter().any(|l| l.contains("threads:")));
+        assert!(t.json()["thread_keyed"].is_null());
+        t.thread_keyed = true;
+        assert!(
+            t.lines()
+                .iter()
+                .any(|l| l.starts_with("  threads: this holder is kept per thread"))
+        );
+        assert_eq!(t.json()["thread_keyed"], true);
+        for (rt, forms) in [
+            (
+                Runtime::Jvm,
+                &[
+                    "common fork-join pool",
+                    "executor service",
+                    "new thread per unit",
+                ][..],
+            ),
+            (
+                Runtime::Python,
+                &["thread pool executor", "new thread per unit"],
+            ),
+            (
+                Runtime::Rust,
+                &["std::thread::spawn", "small pool of threads"],
+            ),
+            (Runtime::Node, &["worker", "async contexts"]),
+            (Runtime::Go, &["goroutines"]),
+        ] {
+            let note = thread_note(rt);
+            assert!(note.contains("not only from the caller's thread"), "{note}");
+            for f in forms {
+                assert!(note.contains(f), "{rt:?}: {f}: {note}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_second_look_block_counts_six_slots_with_threads_and_five_without() {
+        let missed = std::collections::BTreeMap::new();
+        let five = second_look_notes(&missed, &[], "choice", false).join("\n");
+        assert!(five.contains("starts with five slot variables"), "{five}");
+        assert!(!five.contains("threads"), "{five}");
+        let six = second_look_notes(&missed, &[], "choice", true).join("\n");
+        assert!(six.contains("starts with six slot variables"), "{six}");
+        assert!(
+            six.contains("depth, ending, when, order, outcome, threads"),
+            "{six}"
+        );
+        assert!(six.contains("the threads slot cannot be given up"), "{six}");
     }
 
     #[test]
@@ -1263,6 +1388,7 @@ mod tests {
             feature_command: String::new(),
             writer_gap: Vec::new(),
             writer_gap_in: String::new(),
+            thread_keyed: false,
             key_note: None,
         }
     }
@@ -1561,6 +1687,7 @@ mod open;
                 param,
                 constant,
                 exported: false,
+                thread_init: false,
             }],
             ..HolderFacts::default()
         }

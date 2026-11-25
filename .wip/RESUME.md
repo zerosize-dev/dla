@@ -3293,3 +3293,30 @@ unattended run at a time and no builder beside it.
 - BUILDER J started (Sonnet): thread-kind-brief.md (updated: whole dynamic run, capture-first note,
   restarts). Scratch u128.
 - Disk: cleaned stale build dirs again (8.5 GB free).
+
+## 06:40 UTC 2026-11-25: CI on 93a9bb3 failed go_batch on Windows; fixed; 91196f4 in CI
+
+- go_batch.rs a_package_that_cannot_hold_the_driver_is_skipped...: on Windows the go list error
+  quotes a long temp path; with G2's extra _attention line the output went over 2048 bytes, strings
+  were cut to 200 chars, and the note lost "stay pending and are not targeted". Fixed by me in
+  gen.rs: the note says what it means first and the reason last ("...was taken (<why>)"), the
+  _attention short form parses the new order; test asserts the same facts in the new order.
+- Builder J had already edited gen.rs: the CI commit takes 93a9bb3's gen.rs + my two hunks
+  (u131/gen.rs), not the working tree's. The working tree has the same two hunks plus J's edits.
+- 91196f4 pushed (waiter u115/ci-wip-34). When green: commit-snapshot-tree.sh 91196f4 with
+  commit-message-32.txt (add a line about the note order), push, preview.9.
+
+## 07:20 UTC 2026-11-25: builder J done and checked
+
+- J: census facts thread_class / thread_init (crates/dla-census/src/threads.rs), HolderFacts::
+  thread_keyed; queue: a thread-keyed target read flat on a first pass waits for its second look at
+  once (THREAD_REASON), only a second-look harness ends the wait; driver block Threads: paragraph;
+  sixth slot `threads` (cannot be given up); JVM CLI test thread_kind.rs (198 vs 4 entries). Whole
+  dynamic 63/64 + xfail. Checked by me: no names; mutation (thread_class -> false) caught by 3
+  tests; fixed recovery.md "five slot variables" (six for a holder kept per thread).
+- J FOUND A MAJOR GENERAL DEFECT (not fixed): the JVM probe reads STATIC fields only; an instance
+  field of a long-lived object reads "class loaded" (`executed`) and is never measured. The JVM
+  blind run's documented list is an instance field: its "flat" reading measured nothing. Needs a
+  builder (brief K) BEFORE the JVM rerun.
+- Commit message 33 ready. Order: 91196f4 (G2) green -> main (msg 32 + note-order line); then J
+  tree for CI -> main (msg 33); then preview.9; then brief K.

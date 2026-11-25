@@ -41,7 +41,9 @@ A PACKAGE OF A NESTED MODULE
 - Coverage covers every module of the workspace that the driver links.
 - A package whose only non-test Go files are generated is refused with
   that reason; `--next` goes on to the next package and names the skipped
-  one in `_attention`.
+  one in `_attention`. The note on a skipped package says what it means
+  first and its reason last, so a long reason (a path of the machine) is
+  what a bounded output cuts.
 
 On the copy of the library, with hooks that do nothing, drivers for
 packages of two nested modules build, run, write a series and give `dla
