@@ -3387,3 +3387,5 @@ unattended run at a time and no builder beside it.
   started (Sonnet): wip-notes/flaky-alloc-brief.md (os.rss_file trim purge does not apply;
   MIN_EXPECTED_RISES window extension; 20 runs under load before/after; whole dynamic run).
   Scratch u133. K's commit later = tree 98e9fea (non-skip commit-tree), F's edits stay out.
+- Re-run 1 of cd80aaa ubuntu job: os.rss_file test passed, JVM unbound alloc-test flaked (line 289).
+  Re-run 2 queued (waiter bci9ow306). Both flakes are builder F's task.

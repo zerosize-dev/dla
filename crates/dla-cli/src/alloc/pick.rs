@@ -39,25 +39,35 @@ const NMT_PREFIX: &str = "jvm.nmt.";
 /// block every non-leak verdict. They are reported and vote only when nothing else can,
 /// even after passing the gate.
 const NO_RELEASE: &[&str] = &["os.vm_hwm", "native.peak_bytes", "os.vm_data"];
-/// Columns whose retained purge reading cannot contradict a plateau: it cannot tell growth
-/// from retention, so a plateau stands (the column still votes, and the reading is still
-/// reported). `os.rss_file` (resident file-backed pages): no purge kind gives file-backed
+/// Columns whose purge reading says nothing about them: it cannot tell growth from retention,
+/// so the column is judged on its plateau alone (it still votes, and the reading is still
+/// reported, marked as not applying). `os.rss_file` (resident file-backed pages): no purge kind gives file-backed
 /// pages back, so a rise of the column is always "retained", and the step that purges can map
 /// files itself (the Python `trim` step did, inside the measurement, until the harness
 /// loaded the library at start-up; the JVM purge steps run code the program has not run
 /// before, judged by reading). The Go and Node purge records do not carry the column at
-/// all. A real growth of file-backed memory still reads as one: through its plateau test,
-/// and through a retained purge against an undecided plateau.
+/// all. A real growth of file-backed memory still reads as one through its plateau test; a
+/// plateau that cannot decide leaves the column inconclusive.
 pub const PURGE_CANNOT_CONTRADICT: &[&str] = &["os.rss_file"];
 /// Whether no purge can give this column's memory back, whatever the program holds: the
 /// process peaks and virtual sizes of [`NO_RELEASE`], and `go.total` (`/memory/classes/total`,
 /// everything the runtime has mapped, released pages included: a collection or a return of
 /// memory to the system moves bytes inside it, and the figure itself only steps up). A
-/// retained purge reading of such a column says nothing about the plateau of its extra window,
-/// so it never contradicts one (the column still votes where it did, the reading stays in the
+/// retained purge reading of such a column says nothing about its extra window, so it is never
+/// weighed against its plateau (the column still votes where it did, the reading stays in the
 /// result, and a continuing plateau still reads leak).
 pub fn purge_cannot_release(name: &str) -> bool {
     NO_RELEASE.contains(&name) || name == "go.total"
+}
+/// Whether the purge reading of this column says anything about it, whatever the purge kind:
+/// not for a region no kind returns (file-backed pages: `trim` and `trim-native-heap` free
+/// malloc heap, `gc`, `free-os-memory` and `jemalloc` free managed or allocator heap and
+/// `empty-cache` a device cache, none of them mapped files) nor for the peaks, virtual sizes
+/// and runtime totals of [`purge_cannot_release`]. The column is then judged on its plateau
+/// alone: a plateau that cannot decide stays inconclusive, it is not read as a leak because the
+/// purge gave nothing back.
+pub fn purge_does_not_apply(name: &str) -> bool {
+    PURGE_CANNOT_CONTRADICT.contains(&name) || purge_cannot_release(name)
 }
 /// Most tied columns tested for a bound finding.
 const MAX_TIED: usize = 6;
