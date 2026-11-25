@@ -3267,3 +3267,19 @@ unattended run at a time and no builder beside it.
 - Commit b11fe02 = 2e0880c + writer_lines.rs (+ notes): waiter u115/ci-wip-32. When green:
   commit-snapshot-tree.sh b11fe02ac884a63a14e0cd72cb541aa71feb8812 commit-message-31.txt, push
   main and dev, then preview.9.
+
+## 05:30 UTC 2026-11-25: builder G2 done and checked
+
+- G2 report: w_many (+8) / w_many_lots (+16), r_reset_only (+15), go_support_dir (-25, English
+  exclusion list), census: exported method of unexported type counts exported; real copy: slice
+  rank 118 -> 66 (score 61 -> 92), 2nd in first batch of its package; helpers in top 40: 12 -> 2.
+  Nested-module driver (gomod.rs, go.work at copy root, coverage over workspace, generated-only
+  refusal + --next skip). Tests with mutations; static 64 pass; WHOLE dynamic 63/64 + xfail.
+- Checked by me: mutation of the English exclusion caught; rank/gomod/writer_lines/skill_text/
+  go_nested_module tests pass. FIXED by me: repository named the evidence library's directories
+  (tracetest, otlptracetest, internaltest, otest, sdk/trace/tracetest, sdk/go.mod,
+  exporters/otlp/otlplog/otlploggrpc, m.instruments) in rank.rs tests/comments, gomod.rs,
+  stages.md, VERIFY rows and writer_lines.rs (on main since 1d69fc4): neutral names now.
+- Commit message 32 ready. Order: b11fe02 green -> main (msg 31); then full-tree snapshot (G2 +
+  neutral names) for CI -> main (msg 32); then preview.9; then builder J.
+- Open: `--probe F` alone picks the package by census count, not the finding's site (G2 note).

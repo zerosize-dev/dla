@@ -433,7 +433,7 @@ fn go_project(dir: &Path) {
     write(
         dir,
         "registry/registry.go",
-        "package registry\n\nimport (\n\t\"errors\"\n\t\"sync\"\n\t\"sync/atomic\"\n)\n\n// Counter is one instrument of a registry.\ntype Counter struct{ name string }\n\n// Registry hands out counters; until a delegate is set it keeps each one it made.\ntype Registry struct {\n\tdelegate    atomic.Value\n\tmtx         sync.Mutex\n\tinstruments []*Counter\n}\n\n// SetDelegate makes later calls go to the delegate and keep nothing.\nfunc (m *Registry) SetDelegate(d func(string) (*Counter, error)) {\n\tm.delegate.Store(d)\n}\n\n// NewCounter returns a counter by name.\nfunc (m *Registry) NewCounter(name string) (*Counter, error) {\n\tif del, ok := m.delegate.Load().(func(string) (*Counter, error)); ok {\n\t\treturn del(name)\n\t}\n\tif name == \"\" {\n\t\treturn nil, errors.New(\"empty name\")\n\t}\n\tm.mtx.Lock()\n\tdefer m.mtx.Unlock()\n\tc := &Counter{name: name}\n\tm.instruments = append(m.instruments, c)\n\treturn c, nil\n}\n\n// NewRegistry makes a registry.\nfunc NewRegistry() *Registry { return &Registry{} }\n",
+        "package registry\n\nimport (\n\t\"errors\"\n\t\"sync\"\n\t\"sync/atomic\"\n)\n\n// Counter is one entry of a registry.\ntype Counter struct{ name string }\n\n// Registry hands out counters; until a delegate is set it keeps each one it made.\ntype Registry struct {\n\tdelegate    atomic.Value\n\tmtx         sync.Mutex\n\tentries []*Counter\n}\n\n// SetDelegate makes later calls go to the delegate and keep nothing.\nfunc (m *Registry) SetDelegate(d func(string) (*Counter, error)) {\n\tm.delegate.Store(d)\n}\n\n// NewCounter returns a counter by name.\nfunc (m *Registry) NewCounter(name string) (*Counter, error) {\n\tif del, ok := m.delegate.Load().(func(string) (*Counter, error)); ok {\n\t\treturn del(name)\n\t}\n\tif name == \"\" {\n\t\treturn nil, errors.New(\"empty name\")\n\t}\n\tm.mtx.Lock()\n\tdefer m.mtx.Unlock()\n\tc := &Counter{name: name}\n\tm.entries = append(m.entries, c)\n\treturn c, nil\n}\n\n// NewRegistry makes a registry.\nfunc NewRegistry() *Registry { return &Registry{} }\n",
     );
 }
 
@@ -481,7 +481,7 @@ fn a_go_driver_that_sets_the_delegate_reads_writer_not_executed() {
     );
     r.queue_keeps_the_target_and_the_next_block_shows_the_lines(
         "go",
-        "m.instruments = append(m.instruments, c)",
+        "m.entries = append(m.entries, c)",
         &[
             "29: if name == \"\" {",
             "26: if del, ok := m.delegate.Load().(func(string) (*Counter, error)); ok {",

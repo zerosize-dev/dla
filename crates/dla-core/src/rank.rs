@@ -83,7 +83,7 @@ weights! {
     recv_outer = 8,
     owner_percall = -10,
     owner_startup = 5,
-    // Go: the site is in a directory of test helpers (`tracetest`, `httptest`).
+    // Go: the site is in a directory of test helpers (`spantest`, `httptest`).
     go_support_dir = -25,
 }
 
@@ -208,7 +208,7 @@ fn site_path(site: &str) -> &str {
 }
 
 /// True when `site` is a Go file in a directory whose name ends in `test` and is longer than
-/// `test` (`tracetest`, `httptest`, `internaltest`, `otest`): by the language's convention a
+/// `test` (`spantest`, `httptest`, `helpertest`, `xtest`): by the language's convention a
 /// package of test helpers. The name `test` itself and the English words that end in `test`
 /// (`latest`, `contest`) do not count, nor does a file name.
 fn is_go_support_dir(site: &str) -> bool {
@@ -311,7 +311,7 @@ pub fn multi_origin_key(f: &Finding) -> u8 {
 }
 
 /// The text the report prints above the ranked findings.
-pub const TIER_NOTE: &str = "Suspected, static-only findings are ordered by a score: a sum of named weights for a DLA rule hit (stronger when the holder lives for the whole process or the rule is about a timer, task, listener or cache), a known leak pattern, a real container that is written by code that can run many times with a key from its caller and has no remover at the depth of the writer, plus a little when three or more functions add to the holder at run time (`w_many`, `w_many_lots`) and when every removal is a whole-container reset (`r_reset_only`), minus weights for holders that are not containers, are bounded or weak, or are only filled at start-up, and for a Go file in a directory of test helpers such as `tracetest` (`go_support_dir`); `dla ledger list` prints each row's score and its three largest contributions. Ties keep the tier (1: a DLA rule or known leak pattern, 2: a census holder with writers and no removers, 3: another detector hit, 4: a census holder with writers that also has removers), then a finding raised by more than one origin first, then the ledger's order; a finding in test, example, mock, sample, demo or benchmark code is demoted below all of them.";
+pub const TIER_NOTE: &str = "Suspected, static-only findings are ordered by a score: a sum of named weights for a DLA rule hit (stronger when the holder lives for the whole process or the rule is about a timer, task, listener or cache), a known leak pattern, a real container that is written by code that can run many times with a key from its caller and has no remover at the depth of the writer, plus a little when three or more functions add to the holder at run time (`w_many`, `w_many_lots`) and when every removal is a whole-container reset (`r_reset_only`), minus weights for holders that are not containers, are bounded or weak, or are only filled at start-up, and for a Go file in a directory of test helpers such as `spantest` (`go_support_dir`); `dla ledger list` prints each row's score and its three largest contributions. Ties keep the tier (1: a DLA rule or known leak pattern, 2: a census holder with writers and no removers, 3: another detector hit, 4: a census holder with writers that also has removers), then a finding raised by more than one origin first, then the ledger's order; a finding in test, example, mock, sample, demo or benchmark code is demoted below all of them.";
 
 /// Rule names (after `detector:dla/`) that are about a unit created per call or per object:
 /// a timer, task, goroutine, thread, handle, listener registration, cache decorator or the
@@ -1364,12 +1364,12 @@ mod tests {
             )
         };
         for site in [
-            "sdk/trace/tracetest/recorder.go:12",
+            "core/span/spantest/recorder.go:12",
             "net/httptest/x.go:3",
-            "internaltest/x.go:3",
-            "otest/x.go:3",
-            "sdk/TraceTest/x.go:3",
-            "pkg/tracetest/sub/x.go:3",
+            "helpertest/x.go:3",
+            "xtest/x.go:3",
+            "sdk/SpanTest/x.go:3",
+            "pkg/spantest/sub/x.go:3",
         ] {
             assert!(at(site).contains(&"go_support_dir"), "{site}");
         }
@@ -1381,8 +1381,8 @@ mod tests {
             "pkg/contest/x.go:3",
             "pkg/latest/x.go:3",
             "pkg/attest/x.go:3",
-            "pkg/x/tracetest.go:3",
-            "pkg/tracetest/x.py:3",
+            "pkg/x/spantest.go:3",
+            "pkg/spantest/x.py:3",
             "pkg/test/x.py:3",
             "pkg/contest/x.py:3",
             "pkg/x.go:3",
@@ -1394,7 +1394,7 @@ mod tests {
             "census",
             &[],
             Some(Holder::ContainerField),
-            "a/tracetest/x.go:1",
+            "a/spantest/x.go:1",
         );
         assert_eq!(tier(&f, Some(&ann(2, 0))), 2);
         let g = finding(

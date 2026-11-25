@@ -1,7 +1,7 @@
 //! The Go modules of a tree: which `go.mod` holds a package, which modules of the repository
 //! a module needs, and the `go.work` a work copy with several modules gets.
 //!
-//! A repository of nested modules (`sdk/go.mod`, `exporters/x/go.mod`) has no one module a
+//! A repository of nested modules (`core/go.mod`, `plugins/x/go.mod`) has no one module a
 //! `go test` run could start in: the driver of a package is built and run from the module that
 //! holds the package, and the `go.work` at the root of the copy makes every module of the
 //! copy resolve from the copy, not from a released version.
