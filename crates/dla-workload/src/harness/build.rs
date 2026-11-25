@@ -158,8 +158,10 @@ enum Class {
     Group,
     Other,
     Probe,
-    /// The allocation-site columns of a Python driver (`py.blocks@<site>`, at most 12): the
-    /// agent kept only the sites that grew, so none of them is dropped for a probe column.
+    /// The allocation-site columns of a Python driver (`py.blocks@<site>`, at most 12: the
+    /// agent kept only the sites that grew) and every other column of one `file:line` (the
+    /// native allocation sites of the shim, the per-site counts of the agents): none of them is
+    /// dropped for a probe column.
     Site,
     Baseline,
 }
@@ -568,12 +570,15 @@ pub fn build_series(
                     .finding
                     .as_ref()
                     .is_some_and(|f| manifest.targets.contains(f));
-                (
-                    declared,
-                    classify(name),
-                    growth(&a.vals, warm),
-                    name.clone(),
-                )
+                // A column of one `file:line` (a native allocation site of the shim, a per-site
+                // count of an agent) ranks as a site, whatever its name: it is what ties growth
+                // to a line. Its first value may come late, so its growth can read 0.
+                let class = if a.site.is_some() {
+                    Class::Site
+                } else {
+                    classify(name)
+                };
+                (declared, class, growth(&a.vals, warm), name.clone())
             })
             .collect();
         ranked.sort_by(|a, b| {
@@ -594,7 +599,7 @@ pub fn build_series(
                 Class::Group => "grouped",
                 Class::Other => "other",
                 Class::Probe => "probe",
-                Class::Site => "allocation-site",
+                Class::Site => "per-site",
                 Class::Baseline => "baseline",
             };
             *dropped.entry(label).or_default() += 1;
@@ -1012,7 +1017,7 @@ mod tests {
         assert!(
             s.limitations
                 .iter()
-                .any(|l| l.starts_with("dropped 17 grouped"))
+                .any(|l| l.starts_with("dropped 17 per-site"))
         );
         s.validate().unwrap();
     }
@@ -1201,6 +1206,67 @@ mod tests {
         // Only one point after the warm-up: nothing to compare.
         let s = blocks_series(&counts[..2], &[]);
         assert!(blocks_cols(&s).is_empty());
+    }
+
+    #[test]
+    fn a_native_site_column_with_one_late_value_is_not_dropped_for_probe_columns_at_the_cap() {
+        let mut m = manifest(Runtime::Python);
+        m.probes = (1..=70)
+            .map(|i| dla_core::harness::ProbeSpec {
+                id: format!("P{i}"),
+                finding: None,
+                target: dla_core::harness::ProbeTarget::PyGlobal {
+                    module: "m".into(),
+                    name: format!("v{i}"),
+                },
+                site: None,
+            })
+            .collect();
+        let counts: Vec<Value> = (0..4).map(|_| json!({})).collect();
+        let last = 3;
+        let pts: Vec<PointInput> = blocks_points(&XS[..4], &counts, &[])
+            .into_iter()
+            .enumerate()
+            .map(|(j, mut p)| {
+                let k = p.x / 100.0;
+                if let Some(rec) = &mut p.rec {
+                    rec.dump.probes = Some(
+                        (1..=70)
+                            .map(|i| {
+                                serde_json::from_value(json!({"id": format!("P{i}"),
+                                    "path": format!("m.v{i}"), "size": k * f64::from(i)}))
+                                .unwrap()
+                            })
+                            .collect(),
+                    );
+                }
+                // The shim's sites arrive at the last point only, as a native capture does.
+                if j == last {
+                    let mut sites = Sites::default();
+                    sites.by_site.insert(
+                        "native/src/lib.rs:40".into(),
+                        crate::harness::symbolize::SiteTotals {
+                            bytes: 61_430_816.0,
+                            blocks: 900.0,
+                        },
+                    );
+                    p.sites = Some(sites);
+                }
+                p
+            })
+            .collect();
+        let s = build_series(&ctx(), &m, &params(), &pts);
+        assert_eq!(s.columns.len(), MAX_COLUMNS);
+        assert!(
+            s.column_index("native.live_bytes@native/src/lib.rs:40")
+                .is_some(),
+            "{:?}",
+            s.limitations
+        );
+        assert!(
+            s.column_index("native.live_blocks@native/src/lib.rs:40")
+                .is_some()
+        );
     }
 
     #[test]

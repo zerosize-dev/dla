@@ -106,6 +106,25 @@ variable. Driver mode adds `-XX:StartFlightRecording=filename=<harness>/out/<pid
   limitation, so an empty measurement never refutes the finding. (No value is not a measurement
   of zero: the values may sit in virtual threads, which `Thread.getAllStackTraces` does not list,
   in a thread that has ended, or not exist yet.)
+- `probes`, `JvmInstance { class, field }`: an instance field of the live instances of a class (a
+  subclass counts), which no static probe can read. One walk per checkpoint serves all the
+  `JvmInstance` probes. It is breadth-first from the roots, nearest first: the static fields of the
+  driver's class (`DlaLoop`, `DlaJUnitLoop`), the values of the thread-locals of every live platform
+  thread, and the static fields of the project's loaded classes (the project's, its tests', not the
+  JDK's or a library's) that are already initialized (the agent exports `jdk.internal.misc` to
+  itself to ask; reading a static field of a class that is not initialized would run its
+  initializer, so without the answer only the driver's fields are roots). A collection or map of the
+  JDK is read through its API, an object of any other class field by field; no method of a project
+  class is called and no class is loaded. The walk stops at 1,000,000 objects
+  (`DLA_INSTANCE_WALK_OBJECTS`) or 5,000 ms (`DLA_INSTANCE_WALK_MS`): one pass over a million small
+  objects takes about 0.3 s, a driver that holds a service of a few hundred objects 1 to 5 ms, and the
+  stop is a limitation (`jvm-instance walk: ...`) with the instances found by then counted. The
+  record has the static probe's shape (`size`: the sum of the field's sizes over the instances, empty
+  when the field is neither a collection, a map nor an array; `reachable` and `bytes`: one bounded
+  walk from the field values of all the instances) and `instances`, the number found. When no
+  instance is found the record has an `error`, no figures and `instances: 0`: an instance that is held
+  only by a local variable, an executor's queue or a virtual thread cannot be seen, and zero is not
+  a measurement.
 - `purge`: `trim-native-heap` runs the `systemTrimNativeHeap` diagnostic command and records the
   `os.*` values before and after; `gc` records the values before the forced collection and after.
 

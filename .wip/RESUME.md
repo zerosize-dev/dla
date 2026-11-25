@@ -3371,3 +3371,11 @@ unattended run at a time and no builder beside it.
   non_leak_on_a_flat_run (os.rss_file +155 KB on a flat run on the runner, plateau inconclusive,
   favors inconclusive). Test untouched since cb933c3; not caused by this round. Re-ran failed jobs of
   run 45587638264 (gh rerun). Add to task 110 (flaky tests): os.rss_file on a flat run.
+
+## 10:50 UTC 2026-11-25: G2 on main; J in CI
+
+- Re-run of the flaky job passed: 1cd3e7e 15/15 -> main 467a95b (message 32), pushed main and dev.
+- J's CI commit cd80aaa = tree 4243d43 + gate.rs and residual_capture.rs from 1cd3e7e + VERIFY
+  (4243d43's with the corrected J sentence + the short-series row) + notes. Waiter u115/ci-wip-36.
+  When green: commit-snapshot-tree.sh cd80aaa759695db4002dd8b874768070c07cab66
+  commit-message-33.txt; push. Then K: full working tree snapshot for CI -> main (message 34).

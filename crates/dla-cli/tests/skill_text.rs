@@ -1352,5 +1352,26 @@ fn the_texts_say_a_holder_kept_per_thread_needs_units_from_many_threads_and_a_se
         verify.contains("| A holder kept per thread read flat from one thread and was closed (a JVM library the tool had not been run on) | corrected |"),
         "VERIFY.md lacks the row"
     );
+    let jvm = read(&format!("{refs}/jvm.md"));
+    for want in [
+        "gets a `jvm-instance` probe ahead of the class probe: the class probe reads only the static fields of the owner class",
+        "by one walk from the static fields of the driver's class, the values of the thread-locals of every live platform thread and the static fields of the project's initialized classes",
+        "So `setup` must keep the object that owns the field in a static field of the driver class, or in a thread-local of the thread that runs the units",
+        "The walk never loads or initializes a class and calls no method of a project class; it stops at 1,000,000 objects or 5 seconds",
+    ] {
+        assert!(jvm.contains(want), "jvm.md lacks: {want}");
+    }
+    let readme = read("harness/jvm/README.md");
+    for want in [
+        "`probes`, `JvmInstance { class, field }`: an instance field of the live instances of a class (a",
+        "no method of a project class is called and no class is loaded",
+        "When no instance is found the record has an `error`, no figures and `instances: 0`",
+    ] {
+        assert!(readme.contains(want), "README.md lacks: {want}");
+    }
+    assert!(
+        verify.contains("| A JVM probe read static fields only, so a list held in an instance field read flat (a JVM library the tool had not been run on) | corrected |"),
+        "VERIFY.md lacks the instance-field row"
+    );
     assert!(!read("skills/detect-leak-anywhere/SKILL.md").contains("kept per thread"));
 }
