@@ -38,6 +38,18 @@ The machine has 4 cores. Use `cargo ... -j 3`, one cargo command at a time. Neve
    `DLA_CONSENT_TIERS=1-4 DLA_CONSENT_RAW_VALUES=1 DLA_PLUGIN_ROOT=/home/user/dla`; `dla run
    init`, `dla probe`, `dla census --lang go`, `dla ledger list --all`).
 
+## What changed in the tool since this brief was written (it is on `main` or in the tree)
+
+- `dla trend` writes the residual rows of its series, and while a heap row with at least 64 KiB
+  of unattributed growth has no summarized capture, `dla harness gen --next` is refused with
+  `capture-first` (a harness for `--probe` or `--entry` is not). On the copy of the real project,
+  if your hooks-that-do-nothing run trips it, take the capture it names or use `--package` /
+  `--probe` as the brief says; do not change that rule.
+- The container can be restarted without warning: keep each background job short enough to
+  lose, write its output to a file in your scratch directory, and after a restart look at the
+  tree and the files before you go on. Do not end your work while one of your background jobs
+  still runs; wait for it, so that your final message is the final report.
+
 ## The change
 
 ### 1. The score (`crates/dla-core/src/rank.rs`, every runtime unless said otherwise)
@@ -117,9 +129,13 @@ not been run on". Do NOT touch `skills/detect-leak-anywhere/SKILL.md`.
   svc/store` builds, the run measures the holder growing, coverage reads the target
   `executed`. The same repository without the `replace` line builds through the `go.work`.
 - Existing tests that change: say which and why. Do not weaken a test. Nothing under
-  `bench/fixtures` is edited. Run `dla-bench static` (all fixtures, no model) and `dla-bench
-  dynamic --only <name>` for three Go fixtures (two leaks, one non-leak) and report the
-  results; if one changes, stop and report it.
+  `bench/fixtures` is edited. Run `./target/debug/dla-bench static` (all fixtures, no model).
+  Two of the new weights apply to every runtime, so at the end run the WHOLE dynamic acceptance
+  once: `./target/debug/dla-bench dynamic` (all fixtures, 40 to 60 minutes; background, output
+  in your scratch directory; nothing heavy beside it) and report the whole table and its totals
+  line. One fixture is an expected failure (xfail); `jvm-pool-warmup` fails about one run in
+  three for a reason of its own (if it fails, run it alone twice more). A fixture that fails
+  for another reason: report its first lines; do not tune a weight to make it pass.
 
 ## Rules
 

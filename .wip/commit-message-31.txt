@@ -1,0 +1,55 @@
+Unexplained heap growth leads the run, and a Node heap summary shows who keeps the objects
+
+From the miss on a Node library written in TypeScript. The first harness
+measured the documented leak: the heap rose by about 15 KB per unit and
+eight listener columns grew at lines of the sources. The gate had the
+right item, a capture of that harness, but the residual row that raises it
+is written only by `dla gap --residual`, a command the model never ran. It
+worked through 79 queue harnesses and stopped with nothing confirmed and
+no capture taken. Replayed by hand, the capture took 44 s, and its heap
+summary named the tool's own agent as the top holder: every growing
+object's path went through the list of objects a `WeakRef` was read from
+in the current job, which the agent's own listener count fills just
+before the snapshot.
+
+- `dla trend <S>` writes the residual rows of its series, as `dla gap <S>
+  --residual` does. When a heap row is over its threshold, its growth is
+  over the floor and its harness has no summarized capture, the first
+  `next` entry is the capture command and `_attention` says the heap
+  grows unexplained.
+- While such an item is open, `dla harness gen --next` is refused with
+  `capture-first`, whose fix is the capture and the summaries it prints. A
+  harness generated for a named finding (`--probe`, `--entry`) is not
+  refused. The item comes before the queue item in both gates, in `dla
+  run status` and in the stop hook. It is kept per harness. The
+  benchmark's fixed policy takes the capture for this refusal as it does
+  for the other two capture rules.
+- The Node heap snapshot reader skips the edge `weak_refs_keep_during_job`
+  of the strong root list as it skips weak edges, and counts in `notes`
+  the objects only that edge reached. The statics of the agent's scripts
+  and the agent's own symbol fields are no holders. On the replayed
+  capture the first holders are now the library's socket objects, each
+  with a path from the runtime's HTTP parser, and none of 200 holders
+  has the job edge in its path. Moving the snapshot before the agent's
+  reading did not remove the edge, so the preload is unchanged.
+- `dla ledger close-rest` leaves a candidate that one flat run settled and
+  that waits for its second look, with the reason, while the first pass of
+  its queue is still going and the second look has room. In a real Rust
+  run it had closed seven such candidates before their second look.
+- The references say what each per-site count column counts: for
+  `node.listeners@` the listeners registered at that line that are still
+  attached to objects still alive after a forced collection; the model of
+  the replayed run had read the column as a count of calls.
+
+Existing tests whose scenes grew by accident over the floor now grow less
+(one unit in eight or sixteen reaches the holder); tests whose growth is
+the point take the capture first. No assertion was weakened. The whole
+dynamic acceptance passes: 63 of 64 fixtures and the expected failure.
+
+Not covered. The capture is per harness: a run whose harnesses all show
+unexplained heap growth takes one capture per harness before each next
+batch, and the benchmark does not measure that cost, as its policy never
+asks for the next batch itself. The output of `dla trend` is close to its
+size bound in many scenes. A short series with a real leak now leads
+with the capture rather than with `SERIES TOO SHORT`. The refusal was
+tested on a Python scene only.

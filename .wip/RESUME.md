@@ -3239,3 +3239,17 @@ unattended run at a time and no builder beside it.
   CONCERN to measure in the real Node rerun: capture-first is per harness; if most harnesses show
   >= 64 KiB unattributed heap growth, a run takes a capture per harness before each next batch
   (cost). The dynamic acceptance does not show it (its policy never runs gen --next itself).
+
+## 03:40 UTC 2026-11-25: X2 done and checked; snapshot 2e0880c in CI
+
+- X2 report: 7 failing files settled (6 scene changes keeping incidental growth under the floor,
+  1 by shortening trend text; holder_first and trigger scenes take the capture first); new
+  tests/growth_first.rs (3 tests, 7 mutations); checks; WHOLE dynamic run 63/64 + 1 xfail.
+- Checked by me: scene diffs (focus, node_short, second_look: growth incidental), mutation of the
+  refusal caught, next truncated to MAX_NEXT after the capture entry (my fix), and the VERIFY row
+  named the evidence library's socket class: replaced by `<socket class>` (my fix).
+- Snapshot 2e0880c pushed for CI (waiter u115/ci-wip-31). When green: commit-snapshot-tree.sh
+  2e0880c8d2f9f700175be1accd12e5d7fdd83d9d wip-notes/commit-message-31.txt; push main and dev; then
+  version 0.9.0-preview.9 (temp-index method, no builder in the tree now: can edit the tree).
+- Open concerns (in message 31 "Not covered"): capture per harness cost; trend output near bound;
+  short series leads with capture; measured_capture and residual_capture both listed.
