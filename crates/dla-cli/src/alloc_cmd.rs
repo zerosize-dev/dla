@@ -1480,17 +1480,20 @@ fn lines_of_finding(ledger: &Ledger, finding: &Finding, trends: &[&TrendReport])
 /// Most times the extra window is lengthened to reach the expected rises (a longer one is left
 /// to a person: `--extra`).
 const MAX_WIDEN: u32 = 8;
+/// Most times a run is repeated with a longer extra window.
+const MAX_WIDENINGS: usize = 2;
 
 /// The extra window that would decide a measurement whose only open question is the length of
 /// that window: its verdict is inconclusive, no point was lost to the deadline, and a deciding
 /// plateau was held back against a purge that kept the growth for want of expected rises
-/// (see [`judge::combine`]). `None` when it is not so, or the window would be over
-/// [`MAX_WIDEN`] times the one run.
+/// (see [`judge::combine`]). `None` when it is not so, or the window would be over `limit`
+/// points ([`MAX_WIDEN`] times the first one).
 fn wider_window(
     results: &[ColumnResult],
     picked: &pick::Picked,
     partial: &[String],
     extra: u32,
+    limit: u32,
 ) -> Option<u32> {
     if !partial.is_empty() || decide(results, picked).0 != Favors::Inconclusive {
         return None;
@@ -1504,7 +1507,7 @@ fn wider_window(
         .filter(|r| r.favors == Favors::Inconclusive)
         .filter_map(|r| r.points_needed)
         .max()?;
-    (n > extra && n <= extra.saturating_mul(MAX_WIDEN)).then_some(n)
+    (n > extra && n <= limit).then_some(n)
 }
 
 /// Whether `n` extra points fit the time left, going by the `secs` the run of `extra` points
@@ -1757,30 +1760,47 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         &purge_kind,
         extra,
     )?;
-    // Only the length of the extra window held a plateau back: run it again, once, with the
-    // window the expectation needs, as far as the time left allows.
-    if let Some(n) = wider_window(&m.results, &m.picked, &m.partial, extra) {
-        if window_fits(&tc, m.secs, extra, n) {
-            match measure(&tc, &manifest, &a, &ledger, bound.as_ref(), &purge_kind, n) {
-                Ok(mut w) => {
-                    w.limitations.push(format!(
-                        "the extra window was lengthened from {extra} to {n} points and the command run again, because its length alone kept a plateau from deciding against a purge that kept the growth (series {} is the shorter run)",
-                        m.series.id
-                    ));
-                    m = w;
-                    extra = n;
-                }
-                Err(f) if f.refusal.code == codes::TIME_BUDGET => m.limitations.push(format!(
-                    "the extra window of {extra} points is too short for a plateau to stand against the purge that kept the growth ({n} points would be); the longer run was refused for the time left"
-                )),
-                Err(f) => return Err(f),
-            }
-        } else {
+    // Only the length of the extra window held a plateau back: run it again with the window
+    // the expectation needs, as far as the time left allows. The longer window moves the noise
+    // the rises are counted over, so the number of points needed is read again from the longer
+    // run, once more at most.
+    let first_extra = extra;
+    let mut widening: Vec<String> = Vec::new();
+    for _ in 0..MAX_WIDENINGS {
+        let Some(n) = wider_window(
+            &m.results,
+            &m.picked,
+            &m.partial,
+            extra,
+            first_extra.saturating_mul(MAX_WIDEN),
+        ) else {
+            break;
+        };
+        if !window_fits(&tc, m.secs, extra, n) {
             m.limitations.push(format!(
                 "the extra window of {extra} points is too short for a plateau to stand against the purge that kept the growth ({n} points would be); the time left does not allow the longer run"
             ));
+            break;
+        }
+        match measure(&tc, &manifest, &a, &ledger, bound.as_ref(), &purge_kind, n) {
+            Ok(w) => {
+                widening.push(format!(
+                    "the extra window was lengthened from {extra} to {n} points and the command run again, because its length alone kept a plateau from deciding against a purge that kept the growth (series {} is the shorter run)",
+                    m.series.id
+                ));
+                m = w;
+                extra = n;
+            }
+            Err(f) if f.refusal.code == codes::TIME_BUDGET => {
+                m.limitations.push(format!(
+                    "the extra window of {extra} points is too short for a plateau to stand against the purge that kept the growth ({n} points would be); the longer run was refused for the time left"
+                ));
+                break;
+            }
+            Err(f) => return Err(f),
         }
     }
+    m.limitations.extend(widening);
     let Measured {
         attribution,
         env_reused,
@@ -4527,15 +4547,18 @@ mod tests {
         // Two rises over a window as long as the extra one: nine points would be needed.
         let (favors, results, picked) = run(6);
         assert_eq!(favors, Favors::Inconclusive);
-        assert_eq!(wider_window(&results, &picked, &[], 6), Some(9));
+        assert_eq!(wider_window(&results, &picked, &[], 6, 48), Some(9));
         // Not for a run the deadline cut short, nor when the window is long enough already.
-        assert_eq!(wider_window(&results, &picked, &["p7".to_owned()], 6), None);
+        assert_eq!(
+            wider_window(&results, &picked, &["p7".to_owned()], 6, 48),
+            None
+        );
         let (favors, results, picked) = run(12);
         assert_eq!(favors, Favors::NonLeak);
-        assert_eq!(wider_window(&results, &picked, &[], 12), None);
+        assert_eq!(wider_window(&results, &picked, &[], 12, 96), None);
         // A window that would have to be over MAX_WIDEN times as long is left to a person.
         let (_, results, picked) = run(6);
-        assert_eq!(wider_window(&results, &picked, &[], 1), None);
+        assert_eq!(wider_window(&results, &picked, &[], 6, 8), None);
         // A leak that goes on is no question of length.
         let mut s = series(&[]);
         s.columns = vec![col("os.rss"), col("os.rss_anon")];
@@ -4544,7 +4567,7 @@ mod tests {
         }
         let (favors, results, picked) = unbound_run(s, &["os.rss_anon"]);
         assert_eq!(favors, Favors::Leak);
-        assert_eq!(wider_window(&results, &picked, &[], 6), None);
+        assert_eq!(wider_window(&results, &picked, &[], 6, 48), None);
     }
 
     #[test]
