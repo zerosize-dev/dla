@@ -3389,3 +3389,11 @@ unattended run at a time and no builder beside it.
   Scratch u133. K's commit later = tree 98e9fea (non-skip commit-tree), F's edits stay out.
 - Re-run 1 of cd80aaa ubuntu job: os.rss_file test passed, JVM unbound alloc-test flaked (line 289).
   Re-run 2 queued (waiter bci9ow306). Both flakes are builder F's task.
+
+## 12:45 UTC 2026-11-25: J on main; K in CI
+
+- cd80aaa green after 2 re-runs (flakes) -> main de4cbb1 (message 33), pushed main and dev.
+- K's CI commit 43de699 = tree 98e9fea (+ notes); waiter u115/ci-wip-37. When green:
+  commit-snapshot-tree.sh 43de699e37a22cfa263a5f00dee3f57af48d2d62 commit-message-34.txt; push; then
+  version 0.9.0-preview.9 (temp index; builder F in the tree) and release; sync tree version files
+  after F.

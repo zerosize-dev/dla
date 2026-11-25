@@ -142,10 +142,14 @@ column. The column is `--column`, else the one tied to `--finding`, else (a find
 and no tied column) the region's primary column, else every column that passed the gate in the
 latest trend of the harness plus `os.rss`; a peak or a size no purge can give back (`os.vm_hwm`,
 `native.peak_bytes`, `os.vm_data`) is tested and reported, and votes only when nothing else
-can. The file-backed pages `os.rss_file` vote on their plateau test, but a retained purge reading
-of that column never contradicts a plateau (no purge gives file-backed pages back); the same
+can. The file-backed pages `os.rss_file` vote on their plateau test alone: no purge gives
+file-backed pages back, so its purge reading (kept in the result, marked `applies: false`) is not
+weighed at all, and a plateau that cannot decide leaves the column inconclusive; the same
 holds for those peaks and sizes and for `go.total` (everything the Go runtime has mapped: it only
-steps up, and a purge moves bytes inside it). `go.released` (heap the Go runtime handed back to
+steps up, and a purge moves bytes inside it). When only the length of the extra window holds a
+plateau back against a purge that kept the growth, `dla alloc-test` runs the command again once
+with the extra window that expects three rises (up to eight times the first, as far as the time
+left allows) and says so in the limitations. `go.released` (heap the Go runtime handed back to
 the system) is recorded and shown but never passes the gate: a rise of it is memory given back,
 not memory held. For a JVM
 non-heap finding the primary is `jvm.nonheap_used`, which must plateau together with every
