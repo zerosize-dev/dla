@@ -3578,3 +3578,19 @@ unattended run at a time and no builder beside it.
   a series, numbers shift. FIXED: driver_series/run_series helpers read the series each run
   wrote. Windows passed (sidecar fix works); dla-report golden passed.
 - Full `cargo test --workspace` running locally (ws-test.log) before the next CI push.
+- Local `cargo test --workspace` 183/183 ok. Snapshot 5a60139 (G+H+I+J+K+all fixes) pushed WITH
+  CI; waiter u115/ci-wip-42. When green: commit-snapshot-tree.sh
+  5a601392290909f0343c06823f8c6afad5a2b08b commit-message-38.txt; push main + dev; version
+  0.9.0-preview.10; release; refresh rig; reruns (logstash next, then the four again).
+- r3-logstash started 20:46 UTC (pid 5909) on preview.9 rig while CI 5a60139 runs. Disk hit 524 MB
+  after the workspace tests: deleted target/debug/build/dla-* dirs (rebuilt on next test) ->
+  8.7 GB. Waiter restarted. Judge against key section 9 after.
+- CI 5a60139 (run 45698171955): all green EXCEPT dynamic acceptance: 5 fixtures (jvm-extension-
+  reload, jvm-rule-compiler, node-gateway-merge, node-price-board, node-socket-heartbeat) left
+  findings under_test: heap-graph tied several holders; policy confirmed the planted one; the
+  others became dump leads, refused close, their route had `annotate --site <file:line>`
+  placeholder -> policy stopped. FIX (mine, in grown.rs dump_grown): a lead is lifted when a leak
+  outside its family is confirmed citing dump growth of the same capture (same growth record,
+  or same harness via dump_harness, which now reads any per-dump record kind). CLI test
+  grown_dump::a_leak_confirmed_on_the_dumps_of_the_same_capture... (mutation caught). Docs
+  updated. TODO after logstash ends: dla-bench dynamic --only the 5 fixtures locally, then push.

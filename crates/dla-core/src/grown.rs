@@ -939,7 +939,14 @@ fn dump_harness(records: &[&EvidenceRecord], at: usize) -> Option<String> {
     for e in records[..at]
         .iter()
         .rev()
-        .take_while(|e| e.kind == EvidenceKind::RetentionPath && e.authority == Authority::Dump)
+        // The per-dump records of the same summarize call: whatever kind the summarizer writes
+        // (retention paths, histograms, non-heap tables), back to the growth or discriminator
+        // records of the call before it.
+        .take_while(|e| {
+            e.authority == Authority::Dump
+                && !is_growth_record(e)
+                && e.kind != EvidenceKind::Discriminator
+        })
         .take(n)
     {
         if let crate::evidence::Source::Artifact { path, .. } = &e.source
@@ -1099,6 +1106,31 @@ fn dump_grown(view: &RunView, out: &mut Vec<Grown>) {
         let harness = growth_at
             .and_then(|g| dump_harness(&records, g))
             .unwrap_or_default();
+        // A leak confirmed outside this family on dump growth of the same capture (the same
+        // growth record, or one of the same harness) accounts for it: the other holders that
+        // grew in the same process's dumps are the parts that leak keeps alive (the fields of
+        // the object that leaks, what its holder retains), not leads of their own. It is no
+        // longer a lead and may be closed; a second, separate leak in the same capture is then
+        // closed `unresolved` with its growth on record.
+        let explained = ledger
+            .findings()
+            .filter(|f| {
+                matches!(f.state, FindingState::Confirmed | FindingState::Strong)
+                    && f.polarity() == Polarity::Leak
+                    && !f.id.is_sibling()
+                    && !family.contains(&f.id)
+            })
+            .flat_map(|f| f.supports.iter())
+            .filter_map(|e| records.iter().position(|r| &r.evidence_id == e))
+            .filter(|&i| records[i].authority == Authority::Dump && is_growth_record(records[i]))
+            .any(|i| {
+                growth_at == Some(i)
+                    || (!harness.is_empty()
+                        && dump_harness(&records, i).as_deref() == Some(harness.as_str()))
+            });
+        if explained {
+            continue;
+        }
         let disc = hits
             .iter()
             .filter(|h| h.1 == root && h.4 && records[h.0].authority == Authority::Dump)

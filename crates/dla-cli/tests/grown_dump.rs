@@ -571,3 +571,115 @@ fn a_finding_with_a_trend_column_and_a_dump_growth_is_one_item() {
     assert_eq!(items.len(), 1, "{items:?}");
     assert_eq!(items[0]["kind"], "growth");
 }
+
+#[test]
+fn a_leak_confirmed_on_the_dumps_of_the_same_capture_accounts_for_the_other_holders_that_grew() {
+    let (r, _w) = scene();
+    // A second holder of the same capture: a field of the object that leaks.
+    let seed = add(
+        &r,
+        evidence(
+            Authority::Dump,
+            EvidenceKind::GrowthSeries,
+            None,
+            json!({"series": "S2", "axis": "dump", "n": 3, "gate": "pass", "passed": []}),
+        ),
+    );
+    let added = r.ok(&[
+        "ledger",
+        "add",
+        "--origin",
+        "growth-series",
+        "--evidence",
+        &seed,
+        "--site",
+        "src/conn.js:1",
+        "--holder",
+        "container-field",
+        "--owner",
+        "app.Conn.socket",
+    ]);
+    assert_eq!(added["id"], "F2", "{added}");
+    fs::create_dir_all(r.run_dir.join("series")).unwrap();
+    fs::write(
+        r.run_dir.join("series/S4.json"),
+        json!({"schema_version": 1, "id": "S4",
+            "source": {"kind": "dump", "command": "dla summarize heap-graph"},
+            "axis": "dump", "warmup": 0, "columns": [], "points": [], "events": [],
+            "limitations": []})
+        .to_string(),
+    )
+    .unwrap();
+    for i in 1..=3 {
+        add(
+            &r,
+            evidence(
+                Authority::Dump,
+                EvidenceKind::RetentionPath,
+                Some(&format!(
+                    "harness/H1/out/p{i}/capture/7/heap-{i}.heapsnapshot"
+                )),
+                json!({"holders": []}),
+            ),
+        );
+    }
+    add(
+        &r,
+        evidence(
+            Authority::Dump,
+            EvidenceKind::GrowthSeries,
+            None,
+            json!({"series": "S4", "axis": "dump", "n": 3, "gate": "pass",
+                "passed": [
+                    {"column": "holder:static:app.Conn.request", "finding": "F1", "candidates": ["F1"]},
+                    {"column": "holder:field:app.Conn.socket", "finding": "F2", "candidates": ["F2"]}]}),
+        ),
+    );
+    for (f, column) in [
+        ("F1", "holder:static:app.Conn.request"),
+        ("F2", "holder:field:app.Conn.socket"),
+    ] {
+        add(
+            &r,
+            evidence(
+                Authority::Dump,
+                EvidenceKind::Discriminator,
+                None,
+                json!({"test": "dump-plateau", "favors": "leak", "supports": ["leak"],
+                    "finding": f, "column": column, "series": "S4",
+                    "reason": "retained bytes and count grew over every interval"}),
+            ),
+        );
+    }
+    // Both are leads while nothing is decided: neither closes.
+    let (code, v) = close(&r, "F2", "unresolved");
+    assert_ne!(code, 0, "{v}");
+    assert_eq!(v["error"]["code"], "growth-not-measured", "{v}");
+    // F1 is confirmed through its printed route.
+    let missing = r.final_gate();
+    let item = missing
+        .iter()
+        .find(|m| {
+            m["id"] == "F1"
+                && m["fix"]
+                    .as_str()
+                    .is_some_and(|f| f.contains("dla ledger confirm F1"))
+        })
+        .unwrap_or_else(|| panic!("{missing:?}"));
+    let fix = item["fix"].as_str().unwrap().to_owned();
+    run_fix(&r, &fix);
+    assert_eq!(r.state("F1"), "confirmed");
+    // F2 grew in the same capture's dumps: the confirmed leak accounts for it, so it is no
+    // longer a lead and closes.
+    assert!(
+        !r.final_gate().iter().any(|m| m["id"] == "F2"
+            && m["fix"]
+                .as_str()
+                .is_some_and(|f| f.contains("dla ledger confirm F2"))),
+        "{:?}",
+        r.final_gate()
+    );
+    let (code, v) = close(&r, "F2", "unresolved");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(r.state("F2"), "unresolved");
+}
