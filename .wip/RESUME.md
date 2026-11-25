@@ -3283,3 +3283,13 @@ unattended run at a time and no builder beside it.
 - Commit message 32 ready. Order: b11fe02 green -> main (msg 31); then full-tree snapshot (G2 +
   neutral names) for CI -> main (msg 32); then preview.9; then builder J.
 - Open: `--probe F` alone picks the package by census count, not the finding's site (G2 note).
+
+## 05:50 UTC 2026-11-25: X2 work on main; G2 tree in CI; builder J started
+
+- CI on b11fe02 (run 45550849537) 15/15 -> main f2f5347 (message 31), pushed main and dev.
+- G2 tree snapshot 93a9bb3 pushed for CI (waiter u115/ci-wip-33). When green:
+  commit-snapshot-tree.sh 93a9bb328b60bcce4ba65bb91989028fddb57de9 commit-message-32.txt, push,
+  then version 0.9.0-preview.9 (temp index; builder J in the tree) and release.
+- BUILDER J started (Sonnet): thread-kind-brief.md (updated: whole dynamic run, capture-first note,
+  restarts). Scratch u128.
+- Disk: cleaned stale build dirs again (8.5 GB free).

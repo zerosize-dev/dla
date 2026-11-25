@@ -37,6 +37,20 @@ pooled, recycled or short-lived threads. Every runtime has such holders: `Thread
 JVM, `threading.local` in Python, `thread_local!` in Rust, `AsyncLocalStorage` and worker
 threads in Node, per-goroutine state keyed by an id in Go.
 
+## What changed in the tool since this brief was written (it is on `main`)
+
+- `dla trend` writes the residual rows of its series, and while a heap row with at least 64 KiB
+  of unattributed growth has no summarized capture, `dla harness gen --next` is refused with
+  `capture-first` (a harness for `--probe` or `--entry` is not). A test scene whose heap grows by
+  accident keeps under that floor by its own data; one whose growth is the point takes the
+  capture and its summaries first (see `capture_if_the_gate_asks` in
+  `crates/dla-cli/tests/writer_lines.rs`). Do not change that rule.
+- `dla ledger close-rest` already leaves a candidate that waits for its second look.
+- The container can be restarted without warning: keep each background job short enough to
+  lose, write its output to a file in your scratch directory, and after a restart look at the
+  tree and the files before you go on. Do not end your work while one of your background jobs
+  still runs; wait for it, so that your final message is the final report.
+
 ## The change
 
 1. Thread-keyed targets. A target is thread-keyed when any of these holds, from the census
@@ -90,8 +104,13 @@ threads in Node, per-goroutine state keyed by an id in Go.
   with units on a fixed pool of four threads the first class grows and the second stays at
   four entries.
 - Existing tests that change: say which and why. Do not weaken a test. Nothing under
-  `bench/fixtures` is edited. Run `dla-bench dynamic --only <name>` for two JVM fixtures and
-  one Python fixture (a leak and a non-leak) and report the results.
+  `bench/fixtures` is edited. The new "not settled" rule changes the queue, so at the end run
+  the WHOLE dynamic acceptance once: `./target/debug/dla-bench dynamic` (all fixtures, 40 to 60
+  minutes; background, output in your scratch directory; nothing heavy beside it) and report
+  the whole table and its totals line. One fixture is an expected failure (xfail);
+  `jvm-pool-warmup` fails about one run in three for a reason of its own (if it fails, run it
+  alone twice more). A fixture that fails for another reason: report its first lines; do not
+  change the tool to make it pass without saying why the change is right in general.
 
 ## Rules
 
