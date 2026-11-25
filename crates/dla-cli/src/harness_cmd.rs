@@ -256,6 +256,25 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: HarnessCmd) -> 
                         item.fix.clone(),
                     ));
                 }
+                // The same for a heap residual above its threshold that no capture of its
+                // harness explains: the capture says who keeps the objects the next batch
+                // would not look at. A harness made for a named finding is not held back.
+                if g.probe.is_empty()
+                    && g.entry.is_empty()
+                    && let Some(u) = dla_core::gate::uncaptured_residuals(&view).first()
+                {
+                    return Err(Failure::refuse(
+                        dla_core::error::codes::CAPTURE_FIRST,
+                        format!(
+                            "the heap of {} grows by {} that no finding explains and {} has no summarized capture",
+                            u.series.join(", "),
+                            u.items.join(", "),
+                            u.harness
+                        ),
+                        "a summarized capture of the harness that showed the growth",
+                        u.fix(),
+                    ));
+                }
             }
             let lang = g.lang;
             let opts = GenOptions {

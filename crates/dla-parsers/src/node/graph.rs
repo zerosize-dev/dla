@@ -2,7 +2,8 @@
 //! paths, and dominators (Lengauer-Tarjan) with retained sizes.
 //!
 //! Both follow the edges that keep an object alive: weak edges are skipped, and shortcut
-//! edges count only from the root (the rule the Chrome DevTools use). Both are iterative,
+//! edges count only from the root (the rule the Chrome DevTools use). The edge of the strong root
+//! list to the objects a `WeakRef` was read from in the current job is skipped too. Both are iterative,
 //! so a long linked list does not overflow the stack.
 
 use std::time::Instant;
@@ -143,7 +144,7 @@ impl Snapshot {
             let u = queue[head] as usize;
             head += 1;
             for e in self.edges_of(u) {
-                if !self.essential(u, self.edge_type(e)) {
+                if !self.essential(u, e) {
                     continue;
                 }
                 let v = self.edge_target(e);
@@ -187,7 +188,7 @@ impl Snapshot {
             }
             let e = top.1 as usize;
             top.1 += 1;
-            if !self.essential(u, self.edge_type(e)) {
+            if !self.essential(u, e) {
                 continue;
             }
             let v = self.edge_target(e);
@@ -205,7 +206,7 @@ impl Snapshot {
         for (i, &u) in vertex.iter().enumerate().skip(1) {
             let u = u as usize;
             for e in self.edges_of(u) {
-                if self.essential(u, self.edge_type(e)) {
+                if self.essential(u, e) {
                     let w = dfn[self.edge_target(e)] as usize;
                     if w != 0 && w != i {
                         pfirst[w + 1] += 1;
@@ -221,7 +222,7 @@ impl Snapshot {
         for (i, &u) in vertex.iter().enumerate().skip(1) {
             let u = u as usize;
             for e in self.edges_of(u) {
-                if self.essential(u, self.edge_type(e)) {
+                if self.essential(u, e) {
                     let w = dfn[self.edge_target(e)] as usize;
                     if w != 0 && w != i {
                         preds[fill[w] as usize] = i as u32;

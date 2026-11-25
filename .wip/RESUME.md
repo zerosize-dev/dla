@@ -3215,3 +3215,15 @@ unattended run at a time and no builder beside it.
 - BUILDER X2 (Sonnet, background): wip-notes/growth-first-finish-brief.md: wait for runall, settle
   failing tests (capture in the scene or keep it under the floor; never weaken), tests for parts
   1/2 with mutations, checks, WHOLE dynamic run, delete u123/proj. Scratch u130.
+
+## 02:15 UTC 2026-11-25: CI on 62a12f5 failed two jobs; fixed; a27e2e9 in CI
+
+- ubuntu: attach.rs a_failed_attach_stays_open_so_abort_can_run_what_is_left expected the old
+  advice "dla run abort" (T changed attach_cmd.rs to "dla run stop ... and the run goes on" and
+  never ran attach.rs). Fixed by me: the test expects `dla run stop`, then RUNS it and checks the
+  pending JFR.stop ran and the status stays active (stronger, not weaker). Passes locally.
+- macOS: T's harness_pytest_loop.rs the_process_an_earlier_command_... had no have_pytest() guard
+  (macOS runner has no pytest). Added the guard like the 17 other pytest tests.
+- Commit a27e2e9 on wip/progress = 62a12f5 tree + these two files (+ notes), built through a temp
+  index so X2's work stays out. Waiter u115/ci-wip-30. When green: commit-snapshot-tree.sh a27e2e9
+  with commit-message-30.txt (add one line about the attach advice), push main and dev.

@@ -20,7 +20,9 @@ A CUT COMMAND
   never by name, and not while another `dla harness run` is alive), and
   says so in `_attention`.
 - The help and output of `dla run abort` say first that it ends the run
-  for good, and name `dla run stop`. The skill and its references say: a
+  for good, and name `dla run stop`. A failed `dla attach` that leaves a
+  cleanup step (a recording to stop) names `dla run stop` for it, which
+  runs the step and keeps the run open. The skill and its references say: a
   cut command is followed by `dla run stop` or by running it again, never
   by `dla run abort`.
 
