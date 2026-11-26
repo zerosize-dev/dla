@@ -825,27 +825,49 @@ fn budget_note(state: &RunState, worker: Option<&str>, run_dir: &Path) -> String
 
 /// The open item that holds a stop: the budget is over its floor, no command was refused for
 /// time with nothing smaller that fits, and the final gate lists an open `queue` or, with no
-/// queue, a `growth` item (growth that was measured and not decided: a closed finding, or a
-/// detector lead, whose fix is the commands that decide it). A queue wins when both are listed.
+/// queue, growth that was measured and not decided: a `growth` item (a closed finding, or a
+/// detector lead, whose fix is the commands that decide it), or a `finding` item of a finding
+/// still open whose growth no alloc-test decided ([`dla_core::grown::grown_unmeasured`]; its
+/// fix is then the commands of that growth). A queue wins when both are listed.
 /// A stop attempt then is not counted toward [`STOP_LIMIT`]: the run has time and ranked
 /// candidates or measured growth it never decided, so giving up three times is no reason to
-/// let it end. Findings and open items alone never hold a stop, and neither does a queue that
+/// let it end. Other findings and open items never hold a stop, and neither does a queue that
 /// closed (`intake.workload` resolved unresolved), because then none is listed.
-fn held_item<'a>(
+fn held_item(
     state: Option<&RunState>,
     worker: Option<&str>,
     run_dir: &Path,
-    missing: &'a [Missing],
-) -> Option<&'a Missing> {
+    missing: &[Missing],
+) -> Option<Missing> {
     let state = state?;
     gate::budget_over_floor(state, worker)?;
     if dla_core::toolctx::nothing_fits_since(run_dir, worker, state.budget.started_at) {
         return None;
     }
-    missing
+    if let Some(m) = missing
         .iter()
         .find(|m| m.kind == "queue")
         .or_else(|| missing.iter().find(|m| m.kind == "growth"))
+    {
+        return Some(m.clone());
+    }
+    // A finding still open is listed as a `finding` item; its growth, when measured and not
+    // decided, holds the stop like a closed one does.
+    if !missing.iter().any(|m| m.kind == "finding") {
+        return None;
+    }
+    let view = RunView::load_for(run_dir, worker).ok()?;
+    let grown = dla_core::grown::grown_unmeasured(&view);
+    missing
+        .iter()
+        .filter(|m| m.kind == "finding")
+        .find_map(|m| grown.iter().find(|g| g.finding.to_string() == m.id))
+        .map(|g| Missing {
+            kind: "growth".to_owned(),
+            id: g.finding.to_string(),
+            description: g.grew_text(),
+            fix: g.commands().join("   then   "),
+        })
 }
 
 /// The line that says a stop was not counted, and what to do instead.
@@ -912,7 +934,7 @@ fn block_reason(
         s.push_str(&budget_note(st, worker, run_dir));
         if let Some(q) = held_item(state, worker, run_dir, missing_all) {
             s.push('\n');
-            s.push_str(&held_note(st, worker, q));
+            s.push_str(&held_note(st, worker, &q));
         }
     }
     let tail = format!("\nThe full list: {full}");

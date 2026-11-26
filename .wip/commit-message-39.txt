@@ -1,0 +1,38 @@
+Growth on a shared loop is decided by a driver made for the finding, not closed
+
+An unattended run on a JVM library measured thirteen findings whose probe columns grew on the
+project's JUnit loop, its documented leak among them. An alloc-test of each on that loop favored
+leak. The model refuted every non-leak sibling, then its own script skipped each confirm ("measured
+only in a shared loop where many objects are alive together; an isolated driver would decide") and
+closed all thirteen `unresolved inconclusive`, ten minutes into a 3-hour budget. Every close was
+accepted, and the run never came back to them.
+
+The judgment was right, and the tool let the run stop at it. A lead made by a passed growth column
+was lifted by any alloc-test bound to the finding, whatever it favored and on whatever harness,
+while the route to confirm exists only on a hook driver made for the finding. A leak result on the
+loop therefore left nothing that held the finding.
+
+- The newest alloc-test bound to the family on a harness about the finding decides
+  (`grown::decided_by_alloc_test`). It lifts the lead when it favors non-leak, or when it ran on a
+  hook driver made for the finding (a target or entry-path harness), whatever it favors. A leak or
+  inconclusive result on a test loop, the project's own workload, or a harness about the finding
+  only through a probe, a column, cited evidence or a capture leaves the lead, and the lead names
+  that alloc-test. Its commands are the sibling, the test, `dla harness gen --lang <rt> --driver
+  --probe <F>`, the run, the trend and the alloc-test on the new harness, for every runtime.
+- `ledger resolve` refuses such a close (`growth-not-measured`) and names the alloc-test and the
+  harness. `close-rest` leaves the finding with the same words, and the final gate lists it.
+  `dla alloc-test` adds a `shared_hint` sentence when a leak result came from such a harness.
+- When `--driver --probe` is refused with `driver-unavailable` and the refusal names no other
+  driver (a Rust crate with only binaries), the run records it and the shared alloc-test decides.
+  A workspace whose member crate has a library target names a driver, and it is not recorded.
+- With budget over its floor, the Stop hook does not count a stop while growth that was measured
+  is undecided. That covers a closed finding (a `growth` item) and a candidate or a finding under
+  test (a `finding` item). The block names the first command of the route. An open queue still
+  comes first.
+- The bench policy closes once more after the tool refused the driver. The bench starts its child
+  processes through one helper that retries for a second when exec meets "text file busy". A fork
+  in another test thread can hold the write handle of a fake tool a test just wrote, which made
+  bench unit tests fail at random.
+
+Not covered: a real JVM run that builds the driver; a Rust workspace through the printed route to a
+measurement.

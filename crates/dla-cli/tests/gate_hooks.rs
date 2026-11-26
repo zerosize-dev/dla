@@ -2017,3 +2017,101 @@ fn an_open_queue_wins_over_a_growth_item_in_the_hold_note() {
         p.state()
     );
 }
+
+/// The same growth with its finding still open (a candidate, and then under test): the gate lists
+/// it as a `finding` item, not a `growth` one, and the stop is held all the same.
+#[test]
+fn growth_of_a_finding_still_open_holds_the_stop_like_a_closed_one() {
+    let p = queue_project();
+    p.ok(&[
+        "ledger",
+        "resolve",
+        "intake.workload",
+        "--status",
+        "unresolved",
+        "--reason",
+        "env_unavailable",
+        "--remedy",
+        "no interpreter for the driver",
+        "--runtime",
+        "python",
+    ]);
+    let f = registry_finding(&p);
+    growth_on_a_loop(&p, &f);
+    let check = |p: &P| {
+        let kinds = missing_kinds(p);
+        assert!(!kinds.iter().any(|k| k == "queue"), "{kinds:?}");
+        assert!(!kinds.iter().any(|k| k == "growth"), "{kinds:?}");
+        for out in stop_attempts(p, 4) {
+            let v = out.json();
+            assert_eq!(v["decision"], "block", "{out:?}");
+            let reason = v["reason"].as_str().unwrap();
+            assert!(reason.len() <= 1000, "{} bytes", reason.len());
+            assert!(
+                reason.contains(&format!(
+                    " budget minutes remain and growth that was measured is not decided ({f}). Run dla "
+                )),
+                "{reason}"
+            );
+        }
+        let st = p.state();
+        assert_eq!(st["status"], "active", "{st}");
+        assert!(
+            st["stop_blocks"].is_null() || st["stop_blocks"] == 0,
+            "{st}"
+        );
+    };
+    check(&p);
+    // Under test with the workload of the loop, as `dla ledger test` puts it.
+    let mut l = dla_core::Ledger::load(&p.run_dir()).unwrap();
+    l.add_evidence(dla_core::NewEvidence {
+        source: dla_core::Source::Repo {
+            commit: "c".into(),
+            path: None,
+        },
+        tool: dla_core::Tool {
+            name: "dla".into(),
+            version: "1".into(),
+        },
+        authority: dla_core::Authority::Test,
+        kind: dla_core::EvidenceKind::Workload,
+        result: json!({"harness": "H1", "mode": "driver", "series": ["S1"]}),
+        raw: None,
+        coverage: dla_core::evidence::EvidenceCoverage::default(),
+        limitations: vec![],
+        unknowns: vec![],
+    })
+    .unwrap();
+    let newest = |kind: dla_core::EvidenceKind| {
+        l.evidence()
+            .filter(|e| e.kind == kind)
+            .last()
+            .map(|e| e.evidence_id.to_string())
+            .unwrap()
+    };
+    let (w, g) = (
+        newest(dla_core::EvidenceKind::Workload),
+        newest(dla_core::EvidenceKind::GrowthSeries),
+    );
+    let fs = f.to_string();
+    p.ok(&[
+        "ledger",
+        "add",
+        "--sibling-of",
+        &fs,
+        "--origin",
+        "hypothesis",
+        "--hypothesis",
+        "N-WARM",
+        "--refute-if",
+        "growth continues over the extra cycles",
+        "--evidence",
+        &g,
+    ]);
+    p.ok(&["ledger", "test", &fs, "--evidence", &w]);
+    check(&p);
+    // Under the floor the third stop goes through, as for a closed one.
+    set_deadline(&p, 4);
+    let outs = stop_attempts(&p, 3);
+    assert!(outs[2].allowed(), "{:?}", outs[2]);
+}

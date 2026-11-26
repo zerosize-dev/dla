@@ -843,6 +843,32 @@ fn a_workspace_root_refuses_a_driver_and_names_the_member_crates() {
     assert!(fix.contains("the others: tool"), "{fix}");
 }
 
+/// A workspace whose member crate has a library target can have a driver (its refusal names
+/// one), so a refused `--driver --probe` there is not recorded as "no driver can be built": the
+/// growth of that finding on a shared harness stays a lead.
+#[test]
+fn a_driver_refused_at_a_workspace_root_with_a_library_member_is_not_recorded() {
+    if !have_cargo() {
+        return;
+    }
+    let r = Run::of(workspace);
+    let target = r.id_at("libm/src/lib.rs:3");
+    let o = r.run(&[
+        "harness", "gen", "--lang", "rust", "--driver", "--probe", &target,
+    ]);
+    assert_ne!(o.code, 0, "{}", o.text);
+    assert_eq!(o.json["error"]["code"], "driver-unavailable", "{}", o.text);
+    let fix = o.json["error"]["fix"].as_str().unwrap();
+    assert!(
+        fix.contains("--driver --workload rust:test:libm/Cargo.toml"),
+        "{fix}"
+    );
+    assert!(
+        !r.run_dir.join("harness/driver-unavailable.json").exists(),
+        "a driver can be built on the member crate"
+    );
+}
+
 #[test]
 fn the_command_a_workspace_target_prints_runs_as_printed_and_reaches_the_target() {
     if !have_cargo() || !have_llvm_tools() {

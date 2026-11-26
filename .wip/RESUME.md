@@ -3653,3 +3653,17 @@ unattended run at a time and no builder beside it.
 - NEXT: when builder L is done and checked, push L's tree with CI, then start the reruns on the
   preview.10 rig one at a time (interceptors, fastrace, otel-go, logstash, otel-python), keys in
   wip-notes/start-run.sh, waiter u107/wait-run.sh <name> 7000.
+
+## 04:00 UTC 2026-11-26: builder L done; checked and extended by me
+
+- L: grown::decided_by_alloc_test (lift by non-leak, or a made-for-it hook driver; shared leak/
+  inconclusive keeps the lead with Grown.shared), DriverRoute::Shared commands (--driver --probe),
+  refusal/close-rest/gate texts, alloc-test shared_hint, stop hook holds on `growth` items,
+  driver-unavailable.json record (lifts), bench policy closes once more after a refused driver.
+- MINE: (1) the record is not written when the refusal's fix still names `--driver` (workspace
+  with a lib member) + rust_driver test, mutation caught; (2) held_item also holds on a `finding`
+  item whose finding is in grown_unmeasured (candidate or under_test), Missing synthesized with
+  the grown commands + gate_hooks test (candidate, under_test, floor), mutation caught;
+  (3) SKILL.md Stop-hook line reworded (18428 bytes), skill_text pin updated; recovery.md says
+  it; VERIFY row extended. fmt + clippy clean. Commit message 39 drafted.
+- Full `cargo test --workspace` running (u141/ws-test.log). Then full dynamic bench alone.

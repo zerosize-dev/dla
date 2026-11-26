@@ -2477,7 +2477,9 @@ impl Drop for Cleanup {
 /// (`--driver --probe`) that is refused with `driver-unavailable` (a Rust crate with only
 /// binaries, a project layout the driver cannot be planned for) is recorded in the run
 /// ([`dla_core::harness::HarnessAttempt::save_driver_unavailable`]): the growth of those findings
-/// measured on a harness not made for them can then be decided without one.
+/// measured on a harness not made for them can then be decided without one. A refusal whose own
+/// fix still names a driver (a workspace member crate with a library target) is not recorded:
+/// a driver can be built there.
 pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusal> {
     let out = generate_inner(ctx, opts);
     if let Err(r) = &out
@@ -2485,6 +2487,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         && opts.driver
         && !opts.junit
         && !opts.probe_findings.is_empty()
+        && !r.fix.contains("--driver")
     {
         // The refusal stands even when the record cannot be written.
         let _ = dla_core::harness::HarnessAttempt::save_driver_unavailable(
