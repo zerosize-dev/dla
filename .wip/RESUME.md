@@ -3809,3 +3809,8 @@ unattended run at a time and no builder beside it.
   a_confirmed_explanation_lifts_the_lead_and_the_root_is_closed_not_refuted; asserts refute
   refused discriminator-required); mutation (both guards reopened) caught; docs + VERIFY fixed.
   fmt + clippy clean; workspace tests running (u149/ws-test.log). Commit message 42 drafted.
+- 15:05 UTC: workspace tests on O+P: 178 binaries ok, 0 failed; EXIT 101 only from doctests whose
+  rlibs MY low-disk cleanup (-mmin +40 during the run) deleted; `cargo test --workspace --doc`
+  rerun: all ok. LESSON: never delete build dirs while a cargo test of the tree is running.
+  Binaries copied to $sp/bin-OP; target build dirs deleted (8.4 GB free). Full dynamic on O+P
+  running from the copies (u149/dyn-OP.out, monitor bf315dvre).
