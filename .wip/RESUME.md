@@ -3594,3 +3594,17 @@ unattended run at a time and no builder beside it.
   or same harness via dump_harness, which now reads any per-dump record kind). CLI test
   grown_dump::a_leak_confirmed_on_the_dumps_of_the_same_capture... (mutation caught). Docs
   updated. TODO after logstash ends: dla-bench dynamic --only the 5 fixtures locally, then push.
+
+## 00:20 UTC 2026-11-26: r3-logstash NOT FOUND (documented); another real leak confirmed
+
+- r3-logstash (preview.9): runner wall limit 12600 s hit, report COMPLETE, 1h44m of 3h budget,
+  29 harness runs, all 64 ranked targeted. Confirmed F30 (ObjectFieldsAppendingMarker
+  .serializerHelper static CHM keyed by ObjectMapper, new mapper per encoder start, reproduced via
+  public API, verifier L-STALE). Documented F109 ThreadLocalHolder.threadValues (:63): under_test
+  on a JUnit-loop measurement (E40), closed `unresolved inconclusive` at 20:56 (10 min in) with
+  remedy "an isolated driver and heap-graph retention path would decide"; never revisited.
+- NEXT CAUSE TO FIX: an inconclusive close with budget over the floor accepted on a shared-loop
+  measurement, not a driver made for the finding (like the alloc-test "made for it" rule).
+- Set A on preview.9: interceptors PARTLY, fastrace NOT, otel-python FOUND, otel-go NOT (early
+  stop), logstash NOT (premature inconclusive) + a second real leak found.
+- Kept /root/dla-real/r3-logstash-keep; run dir deleted.

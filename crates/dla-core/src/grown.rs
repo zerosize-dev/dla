@@ -15,6 +15,8 @@
 //!
 //! Whole-process columns tie to no finding and stay with the residual rows.
 
+use std::collections::BTreeSet;
+
 use crate::{
     evidence::{Authority, EvidenceKind, EvidenceRecord},
     finding::{FindingState, Polarity},
@@ -1042,6 +1044,30 @@ fn dump_grown(view: &RunView, out: &mut Vec<Grown>) {
             hits.push((at, ff.root_id(), column, series.clone(), is_disc));
         }
     }
+    // The harness a dump series was captured from: the first growth record of the series
+    // whose per-dump records name one.
+    let series_harness = |s: &str| -> Option<String> {
+        records
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| is_growth_record(e) && series_of(e).as_deref() == Some(s))
+            .find_map(|(i, _)| dump_harness(&records, i))
+    };
+    // The one harness the run captured, when only one did: a summary whose records name no
+    // harness (a non-heap table, a histogram) can then only be of that capture.
+    let captured: BTreeSet<String> = records
+        .iter()
+        .filter(|e| matches!(e.authority, Authority::Dump | Authority::Live))
+        .filter_map(|e| match &e.source {
+            crate::evidence::Source::Artifact { path, .. } => {
+                crate::measured_holders::harness_of_path(path).map(str::to_owned)
+            }
+            _ => None,
+        })
+        .collect();
+    let only_captured: Option<String> = (captured.len() == 1)
+        .then(|| captured.iter().next().cloned())
+        .flatten();
     let mut roots: Vec<FindingId> = Vec::new();
     for (_, r, ..) in &hits {
         if !roots.contains(r) {
@@ -1103,15 +1129,32 @@ fn dump_grown(view: &RunView, out: &mut Vec<Grown>) {
                     .rposition(|e| is_growth_record(e) && series_of(e).as_ref() == Some(s))
             })
         };
-        let harness = growth_at
-            .and_then(|g| dump_harness(&records, g))
+        // The harness of the series: the first growth record of it whose dumps name one (a
+        // later `dla trend` of the same series writes a growth record with no dumps before it).
+        let harness = series
+            .as_deref()
+            .and_then(&series_harness)
+            .or_else(|| growth_at.and_then(|g| dump_harness(&records, g)))
             .unwrap_or_default();
-        // A leak confirmed outside this family on dump growth of the same capture (the same
-        // growth record, or one of the same harness) accounts for it: the other holders that
-        // grew in the same process's dumps are the parts that leak keeps alive (the fields of
-        // the object that leaks, what its holder retains), not leads of their own. It is no
-        // longer a lead and may be closed; a second, separate leak in the same capture is then
-        // closed `unresolved` with its growth on record.
+        // A leak confirmed outside this family on growth over the dumps of the same capture (a
+        // record of the same series, or of a series whose capture is of the same harness)
+        // accounts for it: the other holders that grew in the same process's dumps are the
+        // parts that leak keeps alive (the fields of the object that leaks, what its holder
+        // retains), not leads of their own. It is no longer a lead and may be closed; a second,
+        // separate leak in the same capture is then closed `unresolved` with its growth on
+        // record.
+        // Every dump series this finding grew in, and the harnesses they were captured from: a
+        // part of a leak grows in each capture that leak grows in.
+        let grew_in: BTreeSet<String> = hits
+            .iter()
+            .filter(|h| h.1 == root)
+            .filter_map(|h| h.3.clone())
+            .collect();
+        let mut grew_under: BTreeSet<String> =
+            grew_in.iter().filter_map(|s| series_harness(s)).collect();
+        if !harness.is_empty() {
+            grew_under.insert(harness.clone());
+        }
         let explained = ledger
             .findings()
             .filter(|f| {
@@ -1122,11 +1165,16 @@ fn dump_grown(view: &RunView, out: &mut Vec<Grown>) {
             })
             .flat_map(|f| f.supports.iter())
             .filter_map(|e| records.iter().position(|r| &r.evidence_id == e))
-            .filter(|&i| records[i].authority == Authority::Dump && is_growth_record(records[i]))
+            .filter(|&i| is_dump_axis(records[i]))
             .any(|i| {
-                growth_at == Some(i)
-                    || (!harness.is_empty()
-                        && dump_harness(&records, i).as_deref() == Some(harness.as_str()))
+                let cited = series_of(records[i]);
+                cited.as_ref().is_some_and(|c| grew_in.contains(c))
+                    || cited
+                        .as_deref()
+                        .and_then(&series_harness)
+                        .or_else(|| dump_harness(&records, i))
+                        .or_else(|| only_captured.clone())
+                        .is_some_and(|h| grew_under.contains(&h))
             });
         if explained {
             continue;
@@ -1184,6 +1232,24 @@ fn dump_grown(view: &RunView, out: &mut Vec<Grown>) {
                 commands,
             }),
         });
+    }
+}
+
+/// A growth or discriminator record of a dump series (a summarizer's, read from captures), of
+/// either authority a summarizer writes (`dump` for a heap dump, `live` for a table it read
+/// from the running process).
+fn is_dump_axis(e: &EvidenceRecord) -> bool {
+    let kind_fits = is_growth_record(e) || e.kind == EvidenceKind::Discriminator;
+    match e.authority {
+        // A heap dump's summary: whatever axis its series has.
+        Authority::Dump => kind_fits,
+        // A table read from the running process at each capture: only its dump series.
+        Authority::Live => {
+            kind_fits
+                && (e.kind == EvidenceKind::Discriminator
+                    || e.result.get("axis").and_then(|a| a.as_str()) == Some("dump"))
+        }
+        _ => false,
     }
 }
 

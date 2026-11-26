@@ -17,7 +17,11 @@ listed once per run of one harness.
   a newer alloc-test bound to the finding that favors non-leak. An alloc-test that favors leak
   does not lift it: on a driver not made for the finding it gives no confirm route, and the dump
   is about the holder. The harness comes from the capture files of the dumps. Every dump
-  summarizer prints this route, so the rule is not Node's.
+  summarizer prints this route, so the rule is not Node's. A leak confirmed on dump growth of
+  the same capture lifts it as well: the other holders that grew in that process's dumps (the
+  fields of the object that leaks, what its holder keeps) are parts of that leak. Without this,
+  five fixtures confirmed their planted holder and left its parts as leads that a site
+  annotation would have to close.
 - The Node agent takes its captures right after its forced collection and before it reads any
   WeakRef in the job (the listener sweep, the listener count, the probes). A `deref()` keeps its
   target on the job's list, and V8 writes that list into the snapshot as a strong-roots edge to

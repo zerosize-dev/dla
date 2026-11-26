@@ -683,3 +683,124 @@ fn a_leak_confirmed_on_the_dumps_of_the_same_capture_accounts_for_the_other_hold
     assert_eq!(code, 0, "{v}");
     assert_eq!(r.state("F2"), "unresolved");
 }
+
+/// A heap-graph series `series` of harness `harness`: a retention record per snapshot, the
+/// growth record whose passed columns name `findings`, a leak discriminator for each.
+fn holder_series(r: &R, series: &str, harness: &str, findings: &[(&str, &str)]) -> String {
+    for i in 1..=3 {
+        add(
+            r,
+            evidence(
+                Authority::Dump,
+                EvidenceKind::RetentionPath,
+                Some(&format!(
+                    "harness/{harness}/out/p{i}/capture/7/heap-{i}.heapsnapshot"
+                )),
+                json!({"holders": []}),
+            ),
+        );
+    }
+    let passed: Vec<Value> = findings
+        .iter()
+        .map(|(f, c)| json!({"column": c, "finding": f, "candidates": [f]}))
+        .collect();
+    let growth = add(
+        r,
+        evidence(
+            Authority::Dump,
+            EvidenceKind::GrowthSeries,
+            None,
+            json!({"series": series, "axis": "dump", "n": 3, "gate": "pass", "passed": passed}),
+        ),
+    );
+    for (f, c) in findings {
+        add(
+            r,
+            evidence(
+                Authority::Dump,
+                EvidenceKind::Discriminator,
+                None,
+                json!({"test": "dump-plateau", "favors": "leak", "supports": ["leak"],
+                    "finding": f, "column": c, "series": series,
+                    "reason": "retained bytes and count grew over every interval"}),
+            ),
+        );
+    }
+    growth
+}
+
+/// F2, a second holder, raised the way the census raises one.
+fn second_holder(r: &R) {
+    let seed = add(
+        r,
+        evidence(
+            Authority::Dump,
+            EvidenceKind::GrowthSeries,
+            None,
+            json!({"series": "S2", "axis": "dump", "n": 3, "gate": "pass", "passed": []}),
+        ),
+    );
+    let added = r.ok(&[
+        "ledger",
+        "add",
+        "--origin",
+        "growth-series",
+        "--evidence",
+        &seed,
+        "--site",
+        "src/conn.js:1",
+        "--holder",
+        "container-field",
+        "--owner",
+        "app.Conn.socket",
+    ]);
+    assert_eq!(added["id"], "F2", "{added}");
+}
+
+fn confirm_f1(r: &R) {
+    let missing = r.final_gate();
+    let item = missing
+        .iter()
+        .find(|m| {
+            m["id"] == "F1"
+                && m["fix"]
+                    .as_str()
+                    .is_some_and(|f| f.contains("dla ledger confirm F1"))
+        })
+        .unwrap_or_else(|| panic!("{missing:?}"));
+    let fix = item["fix"].as_str().unwrap().to_owned();
+    run_fix(r, &fix);
+    assert_eq!(r.state("F1"), "confirmed");
+}
+
+#[test]
+fn a_part_that_grew_in_a_later_capture_too_is_explained_by_the_leak_of_the_first() {
+    let (r, _w) = scene();
+    second_holder(&r);
+    holder_series(
+        &r,
+        "S4",
+        "H1",
+        &[
+            ("F1", "holder:static:app.Conn.request"),
+            ("F2", "holder:field:app.Conn.socket"),
+        ],
+    );
+    confirm_f1(&r);
+    // A later capture of another harness shows F2 grow again; nothing confirmed there.
+    holder_series(&r, "S5", "H2", &[("F2", "holder:field:app.Conn.socket")]);
+    let (code, v) = close(&r, "F2", "unresolved");
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn a_holder_that_grew_only_in_another_capture_stays_a_lead() {
+    let (r, _w) = scene();
+    second_holder(&r);
+    holder_series(&r, "S4", "H1", &[("F1", "holder:static:app.Conn.request")]);
+    holder_series(&r, "S5", "H2", &[("F2", "holder:field:app.Conn.socket")]);
+    confirm_f1(&r);
+    let (code, v) = close(&r, "F2", "unresolved");
+    assert_ne!(code, 0, "{v}");
+    assert_eq!(v["error"]["code"], "growth-not-measured", "{v}");
+}
