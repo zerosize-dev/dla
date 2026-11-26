@@ -8,6 +8,9 @@ use serde_json::{Value, json};
 
 /// The extra rise must exceed this many noise units for growth to continue.
 const NOISE_MULTIPLE: f64 = 3.0;
+/// A step of a column that grows in steps is a new maximum of more than this many units of the
+/// main window's own scatter around its trend (see [`stair`]).
+const STEP_SCATTERS: f64 = 2.0;
 /// The extra slope must keep at least this share of the main slope.
 const KEEP_SLOPE: f64 = 0.5;
 /// A purge that returns at least this share of the growth releases it.
@@ -104,6 +107,9 @@ pub struct Plateau {
     pub noise: Option<f64>,
     /// The verdict.
     pub verdict: PlateauVerdict,
+    /// Extra points that would cover the longest gap between the main window's steps, when the
+    /// column grew in steps and its extra window was too short to tell (see [`stair`]).
+    pub points_needed: Option<u32>,
 }
 
 /// An `(x, y)` point.
@@ -143,7 +149,11 @@ fn sen_slope(points: &[(f64, f64)]) -> Option<f64> {
 /// every delta over the extra window (starting from the last main point) at least one means
 /// growth; no net increase means a plateau. `min_rise` is the smallest rise of a gauge that
 /// is growth at all (zero when the column has no such resolution; [`MIN_BYTE_RISE`] for a
-/// byte column): a smaller rise is a plateau whatever the noise reads.
+/// byte column): a smaller rise is a plateau whatever the noise reads. A gauge that grew in
+/// separate steps in the main window and whose extra window rose clearly (over one noise unit,
+/// the minimum rise and the drift floor) is not read as a plateau on the scatter its steps make:
+/// see [`stair`] (a new maximum is growth that continues; a window shorter than the gap between
+/// steps is inconclusive).
 pub fn plateau(
     main: &[(f64, f64)],
     extra: &[(f64, f64)],
@@ -158,6 +168,7 @@ pub fn plateau(
         extra_rise: None,
         noise: None,
         verdict: PlateauVerdict::NotRun,
+        points_needed: None,
     };
     if counter {
         if extra.is_empty() {
@@ -188,6 +199,7 @@ pub fn plateau(
             extra_rise: Some(net),
             noise: Some(nz),
             verdict,
+            points_needed: None,
         };
     }
     if extra.len() < MIN_GAUGE_POINTS {
@@ -228,12 +240,34 @@ pub fn plateau(
     } else {
         PlateauVerdict::Inconclusive
     };
+    // A column that grows in steps scatters around a straight fit by the size of its steps, so
+    // a rise "within three noise units" of that scatter is no plateau: when the extra window
+    // rose clearly (over one noise unit and the minimum rise, and over the drift floor), the
+    // steps themselves tell whether it went on.
+    let mut points_needed = None;
+    let verdict = if verdict == PlateauVerdict::Plateau
+        && rise > nz.max(1e-9 * scale)
+        && rise > min_rise
+        && material
+    {
+        match stair(main, extra, nz) {
+            Some(Stair::NewMax) => PlateauVerdict::Continues,
+            Some(Stair::TooShort { points_needed: n }) => {
+                points_needed = Some(n);
+                PlateauVerdict::Inconclusive
+            }
+            Some(Stair::Stopped) | None => PlateauVerdict::Plateau,
+        }
+    } else {
+        verdict
+    };
     Plateau {
         main_slope,
         extra_slope: Some(sen.slope),
         extra_rise: Some(rise),
         noise: Some(nz),
         verdict,
+        points_needed,
     }
 }
 
@@ -251,18 +285,81 @@ pub struct Rises {
 /// The separate rises of `main`: points that set a new maximum by more than `noise`, counted
 /// from `start` (the column at the end of the warm-up; the first main point when there is none).
 pub fn count_rises(main: &[Point], start: Option<f64>, noise: f64) -> u32 {
-    let mut ys = main.iter().map(|p| p.1);
-    let Some(mut max) = start.or_else(|| ys.next()) else {
-        return 0;
+    rise_xs(main, start, noise).len() as u32
+}
+
+/// The `x` of every point that sets a new maximum by more than `noise` (see [`count_rises`]).
+fn rise_xs(main: &[Point], start: Option<f64>, noise: f64) -> Vec<f64> {
+    let mut pts = main.iter();
+    let first = pts.next();
+    let Some(mut max) = start.or(first.map(|p| p.1)) else {
+        return Vec::new();
     };
-    let mut n = 0;
-    for y in ys {
+    let mut xs = Vec::new();
+    // With a `start`, the first point is a reading like the others; without one it is the base.
+    let rest = if start.is_some() { main.iter() } else { pts };
+    for &(x, y) in rest {
         if y > max + noise {
-            n += 1;
+            xs.push(x);
         }
         max = max.max(y);
     }
-    n
+    xs
+}
+
+/// How the extra window of a column that grew in steps reads (see [`stair`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stair {
+    /// The extra window reaches a new maximum, above the main window's by more than the noise:
+    /// a step happened in it, and the growth goes on.
+    NewMax,
+    /// No new maximum, and the extra window is no longer than the longest gap between the main
+    /// window's steps: a step may simply not have come yet. `points_needed` extra points would
+    /// cover that gap.
+    TooShort {
+        /// Points of the extra window that cover the longest gap.
+        points_needed: u32,
+    },
+    /// No new maximum for longer than the longest gap between the main window's steps: the
+    /// growth stopped.
+    Stopped,
+}
+
+/// The step reading of a gauge column: `None` for a column that did not grow in separate steps
+/// in the main window (fewer than two rises, or a rise at every interval, which is a ramp: its
+/// scatter around a straight fit is small and the ordinary test serves). A step-shaped column
+/// grows by jumps, so its scatter around a straight fit is the step size and "within three noise
+/// units" says nothing about it; what it can show is a new maximum (a step in the extra
+/// window), or that no step came for longer than the main window's steps were apart.
+pub fn stair(main: &[Point], extra: &[Point], noise: f64) -> Option<Stair> {
+    // A step is a new maximum of more than `STEP_SCATTERS` units of the main window's own scatter
+    // around its trend: the scatter of a regular staircase is about a third of its step, so its
+    // steps pass, and the few-KB jitter of a level column (a rise or two of one scatter) does not.
+    let trend = theil_sen(main, 0.05)?;
+    let xs = rise_xs(main, None, STEP_SCATTERS * dla_stats::noise(main, &trend));
+    if xs.len() < 2 || xs.len() >= main.len().saturating_sub(1) {
+        return None;
+    }
+    let gap = xs.windows(2).map(|w| w[1] - w[0]).fold(0.0_f64, f64::max);
+    let main_max = main.iter().fold(f64::NEG_INFINITY, |m, p| m.max(p.1));
+    let extra_max = extra.iter().fold(f64::NEG_INFINITY, |m, p| m.max(p.1));
+    if extra_max > main_max + noise {
+        return Some(Stair::NewMax);
+    }
+    let (e0, e1) = (extra.first()?, extra.last()?);
+    let span = e1.0 - e0.0;
+    if span > gap {
+        return Some(Stair::Stopped);
+    }
+    let per_point = span / (extra.len() - 1).max(1) as f64;
+    let points_needed = if per_point > 0.0 {
+        (gap / per_point).floor() as u32 + 2
+    } else {
+        extra.len() as u32 + 1
+    };
+    Some(Stair::TooShort {
+        points_needed: points_needed.max(extra.len() as u32 + 1),
+    })
 }
 
 /// The rises of the main window against the length of the extra window.
@@ -901,6 +998,104 @@ mod tests {
         let flat = line(&[100.0; 6]);
         let r = rises(&flat, &extra, Some(100.0), 10.0).unwrap();
         assert_eq!((r.count, r.expected, r.points_needed), (0, 0.0, None));
+    }
+
+    /// Points of a byte column in MB, one every 440 iterations from the `first`-th.
+    fn mb(first: usize, ys: &[f64]) -> Vec<Point> {
+        ys.iter()
+            .enumerate()
+            .map(|(i, y)| (440.0 * (first + i) as f64, y * 1e6))
+            .collect()
+    }
+
+    /// The main window of a `Vec` that doubles its capacity, shaped as a measured run's
+    /// allocator-shim column was (8 points, the noise of its own steps): 10 MB, a step to 70 and
+    /// a step to 130.
+    fn doubling_main() -> Vec<Point> {
+        mb(1, &[10., 10., 10., 10., 70., 70., 70., 130.])
+    }
+
+    #[test]
+    fn a_column_that_grows_in_steps_and_reaches_a_new_maximum_in_the_extra_window_continues() {
+        // The measured case: the extra window (16 points) rose 62 MB, under three noise units
+        // (the steps themselves are the scatter) and at under half the main slope; the old rule
+        // read that as a plateau. The extra window holds a new step, 54 MB over the main
+        // window's maximum and the noise 22 MB.
+        let main = doubling_main();
+        let extra = mb(
+            9,
+            &[
+                130., 130., 130., 130., 130., 130., 130., 130., 184., 184., 184., 184., 184., 184.,
+                184., 184.,
+            ],
+        );
+        let p = plateau(&main, &extra, false, 0.0, MIN_BYTE_RISE);
+        let (rise, noise) = (p.extra_rise.unwrap(), p.noise.unwrap());
+        assert!(rise > noise && rise <= NOISE_MULTIPLE * noise, "{p:?}");
+        assert!(
+            p.extra_slope.unwrap() < KEEP_SLOPE * p.main_slope.unwrap(),
+            "{p:?}"
+        );
+        assert_eq!(p.verdict, PlateauVerdict::Continues, "{p:?}");
+        assert_eq!(p.points_needed, None);
+        // The same column that did not rise in the extra window is a plateau.
+        let flat = mb(9, &[130.0; 16]);
+        let p = plateau(&main, &flat, false, 0.0, MIN_BYTE_RISE);
+        assert_eq!(p.verdict, PlateauVerdict::Plateau, "{p:?}");
+    }
+
+    #[test]
+    fn a_stair_whose_extra_window_is_shorter_than_its_step_gap_is_inconclusive_and_says_how_long() {
+        // Steps at x = 2200 and 3520: a gap of 1320. Four points 440 apart span 1320, no more
+        // than a gap, and none passes the main window's maximum plus its noise: a step may
+        // simply not have come yet.
+        let main = doubling_main();
+        let extra = mb(10, &[100., 115., 130., 148.]);
+        let p = plateau(&main, &extra, false, 0.0, MIN_BYTE_RISE);
+        assert!(p.extra_rise.unwrap() > p.noise.unwrap(), "{p:?}");
+        assert_eq!(p.verdict, PlateauVerdict::Inconclusive, "{p:?}");
+        // Five points span 1760, over the gap: the window that would cover it.
+        assert_eq!(p.points_needed, Some(5), "{p:?}");
+        let longer = mb(10, &[100., 115., 130., 148., 140.]);
+        let q = plateau(&main, &longer, false, 0.0, MIN_BYTE_RISE);
+        assert_eq!(q.verdict, PlateauVerdict::Plateau, "{q:?}");
+        assert_eq!(q.points_needed, None);
+    }
+
+    #[test]
+    fn a_stair_that_stays_at_or_under_its_maximum_for_longer_than_its_gap_is_a_plateau() {
+        // Eight points span 3080, over the longest gap of 1320, and rise clearly (a slow
+        // recovery to the old level) without a new maximum: the growth stopped.
+        let main = doubling_main();
+        let extra = mb(9, &[90., 95., 100., 105., 110., 115., 120., 128.]);
+        let p = plateau(&main, &extra, false, 0.0, MIN_BYTE_RISE);
+        assert!(p.extra_rise.unwrap() > p.noise.unwrap(), "{p:?}");
+        assert_eq!(p.verdict, PlateauVerdict::Plateau, "{p:?}");
+        assert_eq!(p.points_needed, None);
+    }
+
+    #[test]
+    fn a_column_that_rose_in_one_step_or_at_every_point_keeps_its_ordinary_verdict() {
+        let extra = mb(
+            9,
+            &[
+                130., 130., 130., 130., 130., 130., 130., 130., 184., 184., 184., 184., 184., 184.,
+                184., 184.,
+            ],
+        );
+        // One step is no staircase: there is no gap to measure the extra window against.
+        let one = mb(1, &[10., 10., 10., 10., 10., 10., 10., 130.]);
+        assert_eq!(stair(&one, &extra, 22e6), None);
+        // A ramp rises at every point (the noise is small): the ordinary test serves.
+        let ramp = mb(1, &[10., 30., 50., 70., 90., 110., 130., 150.]);
+        assert_eq!(stair(&ramp, &extra, 5e6), None);
+        // And the rule needs a clear rise of the extra window to apply at all.
+        let flat = mb(9, &[130.0; 16]);
+        assert_eq!(
+            stair(&doubling_main(), &flat, 22e6),
+            Some(Stair::Stopped),
+            "a flat window is a plateau by the step reading too"
+        );
     }
 
     #[test]

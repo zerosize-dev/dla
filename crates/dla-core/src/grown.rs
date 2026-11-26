@@ -260,12 +260,22 @@ pub fn site_column_add(column: &str, site: &str, evidence: &str) -> Option<Strin
     })
 }
 
-/// True when an alloc-test evidence is bound to the family of `root`.
+/// The leak-side roots whose alloc-tests speak for `root`: itself and the findings merged into it
+/// (`dla ledger duplicate`), which are the same leak counted once.
+fn merged_roots(ledger: &crate::ledger::Ledger, root: &FindingId) -> Vec<FindingId> {
+    std::iter::once(root.clone())
+        .chain(ledger.duplicates_of(root).into_iter().cloned())
+        .collect()
+}
+
+/// True when an alloc-test evidence is bound to the family of `root`, or of a finding merged
+/// into it.
 pub(crate) fn alloc_tested(view: &RunView, root: &FindingId) -> bool {
+    let roots = merged_roots(&view.ledger, root);
     let family: Vec<FindingId> = view
         .ledger
         .findings()
-        .filter(|f| &f.id == root || f.parent.as_ref() == Some(root))
+        .filter(|f| roots.contains(&f.id) || f.parent.as_ref().is_some_and(|p| roots.contains(p)))
         .map(|f| f.id.clone())
         .collect();
     view.ledger.evidence().any(|e| {
@@ -318,10 +328,13 @@ fn decided_by_alloc_test(view: &RunView, root: &FindingId) -> AllocVerdict {
             AllocVerdict::Open(None)
         };
     };
+    // The alloc-tests of the findings merged into `root` speak for it: a merge counts the leak
+    // once and must not drop what a driver made for one of its findings measured.
+    let roots = merged_roots(&view.ledger, root);
     let family: Vec<FindingId> = view
         .ledger
         .findings()
-        .filter(|f| &f.id == root || f.parent.as_ref() == Some(root))
+        .filter(|f| roots.contains(&f.id) || f.parent.as_ref().is_some_and(|p| roots.contains(p)))
         .map(|f| f.id.clone())
         .collect();
     let records: Vec<&EvidenceRecord> = view.ledger.evidence().collect();
@@ -331,7 +344,7 @@ fn decided_by_alloc_test(view: &RunView, root: &FindingId) -> AllocVerdict {
         .find_map(|(e, favors)| {
             let harness = e.result.get("harness").and_then(|h| h.as_str())?;
             let m = crate::harness::HarnessManifest::load(dir, harness).ok()?;
-            let about = harness_about(view, &m, root)?;
+            let about = roots.iter().find_map(|r| harness_about(view, &m, r))?;
             Some((e, favors, m, about))
         });
     let Some((e, favors, m, about)) = newest else {
@@ -1030,7 +1043,11 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
             let Some(f) = view.ledger.finding(&f) else {
                 continue;
             };
+            // A finding merged into another is the same leak: its growth is the canonical's,
+            // whatever state the canonical is in (a canonical closed `unresolved` lists it again
+            // until an alloc-test decides it; a merge must not take it out of the gate).
             let root = f.root_id();
+            let root = view.ledger.merged_into(&root).cloned().unwrap_or(root);
             let Some(rf) = view.ledger.finding(&root) else {
                 continue;
             };
@@ -1748,6 +1765,61 @@ mod tests {
     }
 
     const SITE_COLUMN: &str = "py.blocks@a.py:1";
+
+    /// [`scene`] with F4 at F1's site, F1 merged into it, and a one-column trend of series S1
+    /// (harness H1) whose passed site column at `a.py:1` points at F1; `tested` adds an
+    /// alloc-test of F1 that favored `favors`. The findings `grown_unmeasured` lists.
+    fn grown_after_merging_f1_into_f4(tested: Option<&str>) -> Vec<String> {
+        let (_d, mut l) = scene();
+        let mut nf = NewFinding::new(
+            Origin::parse("census").unwrap(),
+            vec![crate::EvidenceId::new(1)],
+        );
+        nf.site = Some("a.py:1".into());
+        l.add_finding(nf).unwrap();
+        let f4 = FindingId::new(4);
+        l.duplicate_finding(&f1(), &f4).unwrap();
+        assert_eq!(l.merged_into(&f1()), Some(&f4));
+        if let Some(favors) = tested {
+            alloc_test(&mut l, favors, "H1");
+        }
+        let state =
+            crate::state::RunState::init("/p", None, 3600, None, crate::state::now_utc()).unwrap();
+        let mut view = RunView::new(state, l, None);
+        let col: crate::trend::ColumnTrend = serde_json::from_value(serde_json::json!({
+            "name": SITE_COLUMN, "unit": "count", "kind": "counter", "region": "heap",
+            "site": "a.py:1", "n": 8, "noise": 0.0, "rise": 100.0, "shape": "steady",
+            "gate": "pass", "gate_failed": [],
+        }))
+        .unwrap();
+        view.trends = vec![crate::trend::TrendReport {
+            schema_version: 1,
+            id: "T1".into(),
+            series: "S1".into(),
+            thresholds: dla_stats::GateThresholds::default(),
+            columns: vec![col],
+            targets: vec![],
+        }];
+        view.series_harness.insert("S1".into(), "H1".into());
+        grown_unmeasured(&view)
+            .iter()
+            .map(|g| g.finding.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn the_growth_of_a_finding_merged_into_another_is_the_canonicals_and_its_alloc_tests_count() {
+        // Merged away, the growth the column measured is not dropped: the canonical carries it.
+        assert_eq!(grown_after_merging_f1_into_f4(None), ["F4"]);
+        // An alloc-test of the merged finding decides the leak's growth, whichever way it went:
+        // the merge did not forget it (a loop-free view: any alloc-test decides).
+        for favors in ["leak", "non-leak", "inconclusive"] {
+            assert!(
+                grown_after_merging_f1_into_f4(Some(favors)).is_empty(),
+                "{favors}"
+            );
+        }
+    }
 
     #[test]
     fn a_site_column_whose_gate_passed_points_at_the_finding_at_its_site() {

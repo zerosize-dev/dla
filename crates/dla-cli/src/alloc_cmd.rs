@@ -313,7 +313,15 @@ fn test_column(
         gc,
         rises.map(|r| r.expected),
     );
-    let note = rises.map(|r| {
+    let stair_need = (plateau.verdict == PlateauVerdict::Inconclusive)
+        .then_some(plateau.points_needed)
+        .flatten();
+    let note = stair_need.map(|n| {
+        format!(
+            "the column grows in steps and its extra window is shorter than the gap between the steps of the main window, so a plateau cannot be told from a step that has not come yet: an extra window of {n} points would cover that gap"
+        )
+    });
+    let note = note.or(rises.map(|r| {
         let main_part = format!(
             "the purge kept the growth (held memory, not allocator or collector headroom); the main window rose {} time(s), so {:.1} rise(s) were expected in the extra window",
             r.count, r.expected
@@ -330,7 +338,7 @@ fn test_column(
             );
             format!("{main_part}; too few to call the plateau ({need})")
         }
-    });
+    }));
     Some(ColumnResult {
         name: name.to_owned(),
         voting,
@@ -340,7 +348,7 @@ fn test_column(
         favors,
         supports,
         note,
-        points_needed: rises.and_then(|r| r.points_needed),
+        points_needed: rises.and_then(|r| r.points_needed).or(stair_need),
         flat,
     })
 }
@@ -2306,12 +2314,22 @@ fn say_how_long_a_held_plateau_needs(
             None => r.voting,
         })
         .filter(|r| r.favors == Favors::Inconclusive)
-        .filter_map(|r| r.points_needed)
+        .filter_map(|r| {
+            r.points_needed
+                .map(|n| (n, r.plateau.points_needed.is_some()))
+        })
         .max();
-    if let (Some(n), Some(cmd)) = (needed, next.iter_mut().find(|c| c.contains("--extra"))) {
-        cmd.push_str(&format!(
-            "   (the main window rose too few times for a plateau of this length to stand against the purge that kept the growth: {n} extra points would)"
-        ));
+    if let (Some((n, stair)), Some(cmd)) = (needed, next.iter_mut().find(|c| c.contains("--extra")))
+    {
+        cmd.push_str(&if stair {
+            format!(
+                "   (the column grows in steps and the extra window is shorter than the gap between them: {n} extra points would cover a gap)"
+            )
+        } else {
+            format!(
+                "   (the main window rose too few times for a plateau of this length to stand against the purge that kept the growth: {n} extra points would)"
+            )
+        });
     }
     next
 }
@@ -2951,6 +2969,7 @@ mod tests {
                 extra_rise: None,
                 noise: None,
                 verdict: PlateauVerdict::Plateau,
+                points_needed: None,
             },
             purge: None,
             gc: None,
@@ -3010,6 +3029,7 @@ mod tests {
                 extra_rise: Some(rise),
                 noise: None,
                 verdict,
+                points_needed: None,
             },
             purge: None,
             gc: None,
@@ -4497,6 +4517,71 @@ mod tests {
         let r = held_run([10e6, 10e6, 10e6, 18e6, 18e6, 18e6], &flat(6));
         assert_eq!(r.favors, Favors::Inconclusive, "{r:?}");
         assert_eq!(r.points_needed, Some(16), "{r:?}");
+    }
+
+    /// `native.live_bytes` of a `Vec` that doubles its capacity beside a resident size that
+    /// keeps growing: 2 warm-up points, 6 main points in two steps and the extra points `extra`.
+    fn doubling_run(extra: &[f64]) -> (Favors, Vec<ColumnResult>) {
+        let mut s = series(&[]);
+        s.columns = vec![col("os.rss"), col("native.live_bytes")];
+        s.columns[1].region = SeriesRegion::Heap;
+        let live: Vec<f64> = [10., 10., 10., 10., 70., 70., 130., 130.]
+            .into_iter()
+            .chain(extra.iter().copied())
+            .map(|v| v * 1e6)
+            .collect();
+        s.points = live
+            .iter()
+            .enumerate()
+            .map(|(i, &y)| Point {
+                x: 440.0 * (i as f64 + 1.0),
+                t_ms: i as u64,
+                values: vec![Some(500e6 + 9e6 * i as f64), Some(y)],
+            })
+            .collect();
+        let (favors, results, _) = unbound_run(s, &["native.live_bytes", "os.rss"]);
+        (favors, results)
+    }
+
+    fn named<'a>(results: &'a [ColumnResult], name: &str) -> &'a ColumnResult {
+        results.iter().find(|r| r.name == name).unwrap()
+    }
+
+    #[test]
+    fn a_column_that_grows_in_steps_with_the_resident_size_growing_no_longer_favors_non_leak() {
+        // The measured case: the allocator shim's live bytes (a `Vec` doubling) moved in steps,
+        // its extra window held a new step but rose under three of the noise its steps make, and
+        // the column read `plateau` and decided non-leak while `os.rss` kept growing.
+        let mut extra = vec![130.0; 6];
+        extra.extend([184.0; 6]);
+        let (favors, results) = doubling_run(&extra);
+        let (live, rss) = (
+            named(&results, "native.live_bytes"),
+            named(&results, "os.rss"),
+        );
+        assert_eq!(rss.plateau.verdict, PlateauVerdict::Continues, "{rss:?}");
+        assert_eq!(live.plateau.verdict, PlateauVerdict::Continues, "{live:?}");
+        assert_ne!(live.favors, Favors::NonLeak, "{live:?}");
+        assert_ne!(favors, Favors::NonLeak, "{favors:?}");
+        // An extra window no longer than the gap between two steps cannot tell a plateau from a
+        // step that has not come yet: inconclusive, and the window that covers the gap is named.
+        let (favors, results) = doubling_run(&[100.0, 115.0, 130.0]);
+        let live = named(&results, "native.live_bytes");
+        assert_eq!(
+            live.plateau.verdict,
+            PlateauVerdict::Inconclusive,
+            "{live:?}"
+        );
+        // (The purge kept the growth here, which on an undecided plateau reads leak.)
+        assert_ne!(live.favors, Favors::NonLeak, "{live:?}");
+        assert!(live.points_needed.is_some_and(|n| n > 3), "{live:?}");
+        let note = live.note.as_deref().unwrap();
+        assert!(note.contains("extra window of"), "{note}");
+        assert_ne!(favors, Favors::NonLeak, "{favors:?}");
+        // The same column that stays flat for longer than a step gap is a plateau, as before.
+        let (_, results) = doubling_run(&[130.0; 12]);
+        let live = named(&results, "native.live_bytes");
+        assert_eq!(live.plateau.verdict, PlateauVerdict::Plateau, "{live:?}");
     }
 
     #[test]

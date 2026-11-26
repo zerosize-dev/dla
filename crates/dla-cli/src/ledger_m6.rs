@@ -484,11 +484,44 @@ pub struct DuplicateArgs {
     pub of: FindingId,
 }
 
+/// A merge keeps the leak verdict: `duplicate D --of C` is refused while `D` has a route to
+/// confirm ([`dla_core::grown::route_to_confirm`]: an alloc-test on a driver made for it favors
+/// leak and nothing newer says otherwise) and `C` has none. A merged finding has no route of its
+/// own and the canonical's route reads the alloc-tests of its own family, so merging that way
+/// would leave nothing holding the leak verdict (and the canonical, with a newer alloc-test that
+/// did not favor leak or already closed, could be closed `unresolved`). Merging the other way
+/// (`duplicate C --of D`) makes the finding the verdict is about the canonical.
+fn refuse_merge_that_loses_the_leak_verdict(
+    ctx: &Ctx,
+    dup: &FindingId,
+    canonical: &FindingId,
+) -> Res<()> {
+    let view = dla_core::RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())?;
+    let Some(route) = dla_core::grown::route_for(&view, dup) else {
+        return Ok(());
+    };
+    if dla_core::grown::route_for(&view, canonical).is_some() {
+        return Ok(());
+    }
+    Err(Failure::refuse(
+        core_codes::LEAK_FAVORED,
+        format!(
+            "{dup} cannot be merged into {canonical}: the alloc-test {} on {} favors leak for {dup} and nothing measured since says otherwise, so {dup} has a route to confirm and {canonical} has none; merged, nothing would hold the leak verdict",
+            route.discriminator, route.harness
+        ),
+        format!("the finding the leak verdict is about ({dup}) as the canonical finding"),
+        format!("dla ledger duplicate {canonical} --of {dup}"),
+    ))
+}
+
 /// `dla ledger duplicate F --of G`.
 pub fn duplicate(ctx: &Ctx, a: DuplicateArgs) -> Res<Value> {
     let mut ledger = open(ctx)?;
     let dup = ledger.own_finding_id(&a.finding);
     let canonical = ledger.own_finding_id(&a.of);
+    // The pair is checked first, so that its own refusals come before this one.
+    dla_core::duplicate::check(&ledger, &dup, &canonical)?;
+    refuse_merge_that_loses_the_leak_verdict(ctx, &dup, &canonical)?;
     let (line, by) = ledger.duplicate_finding(&dup, &canonical)?;
     Ok(json!({
         "ok": true,

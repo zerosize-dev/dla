@@ -1,0 +1,32 @@
+A merge keeps a leak verdict, and growth in steps is not read as a plateau
+
+An unattended run on a Rust library found its documented leak, a `Vec` field that grows once a
+bounded ring is full, and lost it in two ways. It ended COMPLETE after 5 of 167 minutes with no
+leak confirmed.
+
+The census finding of the field (D) had an alloc-test on a driver made for it that favored leak,
+and its non-leak sibling was refuted. A second finding at a writer line of the same field (C) got
+a newer alloc-test that read non-leak. The model closed C `unresolved inconclusive` and merged D
+into C. A merged finding has no route to confirm, and C's newest alloc-test did not favor leak,
+so nothing held the leak verdict any more.
+
+That non-leak reading came from the allocator shim's live bytes. A `Vec` doubles its capacity, so
+the column grows in steps, and its scatter around a straight fit is the size of a step. In the
+extra window it rose 62.9 MB, under three noise units of 37.3 MB, so it read as a plateau. The
+process's resident memory grew 119 MB in the same window.
+
+- `dla ledger duplicate D --of C` is refused (`leak-favored`) while D has a route to confirm and C
+  has none. The fix is the merge the other way, so the canonical is the finding the verdict is
+  about.
+- A finding merged into another is the same leak: its measured growth is listed for the
+  canonical, whatever state the canonical is in, and the alloc-tests of the merged findings
+  decide for it. Before, growth measured at a finding merged into a closed one left the gate.
+- The plateau test of a gauge reads the steps when the main window grew in separate steps and
+  the extra window rose clearly (over one noise unit, the smallest rise and the drift floor). A
+  new maximum above the main window's is growth that continues. No new maximum in an extra window
+  no longer than the longest gap between steps is inconclusive, and `--extra` names a window that
+  covers a gap. A column without steps, and a staircase that stays flat for longer than its
+  longest gap, keep the old verdict.
+
+Not covered: a staircase whose steps are under two units of its own scatter; a merge across
+workers (`dla ledger merge`).

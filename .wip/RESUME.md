@@ -3726,3 +3726,10 @@ unattended run at a time and no builder beside it.
   growth): growth in the extra window of a stair column is not a plateau; no step in a window
   shorter than the step gap is inconclusive with a wider --extra, not non-leak.
 - Builder N (sonnet) started ~06:55 on wip-notes/merge-stair-brief.md (scratch u144). No rig run beside it. M's CI (9b24572) still running; commit M from the snapshot tree (N's edits stay out).
+- 07:30 UTC: builder N done: merge refused while D has a route and C none (fix: other way);
+  grown_unmeasured follows a merge to the canonical (closed canonical gets the growth item);
+  merged_roots lets duplicates' alloc-tests decide; judge stair() (NewMax -> Continues, TooShort ->
+  Inconclusive + points_needed, Stopped -> Plateau; STEP_SCATTERS 2). N ran Rust/Go/native fixtures
+  only. I reviewed the code; full local dynamic on N's tree running (u145/dyn-N.out, monitor
+  bwp0p9318) to catch GC-sawtooth false leaks on JVM/Node/Python twins. Commit message 41 drafted.
+- M's CI 9b24572 (run 45768242859): all green but dynamic still running at 07:20.
