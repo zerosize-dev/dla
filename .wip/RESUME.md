@@ -3634,3 +3634,13 @@ unattended run at a time and no builder beside it.
 - Local full dynamic on d00a405 binaries: 62/64 pass, 1 xfail, go-buffer-pool FAIL (alloc-test
   killed at 900 s; machine loaded by builder builds + stress loops; CI dynamic passed). Rerun alone.
 - go-buffer-pool alone on d00a405 binaries: pass (load avg was ~19 during the full run). So d00a405 locally: 63/64 + 1 xfail. spawn.rs clippy fixed (needless borrow); dla-bench clippy clean.
+
+## 03:05 UTC 2026-11-26: d00a405 on main as bdc85a6; version db877a5; release run 45746227972
+
+- Re-run of the failed job green -> commit-snapshot-tree d00a405 -> main bdc85a6 (msg 38); pushed
+  main + dev. Version commit db877a5 "Version 0.9.0-preview.10" (only the 4 version files; the
+  working tree keeps builder L's edits + spawn.rs fix uncommitted). Pushed main + dev.
+- release.yml workflow_dispatch publish=true on main: run 45746227972 (monitor bcs5stckg).
+- After release: verify tag v0.9.0-preview.10 on db877a5, assets; refresh rig like preview.9
+  (bin/dla.prev, plugin.prev, git archive db877a5 .claude-plugin agents bin data hooks skills,
+  marketplace.json removed). Reruns wait for builder L to finish (no builder beside a run).

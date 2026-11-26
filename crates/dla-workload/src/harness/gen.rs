@@ -2473,8 +2473,31 @@ impl Drop for Cleanup {
     }
 }
 
-/// Writes a harness and its manifest; see the module docs.
+/// Writes a harness and its manifest; see the module docs. A driver made for findings
+/// (`--driver --probe`) that is refused with `driver-unavailable` (a Rust crate with only
+/// binaries, a project layout the driver cannot be planned for) is recorded in the run
+/// ([`dla_core::harness::HarnessAttempt::save_driver_unavailable`]): the growth of those findings
+/// measured on a harness not made for them can then be decided without one.
 pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusal> {
+    let out = generate_inner(ctx, opts);
+    if let Err(r) = &out
+        && r.code == DRIVER_UNAVAILABLE
+        && opts.driver
+        && !opts.junit
+        && !opts.probe_findings.is_empty()
+    {
+        // The refusal stands even when the record cannot be written.
+        let _ = dla_core::harness::HarnessAttempt::save_driver_unavailable(
+            &ctx.run_dir,
+            opts.lang.as_str(),
+            &opts.probe_findings,
+            &r.message,
+        );
+    }
+    out
+}
+
+fn generate_inner(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusal> {
     let junit_opts;
     let opts = if opts.junit && !opts.driver {
         junit_opts = GenOptions {

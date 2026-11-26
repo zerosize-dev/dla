@@ -303,6 +303,10 @@ enum AllocVerdict {
 ///   finding lifts it; a newer one on a shared harness replaces an older one made for it, so the
 ///   lead is back.
 ///
+/// * a driver made for the finding was asked for (`dla harness gen --lang <rt> --driver --probe`)
+///   and refused with `driver-unavailable` for the runtime of that harness: decided, as nothing
+///   better can be built (a Rust crate with only binaries).
+///
 /// With no alloc-test on a harness about the root the lead stays, and so it does for a view with no
 /// run directory (no manifests to read), where any alloc-test decides, as [`alloc_tested`] says.
 fn decided_by_alloc_test(view: &RunView, root: &FindingId) -> AllocVerdict {
@@ -336,6 +340,12 @@ fn decided_by_alloc_test(view: &RunView, root: &FindingId) -> AllocVerdict {
     let made_for_it =
         m.is_hook_driver() && matches!(about, HarnessAbout::Target | HarnessAbout::EntryPath);
     if favors == Favors::NonLeak || made_for_it {
+        return AllocVerdict::Decided;
+    }
+    // No driver made for the finding can be built here (a Rust crate with only binaries): `dla
+    // harness gen --driver --probe` was refused with `driver-unavailable` and recorded, so the
+    // alloc-test of the harness there is the best measurement the project allows.
+    if crate::harness::HarnessAttempt::driver_unavailable(dir, m.runtime.as_str(), &family) {
         return AllocVerdict::Decided;
     }
     AllocVerdict::Open(Some(SharedAllocTest {
@@ -2438,6 +2448,31 @@ mod tests {
         let (_r, view) = shared_loop(l, junit_loop());
         assert!(grown_f1(&view).is_some());
         assert_eq!(route_to_confirm(&view, &f1()), None);
+    }
+
+    #[test]
+    fn a_driver_refused_as_unavailable_lets_the_loop_alloc_test_decide() {
+        let f = f1();
+        for (lang, finding, lifted) in [
+            // The refusal of the runtime of the loop, for the finding: nothing better can be built.
+            ("jvm", "F1", true),
+            // Another runtime, or another finding: the lead stays.
+            ("python", "F1", false),
+            ("jvm", "F2", false),
+        ] {
+            let (_d, mut l) = scene();
+            alloc_test(&mut l, "leak", "H1");
+            let (r, view) = shared_loop(l, junit_loop());
+            assert!(grown_f1(&view).is_some());
+            crate::harness::HarnessAttempt::save_driver_unavailable(
+                r.path(),
+                lang,
+                &[finding.parse().unwrap()],
+                "driver mode needs a crate with a library target",
+            )
+            .unwrap();
+            assert_eq!(grown_f1(&view).is_none(), lifted, "{lang} {finding} {f}");
+        }
     }
 
     #[test]

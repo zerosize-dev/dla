@@ -313,3 +313,27 @@ fn refusals_name_the_item_and_the_fix() {
         ],
     );
 }
+
+#[test]
+fn a_driver_made_for_a_finding_that_a_binary_crate_refuses_is_recorded() {
+    let (_d, project, run_dir) = prepared("rust-batch-buffers", "rust");
+    let o = dla(
+        &project,
+        &[
+            "harness", "gen", "--lang", "rust", "--driver", "--probe", "F1",
+        ],
+    );
+    assert_ne!(o.code, 0, "{}", o.text);
+    assert_eq!(o.json["error"]["code"], "driver-unavailable", "{}", o.text);
+    let rec: Value = serde_json::from_str(
+        &fs::read_to_string(run_dir.join("harness/driver-unavailable.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(rec[0]["lang"], "rust", "{rec}");
+    assert_eq!(rec[0]["finding"], "F1", "{rec}");
+    // A refusal for another reason (or a driver for no finding) leaves no record.
+    let (_d, project, run_dir) = prepared("rust-batch-buffers", "rust");
+    let o = dla(&project, &["harness", "gen", "--lang", "rust", "--driver"]);
+    assert_ne!(o.code, 0, "{}", o.text);
+    assert!(!run_dir.join("harness/driver-unavailable.json").exists());
+}
