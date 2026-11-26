@@ -1105,3 +1105,158 @@ fn the_detector_line_of_dla_trend_prints_the_direct_steps_when_the_column_at_the
     );
     assert!(hit.contains("dla alloc-test H1 --finding F2"), "{hit}");
 }
+
+/// F4: another finding of the leak of F2 (the same site and owner), with a sibling.
+fn add_twin_of_f2(r: &R, growth: &str) -> String {
+    let add = r.ok(&[
+        "ledger",
+        "add",
+        "--origin",
+        "growth-series",
+        "--evidence",
+        growth,
+        "--site",
+        "shop/reg.py:2",
+        "--holder",
+        "static/global",
+        "--owner",
+        "Registry._by_key",
+    ]);
+    add["id"].as_str().unwrap().to_owned()
+}
+
+/// An alloc-test of `finding` on `harness` that `favors` (written directly); its evidence id.
+fn alloc_test_of(r: &R, finding: &str, harness: &str, favors: &str) -> String {
+    let mut l = Ledger::load(&r.run_dir).unwrap();
+    l.add_evidence(evidence(
+        EvidenceKind::Discriminator,
+        json!({"test": "plateau+purge", "favors": favors, "supports": [], "finding": finding,
+            "harness": harness}),
+    ))
+    .unwrap();
+    l.evidence().last().unwrap().evidence_id.to_string()
+}
+
+/// F2 has a driver of its own (H2) whose alloc-test favored leak; its twin F4 has a newer
+/// alloc-test on a driver of its own (H3) that favored non-leak. `closed_twin` closes F4 first.
+fn a_leak_route_on_f2_and_a_newer_non_leak_on_its_twin(closed_twin: bool) -> (R, String, String) {
+    let (r, _, growth) = run_with_a_passed_column("3h");
+    let g = add_twin_of_f2(&r, &growth);
+    save_harness(&r, "H2", json!({"targets": ["F2"]}));
+    let favored = alloc_test_of(&r, "F2", "H2", "leak");
+    let (code, v) = resolve_f2(&r, "inconclusive");
+    assert_ne!(code, 0, "{v}");
+    assert_eq!(v["error"]["code"], "leak-favored", "{v}");
+    save_harness(&r, "H3", json!({"targets": [g]}));
+    alloc_test_of(&r, &g, "H3", "non-leak");
+    if closed_twin {
+        r.ok(&[
+            "ledger",
+            "resolve",
+            &g,
+            "--as",
+            "unresolved",
+            "--reason",
+            "inconclusive",
+            "--remedy",
+            "x",
+        ]);
+    }
+    (r, g, favored)
+}
+
+#[test]
+fn a_merge_that_would_leave_nothing_holding_a_leak_verdict_is_refused_with_the_other_way() {
+    for closed_twin in [false, true] {
+        let (r, g, d) = a_leak_route_on_f2_and_a_newer_non_leak_on_its_twin(closed_twin);
+        // F2 is the finding the leak verdict is about; F4 has none: F2 cannot be the duplicate.
+        let (code, v) = r.run(&["ledger", "duplicate", "F2", "--of", &g]);
+        assert_ne!(code, 0, "closed {closed_twin}: {v}");
+        assert_eq!(v["error"]["code"], "leak-favored", "{v}");
+        let message = v["error"]["message"].as_str().unwrap();
+        assert!(
+            message.contains(&format!("F2 cannot be merged into {g}")) && message.contains(&d),
+            "{message}"
+        );
+        assert_eq!(
+            v["error"]["fix"],
+            format!("dla ledger duplicate {g} --of F2"),
+            "{v}"
+        );
+        // Nothing was recorded: F2 still has its route and cannot be closed unresolved.
+        let (code, v) = resolve_f2(&r, "inconclusive");
+        assert_ne!(code, 0, "{v}");
+        assert_eq!(v["error"]["code"], "leak-favored", "{v}");
+        // The other way is accepted, and the canonical F2 cannot be closed unresolved while the
+        // alloc-test on its own driver is the newest word.
+        r.ok(&["ledger", "duplicate", &g, "--of", "F2"]);
+        let (code, v) = resolve_f2(&r, "inconclusive");
+        assert_ne!(code, 0, "closed {closed_twin}: {v}");
+        assert_eq!(v["error"]["code"], "leak-favored", "{v}");
+        assert!(v["error"]["message"].as_str().unwrap().contains(&d), "{v}");
+    }
+}
+
+#[test]
+fn a_merge_is_free_when_the_canonical_has_a_route_too_or_the_duplicate_has_none() {
+    // Both with a route: F2 keeps its own through the canonical's.
+    let (r, _, growth) = run_with_a_passed_column("3h");
+    let g = add_twin_of_f2(&r, &growth);
+    save_harness(&r, "H2", json!({"targets": ["F2"]}));
+    alloc_test_of(&r, "F2", "H2", "leak");
+    save_harness(&r, "H3", json!({"targets": [g]}));
+    alloc_test_of(&r, &g, "H3", "leak");
+    r.ok(&["ledger", "duplicate", "F2", "--of", &g]);
+    // The duplicate with a non-leak alloc-test has no route to lose.
+    let (r, _, growth) = run_with_a_passed_column("3h");
+    let g = add_twin_of_f2(&r, &growth);
+    save_harness(&r, "H2", json!({"targets": ["F2"]}));
+    alloc_test_of(&r, "F2", "H2", "non-leak");
+    r.ok(&["ledger", "duplicate", "F2", "--of", &g]);
+}
+
+#[test]
+fn a_finding_merged_into_a_closed_one_keeps_its_measured_growth_in_the_gate() {
+    // F2 is tied to a passed column and nothing decided it. F4, its twin, is closed
+    // unresolved first (nothing grows at its own line), then F2 is merged into it.
+    let (r, _, growth) = run_with_a_passed_column("3h");
+    let g = add_twin_of_f2(&r, &growth);
+    r.ok(&[
+        "ledger",
+        "resolve",
+        &g,
+        "--as",
+        "unresolved",
+        "--reason",
+        "inconclusive",
+        "--remedy",
+        "x",
+    ]);
+    let listed = |r: &R| -> Vec<String> {
+        r.final_gate()
+            .iter()
+            .filter(|m| m["id"] == "F2" || m["id"] == g.as_str())
+            .map(|m| format!("{} {}", m["id"], m["kind"]))
+            .collect()
+    };
+    assert!(!listed(&r).is_empty(), "before the merge F2 is listed");
+    r.ok(&["ledger", "duplicate", "F2", "--of", &g]);
+    // The leak is counted once, and the growth the passed column measured is still not decided:
+    // the canonical carries it, whatever state it was closed in.
+    let items = r.final_gate();
+    let item = items
+        .iter()
+        .find(|m| m["kind"] == "growth" && m["id"] == g.as_str())
+        .unwrap_or_else(|| panic!("{items:?}"));
+    assert!(
+        item["description"]
+            .as_str()
+            .unwrap()
+            .contains("no alloc-test decided it"),
+        "{item}"
+    );
+    assert!(
+        item["fix"].as_str().unwrap().contains(&g),
+        "the fix names the canonical: {item}"
+    );
+}
