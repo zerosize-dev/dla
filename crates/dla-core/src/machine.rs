@@ -1449,7 +1449,7 @@ fn confirm_nonleak(ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
         .as_deref()
         .and_then(crate::finding::nonleak_id)
         == Some(crate::release::ID)
-        && root.is_some_and(|r| r.state == FindingState::Confirmed);
+        && root.is_some_and(|r| matches!(r.state, FindingState::Confirmed | FindingState::Strong));
     if !root_refuted && !release_of_confirmed {
         return Err(Refusal::new(
             codes::LEAK_REFUTATION_REQUIRED,

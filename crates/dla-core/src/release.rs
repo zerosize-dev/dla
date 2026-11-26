@@ -14,8 +14,8 @@
 //! * **Drivers that disagree hold the confirm** ([`drivers_disagree`]): two drivers made for the
 //!   finding whose newest alloc-tests favor leak and non-leak do not decide it until something
 //!   names and tests what differs between them.
-//! * **An explanation that names a conditional remover asks for the release run**
-//!   ([`release_untested`]).
+//! * **An explanation that says the remover runs on the caller's release asks for the release
+//!   run** ([`release_untested`]): `removal: on-release` only; `conditional` asks for nothing.
 //!
 //! The ledger itself never reads a run directory, so these checks run in the command layer
 //! (`dla ledger confirm`, `refute`) and in the gate, over a [`RunView`].
@@ -48,7 +48,8 @@ pub const NOT_SHOWN: &str = "remover run not shown";
 pub mod codes {
     /// Two drivers made for the finding disagree and nothing names the difference.
     pub const DRIVERS_DISAGREE: &str = "drivers-disagree";
-    /// The explanation says the removal is conditional and the release was never tested.
+    /// The explanation says the remover runs on the caller's release and the release was never
+    /// tested.
     pub const RELEASE_UNTESTED: &str = "release-untested";
     /// The alloc-test cited for an `N-RELEASE` sibling is not one that called the release.
     pub const RELEASE_NOT_RUN: &str = "release-not-run";
@@ -423,7 +424,7 @@ fn drivers_all(view: &RunView, root: &FindingId) -> Vec<Driver> {
         .collect()
 }
 
-/// The route that decides a disagreement, or a conditional remover nobody tested, in order:
+/// The route that decides a disagreement, or an `on-release` remover nobody tested, in order:
 /// the `N-RELEASE` sibling (its remover prefilled from the explanation when there is one), its
 /// test and an alloc-test of a driver that calls the release on every unit; otherwise the sibling
 /// that names another difference. Every id is the real one of the run, except the line of the
@@ -501,7 +502,7 @@ pub fn drivers_disagree_refusal(view: &RunView, id: &FindingId, d: &Disagreement
     )
 }
 
-/// What `release-untested` names: a finding whose explanation says its removal is conditional.
+/// What `release-untested` names: a finding whose explanation says `removal: on-release`.
 #[derive(Debug, Clone)]
 pub struct Untested {
     /// The finding.
@@ -532,7 +533,7 @@ pub fn release_untested(ledger: &Ledger, f: &Finding) -> Option<Untested> {
     })
 }
 
-/// The refusal of a confirm of a finding explained as conditional whose release was not tested.
+/// The refusal of a confirm of a finding explained as `on-release` whose release was not tested.
 pub fn release_untested_refusal(view: &RunView, u: &Untested) -> Refusal {
     let root = u.finding.parent().unwrap_or_else(|| u.finding.clone());
     Refusal::new(
@@ -693,13 +694,13 @@ pub fn decision_note(view: &RunView, s: &Finding) -> Option<String> {
         })
 }
 
-/// The confirmed leaks (`confirmed` roots) whose family holds a confirmed `N-RELEASE` sibling:
+/// The confirmed or strong leaks (roots) whose family holds a confirmed `N-RELEASE` sibling:
 /// the growth is flat with the release called, so they are counted apart from the leaks.
 pub fn grows_only_while_skipped(ledger: &Ledger) -> Vec<&Finding> {
     ledger
         .findings()
         .filter(|f| {
-            f.state == FindingState::Confirmed
+            matches!(f.state, FindingState::Confirmed | FindingState::Strong)
                 && f.polarity() == Polarity::Leak
                 && f.parent.is_none()
                 && ledger.merged_into(&f.id).is_none()

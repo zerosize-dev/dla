@@ -1,5 +1,5 @@
 //! The command-layer checks of `N-RELEASE` (see `dla_core::release`): a confirm held by drivers
-//! that disagree or by an explanation that names a conditional release nobody ran, and the
+//! that disagree or by an `on-release` explanation whose release nobody ran, and the
 //! evidence an `N-RELEASE` sibling is confirmed or refuted on. They read the run directory
 //! (harness manifests, line counts), which the ledger rules never do.
 
@@ -19,7 +19,7 @@ fn view_of(ctx: &Ctx) -> Option<RunView> {
 }
 
 /// Refuses `dla ledger confirm <F>` of a leak-side finding while two drivers made for it
-/// disagree (`drivers-disagree`) or its explanation names a conditional remover that no run with
+/// disagree (`drivers-disagree`) or its explanation names an `on-release` remover that no run with
 /// the release called has decided (`release-untested`).
 pub fn refuse_held_confirm(ctx: &Ctx, id: &FindingId) -> Res<()> {
     let Some(view) = view_of(ctx) else {

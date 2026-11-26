@@ -90,7 +90,13 @@ pub fn markers(removal: RemovalClaim) -> &'static [&'static str] {
         RemovalClaim::Conditional => &["only when", "unless", "if"],
         RemovalClaim::WrongKey => &["key", "different"],
         RemovalClaim::OnRelease => &[
-            "release", "stop", "close", "dispose", "unsubscribe", "cancel", "shutdown",
+            "release",
+            "stop",
+            "close",
+            "dispose",
+            "unsubscribe",
+            "cancel",
+            "shutdown",
         ],
         RemovalClaim::Unreachable => &["never reached", "not reached", "dead"],
     }

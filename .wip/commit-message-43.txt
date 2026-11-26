@@ -1,0 +1,47 @@
+An abort needs a blocker while work and budget are left; drivers that disagree hold a confirm
+
+Two unattended runs ended themselves early. One confirmed a Go library's documented leak and ran
+`dla run abort` after 6 of 180 minutes with 139 queued targets left, giving as its reason the
+work it had not done. The other aborted a JVM run after 76 of 180 minutes, and 32 of its 35
+confirmed findings went without the verifier. The Stop hook and the skill offered
+`dla run abort --reason` as the way out of a held stop. In that JVM run, ten findings had been
+confirmed on the newer of two drivers made for them. The older driver called the release that
+the API requires on every unit and its series stayed flat. The newer one skipped the release on
+half the units and its series grew. The newest alloc-test decided, and nothing asked what made
+the two drivers differ.
+
+- `dla run abort` is refused with `budget-left` while the budget is over its floor and the run
+  can still measure: an open queue, an undecided growth, or a final-gate item that a measurement
+  fixes. The refusal names the next measurement. The abort passes with
+  `--blocker user|tool|build|environment|privilege|refusal`. Each kind except `user` needs a
+  reason of at least three words that names what blocks the run. `refusal` also needs `--code`.
+  The kind and the reason go into the report's incomplete reason. The Stop hook's note and the
+  skill now say to measure first and to use the blocker form only when the run is blocked.
+- An abort no longer skips the verifier. `dla bundle F` and `dla ledger verify F` are still
+  accepted and counted after an abort. The abort's output lists every confirmed finding that has
+  no verification record, with the command for each. The Stop hook holds an aborted run while
+  one is open, within its stop limit. The report says per finding "not verified: the run was
+  aborted before the verifier ran", and the `Findings:` line counts those findings separately.
+- `dla ledger confirm` of a leak is refused with `drivers-disagree` when two drivers made for the
+  finding disagree: the newest alloc-test of one favors leak and the newest of the other favors
+  non-leak. It stays refused until a non-leak sibling that names the difference is refuted by a
+  newer alloc-test on a driver other than the leak-favoring one. The refusal names both harnesses
+  and asks what the flat one does that the other does not.
+- `N-RELEASE` is a new non-leak look-alike: growth only while the caller skips a release the API
+  requires. Its sibling names the releasing line with `--remover`. It is decided only by an
+  alloc-test on a driver made for the finding on which that line ran. Rust, Go, Node and Python
+  give a line count, and a count of 0, or a run that did not ask about the line, is refused with
+  `release-not-run`. The JVM and native code are accepted with the note "remover run not shown".
+  Once `N-RELEASE` is confirmed, the root is refuted by the same alloc-test. A root that was
+  already confirmed keeps its state, and the report counts it apart from the leaks: "grows only
+  while callers skip the release".
+- New removal kind `on-release` for `dla ledger explain`: the remover runs only when the caller
+  calls the release. `dla ledger explain` now also accepts a finding that is still under test. An
+  `on-release` explanation holds the confirm with `release-untested` until an `N-RELEASE` sibling
+  is decided; after a confirm, the final gate lists the same item. `conditional` asks for nothing
+  new.
+- A test of the largest descendant process no longer fails when that process exits during the
+  check.
+
+Not covered: the run keeps no record of the refusals it printed, so only the shape of the
+`--code` of a `refusal` blocker is checked. `N-RELEASE` beside a `strong` root has no test.

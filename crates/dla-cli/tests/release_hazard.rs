@@ -453,8 +453,8 @@ fn a_third_driver_and_the_sibling_it_refutes_settle_the_disagreement() {
     r.ok(&["ledger", "confirm", "F1", "--evidence", &g]);
 }
 
-/// Records that F1 is explained as removed only under a condition, by the line `lib/enc.py:30`.
-fn explain_conditional(r: &R) {
+/// Records that F1 is explained with `removal`, by the line `lib/enc.py:30`.
+fn explain_removed(r: &R, removal: &str) {
     r.ok(&[
         "ledger",
         "annotate",
@@ -473,7 +473,7 @@ fn explain_conditional(r: &R) {
         "--adds",
         "lib/enc.py:9",
         "--removal",
-        "conditional",
+        removal,
         "--remover",
         "lib/enc.py:30",
         "--text",
@@ -482,11 +482,11 @@ fn explain_conditional(r: &R) {
 }
 
 #[test]
-fn an_explanation_with_a_conditional_remover_holds_the_confirm_until_the_release_ran() {
+fn an_explanation_that_the_remover_runs_on_release_holds_the_confirm_until_the_release_ran() {
     let (r, _) = scene("python");
     let leak = r.alloc("H10", "leak");
     r.ok(&["ledger", "refute", "F1.n1", "--evidence", &leak]);
-    explain_conditional(&r);
+    explain_removed(&r, "on-release");
     let g = r.growth.clone();
     let e = r.refused(
         &["ledger", "confirm", "F1", "--evidence", &g],
@@ -526,7 +526,7 @@ fn after_the_confirm_the_final_gate_lists_the_untested_release_and_the_report_co
     r.ok(&["ledger", "refute", "F1.n1", "--evidence", &leak]);
     let g = r.growth.clone();
     r.ok(&["ledger", "confirm", "F1", "--evidence", &g]);
-    explain_conditional(&r);
+    explain_removed(&r, "on-release");
     let item = r
         .final_gate()
         .into_iter()
@@ -568,5 +568,22 @@ fn after_the_confirm_the_final_gate_lists_the_untested_release_and_the_report_co
     assert!(
         md.contains("Grows only while callers skip the release: F1.n2 confirmed"),
         "{md}"
+    );
+}
+
+#[test]
+fn a_conditional_remover_neither_holds_the_confirm_nor_adds_a_gate_item() {
+    let (r, _) = scene("python");
+    let leak = r.alloc("H10", "leak");
+    r.ok(&["ledger", "refute", "F1.n1", "--evidence", &leak]);
+    explain_removed(&r, "conditional");
+    let g = r.growth.clone();
+    r.ok(&["ledger", "confirm", "F1", "--evidence", &g]);
+    assert!(
+        !r.final_gate()
+            .iter()
+            .any(|m| m["kind"] == "release-untested"),
+        "{:?}",
+        r.final_gate()
     );
 }

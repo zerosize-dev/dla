@@ -955,17 +955,8 @@ fn items_of(fx: &Fx, out: &Out) -> Vec<Item> {
 /// The gate items the policy cannot reach, with the reason. None: every item the gate prints
 /// is followed; an item left over is a failure of the fixture. The list is kept (and shown in
 /// the JSON as `known_gaps`) so that a gap can be named again if DLA cannot satisfy an item.
-fn known_gap(item: &Item, _view: &View, _run_dir: &Path) -> Option<&'static str> {
-    match item.kind.as_str() {
-        // The route was followed (`follow_release_route`) and the ledger refused the refute: the
-        // fixed policy writes no driver that calls the release its explanation names, and an
-        // alloc-test decides an `N-RELEASE` sibling only on a driver made for the finding in
-        // which that line ran. A model writes that driver; the policy does not.
-        "release-untested" => Some(
-            "the explanation names a conditional remover and the policy has no driver made for the finding that calls it",
-        ),
-        _ => None,
-    }
+fn known_gap(_item: &Item, _view: &View, _run_dir: &Path) -> Option<&'static str> {
+    None
 }
 
 /// A candidate that a detector or the census found, or that cites static evidence: the only
@@ -1010,135 +1001,6 @@ fn run_line_capture_first(fx: &mut Fx, line: &str, tried: &mut BTreeSet<String>)
         }
     }
     o
-}
-
-/// The word after `flag` in `text`.
-fn word_after<'a>(text: &'a str, flag: &str) -> Option<&'a str> {
-    let rest = text.split_once(flag)?.1;
-    rest.split_whitespace().next()
-}
-
-/// The route the gate prints for `release-untested` (`dla ledger add --sibling-of F
-/// --hypothesis N-RELEASE --remover R ...`, the sibling's test, an alloc-test of the driver that
-/// confirmed the finding, the refute with its result), followed as printed: the sibling, its
-/// test on the workload of that harness, a fresh alloc-test (it counts the remover line, which
-/// the sibling now names) and the refute of the sibling with it. The refute is the answer for a
-/// leak the driver reproduced with the release called; a refusal is reported and the gate item
-/// stays.
-fn follow_release_route(fx: &mut Fx, id: &str, fix: &str) -> String {
-    let Some(remover) = word_after(fix, "--remover ").filter(|r| !r.contains('<')) else {
-        return format!("release {id}: the route names no remover");
-    };
-    let remover = remover.to_owned();
-    let view = fx.view();
-    let Some(f) = view.finding(id).cloned() else {
-        return format!("release {id}: not in the ledger");
-    };
-    let root = f.parent.clone().unwrap_or_else(|| f.id.clone());
-    // The harness the finding was confirmed on, else the newest one that ran.
-    let newest = view.order.iter().rev().find_map(|e| {
-        let e = view.evidence.get(e)?;
-        (e.kind == "workload")
-            .then(|| e.result["harness"].as_str().map(str::to_owned))
-            .flatten()
-    });
-    let Some(harness) = harness_of(&view, &f, newest.as_deref()) else {
-        return format!("release {id}: no harness ran");
-    };
-    let cite = view
-        .order
-        .iter()
-        .rev()
-        .find(|e| {
-            view.evidence.get(*e).is_some_and(|e| {
-                e.kind == "discriminator" && e.result["harness"].as_str() == Some(harness.as_str())
-            })
-        })
-        .or_else(|| f.supports.first())
-        .cloned();
-    let workload = view
-        .order
-        .iter()
-        .rev()
-        .find(|e| {
-            view.evidence.get(*e).is_some_and(|e| {
-                e.kind == "workload" && e.result["harness"].as_str() == Some(harness.as_str())
-            })
-        })
-        .cloned();
-    let (Some(cite), Some(workload)) = (cite, workload) else {
-        return format!("release {id}: no evidence of {harness} to cite");
-    };
-    let add = fx.call_quiet(&[
-        "ledger",
-        "add",
-        "--sibling-of",
-        &root,
-        "--origin",
-        "hypothesis",
-        "--hypothesis",
-        "N-RELEASE",
-        "--remover",
-        &remover,
-        "--refute-if",
-        "the holder still grows with the release called on every unit",
-        "--evidence",
-        &cite,
-    ]);
-    let Some(sib) = add.json["id"]
-        .as_str()
-        .filter(|_| add.ok)
-        .map(str::to_owned)
-    else {
-        return format!("release {id}: add of the sibling {}", refusal(&add));
-    };
-    let test = fx.call_quiet(&["ledger", "test", &sib, "--evidence", &workload]);
-    if !test.ok {
-        return format!("release {id}: test of {sib} {}", refusal(&test));
-    }
-    // A fresh run counts the remover line the sibling names.
-    let alloc = fx.call_quiet(&["alloc-test", &harness, "--finding", &root]);
-    let ev = alloc.evidence().first().cloned().unwrap_or(cite);
-    let refute = fx.call_quiet(&["ledger", "refute", &sib, "--evidence", &ev]);
-    let mut said = format!(
-        "release {id}: {sib} for {remover}, alloc-test of {harness} {}, refute {}",
-        if alloc.ok {
-            "ok".to_owned()
-        } else {
-            refusal(&alloc)
-        },
-        if refute.ok {
-            "ok".to_owned()
-        } else {
-            format!(
-                "{} ({})",
-                refusal(&refute),
-                refute.message().chars().take(420).collect::<String>()
-            )
-        }
-    );
-    // The refute is refused when the policy has no driver made for the finding in which the
-    // release ran (its harness is the project's own workload, or the line never ran): the
-    // sibling is closed unresolved, as not exercised, so that it is no open obligation of its
-    // own, and the item that is left is a known gap of the policy (see `known_gap`).
-    if !refute.ok && refute.code() == "release-not-run" {
-        let r = fx.call_quiet(&[
-            "ledger",
-            "resolve",
-            &sib,
-            "--as",
-            "unresolved",
-            "--reason",
-            "not_exercised",
-            "--remedy",
-            "no driver made for the finding called the release, so it was not exercised",
-        ]);
-        said.push_str(&format!(
-            "; resolve {sib} unresolved: {}",
-            if r.ok { "ok".to_owned() } else { refusal(&r) }
-        ));
-    }
-    said
 }
 
 /// Closes a finding or open item unresolved with the reason the evidence supports. The fix
@@ -1448,14 +1310,6 @@ fn fix_item(fx: &mut Fx, item: &Item, tried: &mut BTreeSet<String>) -> Option<St
             ))
         }
         "residual_capture" => take_capture(fx, &item.fix, tried),
-        "release-untested" => {
-            // The explanation names a conditional remover: the gate asks for a run with the
-            // release called, as an `N-RELEASE` sibling decided by an alloc-test.
-            if !tried.insert(format!("release {}", item.id)) {
-                return None;
-            }
-            Some(follow_release_route(fx, &item.id, &item.fix))
-        }
         "label" => {
             // A finding that came after the label step: no archetype is picked for it.
             if !tried.insert(format!("label {}", item.id)) {

@@ -262,7 +262,12 @@ fn header(out: &mut String, view: &RunView, st: &ReportStatus) {
     let _ = writeln!(out, "Entry: {}\n", entry_line(view));
     let _ = writeln!(out, "Scope: {}\n", scope_line(view));
     let disputed = disputed_confirmed(view);
-    let released = dla_core::release::grows_only_while_skipped(&view.ledger).len();
+    let skipped = dla_core::release::grows_only_while_skipped(&view.ledger);
+    let released_strong = skipped
+        .iter()
+        .filter(|f| f.state == FindingState::Strong)
+        .count();
+    let released = (skipped.len() - released_strong, released_strong);
     let mut line = findings_line(c, &disputed, released);
     if let Some(clause) = TRIGGERS.with(|t| t.borrow().as_ref().and_then(|f| f.clause())) {
         line.push_str("; ");
@@ -353,7 +358,11 @@ fn unverified_clause(view: &RunView) -> Option<String> {
 /// its leak-side root is `refuted` on the other, so one test read as two leaks when the two
 /// were added together. When something was measured and no leak is confirmed or strong,
 /// the line says so in words.
-fn findings_line(c: &dla_core::view::StatusCounts, disputed: &[String], released: usize) -> String {
+fn findings_line(
+    c: &dla_core::view::StatusCounts,
+    disputed: &[String],
+    released: (usize, usize),
+) -> String {
     let leak = c.by_state.minus(&c.non_leak);
     let n = &c.non_leak;
     // A confirmed finding the blind verifier reads as a non-leak (`N-*`) is not plain
@@ -364,7 +373,10 @@ fn findings_line(c: &dla_core::view::StatusCounts, disputed: &[String], released
     labels.dedup();
     // A confirmed finding whose family holds a confirmed `N-RELEASE` sibling grows only while
     // callers skip a release the API requires: it is counted apart from the confirmed leaks.
-    let released = released.min(leak.confirmed - apart);
+    let (released, released_strong) = (
+        released.0.min(leak.confirmed - apart),
+        released.1.min(leak.strong),
+    );
     let mut confirmed = if apart > 0 {
         format!(
             "{}, confirmed but disputed by the verifier (reads {}) {apart}",
@@ -379,12 +391,18 @@ fn findings_line(c: &dla_core::view::StatusCounts, disputed: &[String], released
             ", grows only while callers skip the release: {released}"
         ));
     }
+    let mut strong = (leak.strong - released_strong).to_string();
+    if released_strong > 0 {
+        strong.push_str(&format!(
+            ", grows only while callers skip the release: {released_strong}"
+        ));
+    }
     let mut line = format!(
         "Findings: {} enumerated, {} dispositioned; leak hypotheses: confirmed {}, strong {}, refuted {}, suspected {}, unresolved {}; non-leak explanations: confirmed {}, refuted {}, suspected {}, unresolved {}",
         c.enumerated,
         c.dispositioned,
         confirmed,
-        leak.strong,
+        strong,
         leak.refuted,
         leak.suspected_static_only,
         leak.unresolved,
@@ -393,7 +411,7 @@ fn findings_line(c: &dla_core::view::StatusCounts, disputed: &[String], released
         n.suspected_static_only,
         n.unresolved
     );
-    if c.measured && leak.confirmed + leak.strong - released == 0 {
+    if c.measured && leak.confirmed + leak.strong - released - released_strong == 0 {
         line.push_str("; no leak confirmed");
     }
     line
@@ -1254,9 +1272,10 @@ fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
             .map_or_else(String::new, |n| format!(" ({n})"));
         let _ = writeln!(out, "- Release the caller must make: {}{note}", code(r));
     }
-    if let Some(s) = dla_core::release::release_confirmed(&view.ledger, &f.id)
-        .filter(|_| f.state == FindingState::Confirmed && f.polarity() == Polarity::Leak)
-    {
+    if let Some(s) = dla_core::release::release_confirmed(&view.ledger, &f.id).filter(|_| {
+        matches!(f.state, FindingState::Confirmed | FindingState::Strong)
+            && f.polarity() == Polarity::Leak
+    }) {
         let _ = writeln!(
             out,
             "- Grows only while callers skip the release: {} confirmed (the release {} called on every unit leaves the series flat); counted apart from the confirmed leaks",
