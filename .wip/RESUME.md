@@ -3737,3 +3737,4 @@ unattended run at a time and no builder beside it.
   (L + M); pushed main + dev; release.yml publish=true dispatched. N's round goes to preview.12.
   After release: refresh rig (bin + plugin from 18a69c6), then reruns (interceptors, logstash,
   otel-go, otel-python) one at a time, when the local N dynamic run is done.
+- 08:30 UTC: preview.11 PUBLISHED (tag on 18a69c6, 11 assets). Rig: bin/dla = preview.11 musl (checked), plugin = git archive 18a69c6; .prev kept.
