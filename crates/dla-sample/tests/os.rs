@@ -169,7 +169,14 @@ fn tree_sampling_sums_descendants_and_names_the_largest() {
     let out = sampler.stop();
     let own = os::sample(current()).expect("own").values["os.rss"];
     let largest = out.largest_descendant.expect("a descendant was seen");
-    assert!(os::descendants(current()).contains(&largest.pid));
+    // Tests run in parallel threads of this process, so another test's short-lived child can be
+    // the largest descendant while sampling and be gone by now: it was a descendant if it still is
+    // one, or if it no longer exists. A live process that is not ours is the failure.
+    assert!(
+        os::descendants(current()).contains(&largest.pid) || os::sample(largest.pid).is_err(),
+        "pid {} was named the largest descendant but is a live process outside the tree",
+        largest.pid
+    );
     assert!(out.samples[0].values["os.rss"] > own * 0.5);
     child.kill().expect("kill");
     child.wait().expect("reap");

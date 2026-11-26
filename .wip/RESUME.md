@@ -3814,3 +3814,36 @@ unattended run at a time and no builder beside it.
   rerun: all ok. LESSON: never delete build dirs while a cargo test of the tree is running.
   Binaries copied to $sp/bin-OP; target build dirs deleted (8.4 GB free). Full dynamic on O+P
   running from the copies (u149/dyn-OP.out, monitor bf315dvre).
+- 16:20 UTC: O+P full dynamic 63/64 + xfail; VERIFY row says so. Snapshot 83ea529 pushed WITH CI
+  (waiter u115/ci-wip-47). When green: commit-snapshot-tree.sh
+  83ea5292c71462b46fee118c84b4f2da0cbc694e commit-message-42.txt; push; version preview.12;
+  release; refresh rig; reruns: otel-go (K), fastrace (N), logstash (O), otel-python.
+- While CI runs (remote, no builder): start r5-otel-go on preview.11 (O/P not needed for Go).
+
+## 14:55 UTC 2026-11-26: r5-otel-go FOUND (preview.11), aborted by the model at 6 min
+
+- r5-otel-go: Key section 3: F234 internal/global/meter.go:95 meter.instruments CONFIRMED with the
+  documented mechanism (append per instrument creation while no delegate, cleared only by
+  setDelegate :131); verifier agrees on mechanism/site, label dispute only (L-COLLECT vs
+  UNCLASSIFIED). FOUND (was NOT FOUND at 7 min on preview.9). Also confirmed: meters, tracers
+  (x2), sdk metric cache.data, pipeline.aggregations (3 disputed N-INTENT).
+- BUT: the model ran `dla run abort` after 6 of 180 min: "unattended run: 4 leak hypotheses
+  confirmed plus 2 SDK caches measured; 139 ranked candidates not targeted (each harness batch
+  settles 2-3) ...". K's hold names abort as the deliberate exit; the model takes it.
+- NEXT CAUSE: refuse `dla run abort` while budget is over the floor and a queue (or undecided
+  growth) is open unless the reason names a blocker the run cannot pass (tool missing, env, build,
+  privilege, a refusal it cannot satisfy); fix = the queue's next batch. Plus the earlier ones:
+  over-confirmation of "caller skips the release call"; abort skips the verifier.
+- Kept r5-otel-go-keep; run dir deleted.
+- 15:55 UTC: r5-otel-python (preview.11) DIED at 57 min: "API Error: 401 OAuth access token has
+  expired" (the rig's claude child inherits the session's auth; the token expired mid-run; the 3
+  verifier subagents failed the same way). Environment, not the tool. A fresh `claude -p` works
+  again. NOT JUDGED; rerun on preview.12. Run dir deleted (no records kept: nothing judged).
+- 16:05 UTC: CI 83ea529 (run 45842231844): ubuntu clippy+test PASSED (P's rule may have cured the
+  alloc_test flake); macOS clippy+test FAILED: dla-sample tests/os.rs
+  tree_sampling_sums_descendants_and_names_the_largest ("descendants(current()).contains(
+  largest.pid)": the largest descendant seen while sampling can be another parallel test's child
+  that exited before the assert). Not this round's code (dla-sample untouched). Re-run failed jobs
+  when the dynamic job ends. Add a real fix to task 110 (assert against the pids seen while
+  sampling, or on the sleeper's pid).
+- 16:30 UTC: re-ran the macOS job of run 45842231844 (waiter u115/ci-wip-47b). In the working tree (next round, NOT in 83ea529): dla-sample tests/os.rs tree_sampling assertion accepts a largest descendant that has exited (another parallel test's child); 12/12 local. Task 110.
