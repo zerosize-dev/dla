@@ -3847,3 +3847,19 @@ unattended run at a time and no builder beside it.
   when the dynamic job ends. Add a real fix to task 110 (assert against the pids seen while
   sampling, or on the sleeper's pid).
 - 16:30 UTC: re-ran the macOS job of run 45842231844 (waiter u115/ci-wip-47b). In the working tree (next round, NOT in 83ea529): dla-sample tests/os.rs tree_sampling assertion accepts a largest descendant that has exited (another parallel test's child); 12/12 local. Task 110.
+
+## 17:10 UTC 2026-11-26: O+P on main, preview.12 released (in progress)
+- CI 83ea529 green after the macOS re-run. Committed as d5793a7 on main (commit-message-42), pushed
+  main + dev. Version 0.9.0-preview.12 as 6026bef, pushed. release.yml run 45862454275 (waiter
+  boeey01gh). Tasks 125, 126 done.
+- Next: verify tag, refresh rig (bin + plugin from 6026bef), reruns one at a time: fastrace (N),
+  logstash (O), otel-python. Meanwhile draft task-127 brief (abort refusal, caller-skips-release
+  non-leak hypothesis, verifier after abort) + the os.rs fix already in the working tree.
+- 17:00 UTC: release v0.9.0-preview.12 published (tag on 6026bef, prerelease, 11 assets, sha256
+  of the linux musl build checked). Rig refreshed: /root/dla-real/bin/dla = preview.12 (dla.prev =
+  .11), plugin = git archive 6026bef (plugin.prev = .11).
+- PLAN CHANGE: builders Q (release-hazard-brief.md, u150: drivers-disagree refusal, N-RELEASE
+  archetype decided on a harness where the remover line ran, release-untested gate item) and R
+  (abort-budget-brief.md, u151: abort refused `budget-left` without --blocker, hook/SKILL line 106
+  stop advertising abort, verifier after abort) run NOW, before the reruns, so the reruns measure
+  N+O+P+Q+R together on preview.13. No rig run beside them. The os.rs test fix rides in this round.
