@@ -3668,3 +3668,22 @@ unattended run at a time and no builder beside it.
   it; VERIFY row extended. fmt + clippy clean. Commit message 39 drafted.
 - Full `cargo test --workspace` running (u141/ws-test.log). Then full dynamic bench alone.
 - Workspace tests on the L+mine tree: EXIT 0, 183 binaries ok. Freed disk (old /tmp bench dirs, JFR dir, old scratch u41/u67/u99/u104/u120/u7acc, bin/dla.prev). Full dynamic bench started on target/debug (u141/dyn-L.out), machine otherwise idle; monitor bor5420ua.
+- Full dynamic on L+mine tree, idle machine: 63/64 + xfail. VERIFY row says so. Snapshot 0f80f18
+  pushed WITH CI (waiter u115/ci-wip-44, task bi2wde5hs). When green: commit-snapshot-tree.sh
+  0f80f18523e15b4948c29355ddf946ae5c71f261 commit-message-39.txt; push main + dev; preview.11.
+- r4-interceptors started 04:51 UTC (pid 26211) on the preview.10 rig; waiter 7000 s. Deleted
+  target/debug/build/dla-cli to free disk (rebuilds on demand). Order on preview.10: interceptors,
+  fastrace, otel-go, otel-python; logstash waits for preview.11 (L's fix is not in preview.10).
+
+## 05:10 UTC 2026-11-26: r4-interceptors CUT at 13 min: capture dumps fill the disk
+
+- r4-interceptors (preview.10): the model ran `harness run H<n> --capture alloc,heap --dumps 9` on
+  each driver; 9 V8 snapshots x ~110 MB = ~1 GB per harness; 5 harnesses in 12 min = 4 GB; free
+  disk 1.1 GB at 05:03. A 3-h run would need tens of GB. Within one harness only the newest set is
+  kept (clear_stale_capture_files); across harnesses nothing is bounded. Cut it.
+- HOW TO STOP A RIG RUN: TERM run.py's group does NOT stop claude (own session/group). TERM the
+  claude pid (pgrep -f <run name>, the `claude -p` line) alone; its bwrap shells exit after it.
+  A combined kill-loop + rm -rf was refused by the classifier; the single `kill -TERM <pid>` was OK.
+- Kept r4-interceptors-keep (ledger, state, harness.json x6, snapshot counts, redacted transcript).
+- NEXT: builder M (capture retention across harnesses + free-disk check before a capture run).
+- Builder M (sonnet) started ~05:15 on wip-notes/capture-disk-brief.md (scratch u143). Reruns wait for M and preview.11 (L + M). CI 0f80f18 still running (waiter bi2wde5hs).
