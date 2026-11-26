@@ -124,8 +124,22 @@ impl R {
         .save(&self.run_dir, harness)
         .unwrap();
     }
-    /// `dla ledger add` of the `N-RELEASE` sibling of F1; returns its id.
+    /// What the Python agent counted at each of `sites` over the points of a run of `harness`.
+    fn release_counts_at(&self, harness: &str, sites: Value) {
+        LineRuns {
+            dla_line_runs: 1,
+            series: "S1".into(),
+            sites: serde_json::from_value(sites).unwrap(),
+        }
+        .save(&self.run_dir, harness)
+        .unwrap();
+    }
+    /// `dla ledger add` of the `N-RELEASE` sibling of F1 naming `lib/enc.py:30`; returns its id.
     fn add_release(&self, evidence: &str) -> String {
+        self.add_release_at(evidence, "lib/enc.py:30")
+    }
+    /// `dla ledger add` of the `N-RELEASE` sibling of F1 naming `remover`; returns its id.
+    fn add_release_at(&self, evidence: &str, remover: &str) -> String {
         let v = self.ok(&[
             "ledger",
             "add",
@@ -136,7 +150,7 @@ impl R {
             "--hypothesis",
             "N-RELEASE",
             "--remover",
-            "lib/enc.py:30",
+            remover,
             "--refute-if",
             "the holder still grows with stop() called on every unit",
             "--evidence",
@@ -586,4 +600,222 @@ fn a_conditional_remover_neither_holds_the_confirm_nor_adds_a_gate_item() {
         "{:?}",
         r.final_gate()
     );
+}
+
+#[test]
+fn a_sibling_that_names_another_release_does_not_lift_the_hold_of_an_explanation_that_relies_on_one()
+ {
+    let (r, _) = scene("python");
+    let leak = r.alloc("H10", "leak");
+    r.ok(&["ledger", "refute", "F1.n1", "--evidence", &leak]);
+    explain_removed(&r, "on-release");
+    let g = r.growth.clone();
+    r.refused(
+        &["ledger", "confirm", "F1", "--evidence", &g],
+        "release-untested",
+    );
+    let w = r.evidence(
+        EvidenceKind::Workload,
+        json!({"harness": "H10", "mode": "driver", "runtime": "python", "series": ["S1"]}),
+    );
+    // A release the run did call (lib/enc.py:35), refuted where it ran: the explanation relies on
+    // lib/enc.py:30, which no run called.
+    let other = r.add_release_at(&leak, "lib/enc.py:35");
+    r.ok(&["ledger", "test", &other, "--evidence", &w]);
+    r.release_counts_at("H10", json!({"lib/enc.py:35": [0, 5, 9]}));
+    r.ok(&["ledger", "refute", &other, "--evidence", &leak]);
+    let e = r.refused(
+        &["ledger", "confirm", "F1", "--evidence", &g],
+        "release-untested",
+    );
+    let fix = e["fix"].as_str().unwrap();
+    assert!(
+        fix.contains("--hypothesis N-RELEASE --remover lib/enc.py:30"),
+        "{fix}"
+    );
+    assert!(
+        r.final_gate()
+            .iter()
+            .all(|m| m["kind"] != "release-untested" || m["id"] != "F1"),
+        "F1 is not confirmed yet, the gate lists confirmed leaks only"
+    );
+    // The sibling that names the line the explanation relies on, refuted where it ran, lifts it.
+    let same = r.add_release_at(&leak, "lib/enc.py:30");
+    r.ok(&["ledger", "test", &same, "--evidence", &w]);
+    r.release_counts_at(
+        "H10",
+        json!({"lib/enc.py:35": [0, 5, 9], "lib/enc.py:30": [0, 2, 4]}),
+    );
+    r.ok(&["ledger", "refute", &same, "--evidence", &leak]);
+    r.ok(&["ledger", "confirm", "F1", "--evidence", &g]);
+}
+
+#[test]
+fn a_runtime_that_counts_lines_is_refused_without_a_coverage_record_and_accepted_with_one() {
+    for runtime in ["rust", "go", "node"] {
+        let (r, flat, _, w10) = disagreeing(runtime);
+        let sib = r.add_release(&flat);
+        r.ok(&["ledger", "test", &sib, "--evidence", &w10]);
+        r.ok(&["ledger", "refute", "F1", "--evidence", &flat]);
+        // No `executed.json`: nothing shows the release ran, so the decision is refused and the
+        // fix names the command that writes the record.
+        let e = r.refused(
+            &["ledger", "confirm", &sib, "--evidence", &flat],
+            "release-not-run",
+        );
+        assert!(
+            e["message"]
+                .as_str()
+                .unwrap()
+                .contains("no coverage record"),
+            "{runtime}: {e}"
+        );
+        let fix = e["fix"].as_str().unwrap();
+        assert!(
+            fix.starts_with("dla alloc-test H10 --finding F1"),
+            "{runtime}: {fix}"
+        );
+        let executed = r.run_dir.join("harness/H10/executed.json");
+        let write = |count: u64| {
+            fs::create_dir_all(executed.parent().unwrap()).unwrap();
+            fs::write(
+                &executed,
+                json!({"runtime": runtime, "kind": "functions",
+                    "lines": [{"file": "lib/enc.py", "line": 30, "count": count}]})
+                .to_string(),
+            )
+            .unwrap();
+        };
+        // A record that counted the line 0 times is refused too.
+        write(0);
+        r.refused(
+            &["ledger", "confirm", &sib, "--evidence", &flat],
+            "release-not-run",
+        );
+        write(6);
+        let v = r.ok(&["ledger", "confirm", &sib, "--evidence", &flat]);
+        assert!(
+            v.get("note").is_none(),
+            "{runtime}: the line was counted: {v}"
+        );
+    }
+}
+
+/// A driver `harness` that targets the worker's finding `w1/F1`, and its workload evidence (main).
+fn worker_driver(r: &R, harness: &str) -> String {
+    let m: HarnessManifest = serde_json::from_value(json!({
+        "id": harness, "runtime": "python", "mode": "driver",
+        "scratch": "x", "run": {"argv": ["x"], "cwd": "."},
+        "warmup": 1, "iterations": 8, "step": 1, "key_modes": ["fresh"],
+        "targets": ["w1/F1"], "agent": "driver-python", "timeout_secs": 60,
+    }))
+    .unwrap();
+    m.save(&r.run_dir).unwrap();
+    r.evidence(
+        EvidenceKind::Workload,
+        json!({"harness": harness, "mode": "driver", "runtime": "python", "series": ["S1"]}),
+    )
+}
+
+#[test]
+fn a_worker_settles_two_disagreeing_drivers_of_the_main_ledger_with_a_sibling_of_its_own() {
+    let (r, _) = scene("python");
+    let g = r.growth.clone();
+    // The main ledger holds the two drivers that disagree, on harnesses made for the worker's
+    // finding: H20 favors leak (older), H21 favors non-leak.
+    let w20 = worker_driver(&r, "H20");
+    let w21 = worker_driver(&r, "H21");
+    worker_driver(&r, "H22");
+    let alloc = |h: &str, favors: &str| {
+        r.evidence(
+            EvidenceKind::Discriminator,
+            json!({"test": "plateau+purge", "favors": favors, "supports": [],
+                "finding": "w1/F1", "harness": h, "series": "S1"}),
+        )
+    };
+    let _leak = alloc("H20", "leak");
+    let _flat = alloc("H21", "non-leak");
+    let as_worker = |args: &[&str]| {
+        let mut v = vec!["--worker", "w1"];
+        v.extend_from_slice(args);
+        r.run(&v)
+    };
+    let ok = |args: &[&str]| {
+        let (code, v) = as_worker(args);
+        assert_eq!(code, 0, "{args:?}: {v}");
+        v
+    };
+    let v = ok(&[
+        "ledger",
+        "add",
+        "--origin",
+        "growth-series",
+        "--evidence",
+        &g,
+        "--site",
+        "lib/enc.py:5",
+        "--holder",
+        "thread-local",
+        "--owner",
+        "Encoder.holder",
+    ]);
+    assert_eq!(v["id"], "w1/F1", "{v}");
+    // A sibling of the worker's own, added after both drivers.
+    let v = ok(&[
+        "ledger",
+        "add",
+        "--sibling-of",
+        "F1",
+        "--origin",
+        "hypothesis",
+        "--hypothesis",
+        "N-WARM",
+        "--refute-if",
+        "growth continues over the extra cycles",
+        "--evidence",
+        &g,
+    ]);
+    let sib = v["id"].as_str().unwrap().to_owned();
+    assert_eq!(sib, "w1/F1.n1", "{v}");
+    ok(&["ledger", "test", "F1", "--evidence", &w20]);
+    ok(&["ledger", "test", &sib, "--evidence", &w21]);
+    // Held: the drivers disagree and the sibling is not refuted yet.
+    let (code, v) = as_worker(&["ledger", "confirm", "F1", "--evidence", &g]);
+    assert_ne!(code, 0, "{v}");
+    assert_eq!(v["error"]["code"], "drivers-disagree", "{v}");
+    // The printed route, followed by the worker: the sibling is refuted by its own alloc-test on
+    // a third driver made for the finding that favors leak.
+    let mut slice = Ledger::load_for(&r.run_dir, Some("w1")).unwrap();
+    slice
+        .add_evidence(NewEvidence {
+            source: Source::Repo {
+                commit: "c".into(),
+                path: None,
+            },
+            tool: Tool {
+                name: "t".into(),
+                version: "1".into(),
+            },
+            authority: Authority::Test,
+            kind: EvidenceKind::Discriminator,
+            result: json!({"test": "plateau+purge", "favors": "leak", "supports": [],
+                "finding": "w1/F1", "harness": "H22", "series": "S1"}),
+            raw: None,
+            coverage: EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        })
+        .unwrap();
+    let own = slice
+        .evidence_in_order()
+        .last()
+        .unwrap()
+        .evidence_id
+        .to_string();
+    drop(slice);
+    assert_eq!(own, "w1/E1");
+    ok(&["ledger", "refute", &sib, "--evidence", &own]);
+    // The main drivers are older than the worker's sibling and its alloc-test, whatever their
+    // lines are called: the confirm passes.
+    ok(&["ledger", "confirm", "F1", "--evidence", &g]);
 }

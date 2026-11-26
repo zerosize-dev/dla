@@ -105,8 +105,9 @@ impl Blocker {
     }
 }
 
-/// Checks the `--blocker`, `--reason` and `--code` of an abort. The error is the message of
-/// the refusal and what it wants.
+/// Checks the `--blocker`, `--reason` and `--code` of an abort. The error is the code and the
+/// message of the refusal and its fix: a whole `dla run abort ...` command that is accepted as
+/// printed once its `<placeholders>` and its one `a|b|c` choice are filled in.
 pub fn check_blocker(
     kind: &str,
     reason: Option<&str>,
@@ -120,14 +121,15 @@ pub fn check_blocker(
                 "--blocker {kind:?} is not a blocker kind (one of {})",
                 BLOCKER_KINDS.join(", ")
             ),
-            "--blocker user|tool|build|environment|privilege|refusal".to_owned(),
+            "dla run abort --blocker tool|build|environment|privilege --reason \"<what blocks the run>\""
+                .to_owned(),
         ));
     }
     if kind != "refusal" && code.is_some() {
         return Err((
             crate::error::codes::INVALID_VALUE,
             format!("--code goes with --blocker refusal only, not --blocker {kind}"),
-            "--code only with --blocker refusal".to_owned(),
+            format!("dla run abort --blocker {kind} --reason \"<what blocks the run>\""),
         ));
     }
     if kind == "user" {
@@ -147,7 +149,7 @@ pub fn check_blocker(
             return Err((
                 "missing-argument",
                 "--blocker refusal needs --code <the code of the refusal>, as printed in the refusal's `error.code` (lowercase words joined by hyphens, such as time-left)".to_owned(),
-                "--code <refusal code>".to_owned(),
+                "dla run abort --blocker refusal --code <refusal code> --reason \"<what blocks the run: the refusal the run cannot satisfy>\"".to_owned(),
             ));
         }
         Some(c.to_owned())
@@ -158,7 +160,14 @@ pub fn check_blocker(
         return Err((
             "missing-argument",
             format!("--blocker {kind} needs a --reason that names what blocks the run: {why}"),
-            format!("--reason \"<what blocks the run: the {kind} that is missing or fails>\""),
+            match &code {
+                Some(c) => format!(
+                    "dla run abort --blocker {kind} --code {c} --reason \"<what blocks the run: the {kind} that is missing or fails>\""
+                ),
+                None => format!(
+                    "dla run abort --blocker {kind} --reason \"<what blocks the run: the {kind} that is missing or fails>\""
+                ),
+            },
         ));
     }
     Ok(Blocker {

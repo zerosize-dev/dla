@@ -353,3 +353,45 @@ fn the_hold_of_an_aborted_run_ends_after_the_stop_limit_without_a_stamp() {
     assert!(err.contains("the stop is allowed"), "{err}");
     assert_eq!(r.state()["status"], "aborted", "an abort is not restamped");
 }
+
+#[test]
+fn the_fix_of_a_refused_blocker_is_printed_as_the_rule_returns_it() {
+    let r = two_confirmed();
+    for (args, fix) in [
+        (
+            vec!["run", "abort", "--blocker", "tool", "--code", "time-left"],
+            "dla run abort --blocker tool --reason \"<what blocks the run>\"",
+        ),
+        (
+            vec![
+                "run",
+                "abort",
+                "--blocker",
+                "refusal",
+                "--reason",
+                "the capture needs a privilege the run does not have",
+            ],
+            "dla run abort --blocker refusal --code <refusal code> --reason \"<what blocks the run: the refusal the run cannot satisfy>\"",
+        ),
+        (
+            vec!["run", "abort", "--blocker", "sleepy"],
+            "dla run abort --blocker tool|build|environment|privilege --reason \"<what blocks the run>\"",
+        ),
+    ] {
+        let (code, v) = r.json(&args);
+        assert_eq!(code, 2, "{args:?}: {v}");
+        assert_eq!(v["error"]["fix"], fix, "{args:?}: {v}");
+        // One `--blocker`, nothing repeated or stray in front of it.
+        assert_eq!(
+            v["error"]["fix"]
+                .as_str()
+                .unwrap()
+                .matches("--blocker")
+                .count(),
+            1,
+            "{v}"
+        );
+    }
+    // Nothing was aborted by the refusals.
+    assert_eq!(r.state()["status"], "active");
+}

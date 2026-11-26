@@ -101,9 +101,9 @@ open unless `--blocker <kind> --reason "<what blocks the run>"` names something 
 user asked to stop), `tool`, `build`, `environment` or `privilege` (with a reason that names the missing tool, the
 build that does not compile, the environment or permission), or `refusal` with `--code <the refusal's code>`. A
 count of work left is no reason. An abort does not skip the verifier: its output lists the confirmed findings with
-no verification record and the commands for each, the Stop hook of the aborted run holds the stop (up to 3
-attempts) while one is unverified, and the report marks it "not verified: the run was aborted before the verifier
-ran". With no queue open, growth that was measured and not decided holds the stop the same way,
+no verification record and the commands for each, the Stop hook of the aborted run blocks the first two stop
+attempts while one is unverified and allows the third (with a note), and the report marks it "not verified: the
+run was aborted before the verifier ran". With no queue open, growth that was measured and not decided holds the stop the same way,
 whether its finding is closed (a `growth` item) or still open (a `finding` item): the block names the first
 command of its route, often `dla harness gen --lang <rt> --driver --probe <F>` when an alloc-test of a test
 loop or of the project's own workload did not decide it. While a `dla` command of the run (census, sweep, harness run,

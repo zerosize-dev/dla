@@ -28,7 +28,7 @@ fn evidence(l: &mut Ledger, kind: EvidenceKind, result: Value) -> EvidenceId {
         unknowns: vec![],
     })
     .unwrap();
-    l.evidence().last().unwrap().evidence_id.clone()
+    l.evidence_in_order().last().unwrap().evidence_id.clone()
 }
 
 fn alloc_test(l: &mut Ledger, favors: &str, harness: &str) -> EvidenceId {
@@ -408,4 +408,249 @@ fn a_third_driver_settles_it_only_with_a_sibling_added_after_and_refuted_by_a_ne
     // Refuted by an alloc-test on the leak-favoring driver itself: it names no difference.
     let (_d, v) = build(true, "H2");
     assert!(drivers_disagree(&v, &f("F1")).is_some());
+}
+
+/// Records that F1 is explained as `removal: on-release`, by the line `a.py:30`.
+fn explain_on_release(l: &mut Ledger) {
+    let ws = evidence(l, EvidenceKind::Workload, json!({"harness": "H1"}));
+    l.transition(&f("F1"), FindingState::UnderTest, None, None, vec![ws], "t")
+        .unwrap();
+    l.annotate_record(crate::record::FindingAnnotation {
+        writers: vec!["a.py:9".to_owned()],
+        removers: vec!["a.py:30".to_owned()],
+        holder: Some(crate::finding::Holder::StaticGlobal),
+        ..crate::record::FindingAnnotation::new(f("F1"))
+    })
+    .unwrap();
+    l.explain(
+        &f("F1"),
+        crate::finding::ExplanationTag::Inferred,
+        &["a.py:9".to_owned()],
+        RemovalClaim::OnRelease,
+        Some("a.py:30"),
+        None,
+        "The static/global holder at a.py:1 is added at a.py:9 and a.py:30 does the release of it only when the caller calls stop()",
+        &["a.py:9".to_owned()],
+        &["a.py:30".to_owned()],
+    )
+    .unwrap();
+}
+
+/// Adds the `N-RELEASE` sibling of F1 naming `remover` and decides it (`to`) on `by`.
+fn decided_release(l: &mut Ledger, remover: &str, to: FindingState, by: EvidenceId) -> FindingId {
+    let id = l.next_sibling_id(&FindingId::new(1));
+    let mut nf = NewFinding::new(
+        Origin::parse("hypothesis").unwrap(),
+        vec![EvidenceId::new(1)],
+    );
+    nf.sibling_of = Some(FindingId::new(1));
+    nf.hypothesis = Some("N-RELEASE".into());
+    nf.refute_if = Some("the holder still grows with the release called".into());
+    nf.remover = Some(remover.to_owned());
+    l.add_finding(nf).unwrap();
+    let ws = evidence(l, EvidenceKind::Workload, json!({"harness": "H1"}));
+    l.transition(&id, FindingState::UnderTest, None, None, vec![ws], "t")
+        .unwrap();
+    l.transition(&id, to, None, None, vec![by], "t").unwrap();
+    id
+}
+
+#[test]
+fn the_same_remover_is_the_same_line_of_the_same_file() {
+    assert!(same_remover("a.py:30", "a.py:30"));
+    assert!(same_remover("./a.py:30", "a.py:30"));
+    assert!(same_remover("src/a.py:30", "a.py:30"));
+    assert!(same_remover(" a.py:30 ", "a.py:30"));
+    assert!(!same_remover("a.py:31", "a.py:30"));
+    assert!(!same_remover("b.py:30", "a.py:30"));
+    assert!(!same_remover("xa.py:30", "a.py:30"));
+    assert!(same_remover("stop", "stop"));
+    assert!(!same_remover("stop", "a.py:30"));
+}
+
+#[test]
+fn an_untested_release_is_cleared_only_by_a_decided_sibling_that_names_the_same_remover() {
+    for decided in [FindingState::Refuted, FindingState::Confirmed] {
+        let mut s = scene("python");
+        explain_on_release(&mut s.ledger);
+        let leak = alloc_test(&mut s.ledger, "leak", "H1");
+        let flat = alloc_test(&mut s.ledger, FLAT, "H1");
+        let by = if decided == FindingState::Refuted {
+            leak
+        } else {
+            flat
+        };
+        let root = s.ledger.finding(&f("F1")).unwrap().clone();
+        // F1.n2 names a.py:30 and is not decided: the release was not tested.
+        assert!(release_untested(&s.ledger, &root).is_some());
+        if decided == FindingState::Confirmed {
+            // The ledger closes the root first when the explanation sibling is confirmed.
+            s.ledger
+                .transition(
+                    &f("F1"),
+                    FindingState::Refuted,
+                    None,
+                    None,
+                    vec![by.clone()],
+                    "t",
+                )
+                .unwrap();
+        }
+        // A sibling that names another release, decided: still untested.
+        decided_release(&mut s.ledger, "a.py:99", decided, by.clone());
+        let u = release_untested(&s.ledger, &root).expect("another release decides nothing");
+        assert_eq!(u.remover, "a.py:30");
+        // A sibling of another file at the same line: still untested.
+        decided_release(&mut s.ledger, "b.py:30", decided, by.clone());
+        assert!(release_untested(&s.ledger, &root).is_some());
+        // The one that names the same line of the same file (spelled with a directory) clears it.
+        decided_release(&mut s.ledger, "src/a.py:30", decided, by);
+        assert!(release_untested(&s.ledger, &root).is_none(), "{decided}");
+    }
+}
+
+#[test]
+fn a_runtime_that_counts_lines_but_left_no_record_is_not_shown_to_have_run_the_release() {
+    for rt in ["rust", "go", "node"] {
+        let mut s = scene(rt);
+        let flat = alloc_test(&mut s.ledger, FLAT, "H1");
+        let (dir, view) = s.view();
+        // No `executed.json`: no sign that the release ran.
+        let e = decide(&view, &flat).unwrap_err();
+        assert_eq!(e.code, codes::RELEASE_NOT_RUN, "{rt}");
+        assert!(
+            e.message.contains("no coverage record"),
+            "{rt}: {}",
+            e.message
+        );
+        assert!(
+            e.fix
+                .starts_with("dla alloc-test H1 --finding F1   (it counts a.py:30 and writes the coverage record)"),
+            "{rt}: {}",
+            e.fix
+        );
+        // A record that does not ask about the line (a run before the sibling named it).
+        coverage(
+            dir.path(),
+            "H1",
+            json!([{"file": "a.py", "line": 5, "count": 9}]),
+        );
+        let e = decide(&view, &flat).unwrap_err();
+        assert_eq!(e.code, codes::RELEASE_NOT_RUN, "{rt}");
+        assert!(e.message.contains("did not count"), "{rt}: {}", e.message);
+        // A record that counted the line above 0: decided, no note.
+        coverage(
+            dir.path(),
+            "H1",
+            json!([{"file": "a.py", "line": 30, "count": 3}]),
+        );
+        assert_eq!(
+            decide(&view, &flat).unwrap(),
+            Decision { note: None },
+            "{rt}"
+        );
+        // A record that says the tool could not count the line: the note.
+        std::fs::write(
+            HarnessManifest::dir_in(dir.path(), "H1").join("executed.json"),
+            json!({"runtime": rt, "kind": "none", "functions": [], "note": "no coverage was written"})
+                .to_string(),
+        )
+        .unwrap();
+        let d = decide(&view, &flat).unwrap();
+        assert_eq!(d.note.as_deref(), Some(NOT_SHOWN), "{rt}");
+        std::fs::write(
+            HarnessManifest::dir_in(dir.path(), "H1").join("executed.json"),
+            json!({"runtime": rt, "kind": "functions",
+                "lines": [{"file": "a.py", "line": 30, "count": null, "why": "inlined"}]})
+            .to_string(),
+        )
+        .unwrap();
+        let d = decide(&view, &flat).unwrap();
+        assert_eq!(d.note.as_deref(), Some(NOT_SHOWN), "{rt}");
+    }
+}
+
+#[test]
+fn a_python_run_without_line_counts_of_its_series_is_refused_and_a_jvm_or_native_one_is_noted() {
+    let mut s = scene("python");
+    let flat = alloc_test(&mut s.ledger, FLAT, "H1");
+    let (dir, view) = s.view();
+    let e = decide(&view, &flat).unwrap_err();
+    assert_eq!(e.code, codes::RELEASE_NOT_RUN);
+    assert!(e.message.contains("no line counts"), "{}", e.message);
+    assert!(
+        e.fix.starts_with("dla alloc-test H1 --finding F1"),
+        "{}",
+        e.fix
+    );
+    // The counts of another series of the harness are not the counts of this run.
+    LineRuns {
+        dla_line_runs: 1,
+        series: "S2".into(),
+        sites: serde_json::from_value(json!({"a.py:30": [0, 4, 8]})).unwrap(),
+    }
+    .save(dir.path(), "H1")
+    .unwrap();
+    assert!(decide(&view, &flat).is_err());
+    LineRuns {
+        dla_line_runs: 1,
+        series: "S1".into(),
+        sites: serde_json::from_value(json!({"a.py:30": [0, 4, 8]})).unwrap(),
+    }
+    .save(dir.path(), "H1")
+    .unwrap();
+    assert_eq!(decide(&view, &flat).unwrap(), Decision { note: None });
+    // Counts that are all unknown: the agent could not count the line.
+    LineRuns {
+        dla_line_runs: 1,
+        series: "S1".into(),
+        sites: serde_json::from_value(json!({"a.py:30": [null, null]})).unwrap(),
+    }
+    .save(dir.path(), "H1")
+    .unwrap();
+    assert_eq!(
+        decide(&view, &flat).unwrap().note.as_deref(),
+        Some(NOT_SHOWN)
+    );
+    // The JVM and native code cannot count a line at all.
+    for rt in ["jvm", "native"] {
+        let mut s = scene(rt);
+        let flat = alloc_test(&mut s.ledger, FLAT, "H1");
+        let (_d, view) = s.view();
+        assert_eq!(
+            decide(&view, &flat).unwrap().note.as_deref(),
+            Some(NOT_SHOWN),
+            "{rt}"
+        );
+    }
+}
+
+#[test]
+fn the_newest_alloc_test_of_a_harness_is_the_newest_by_time_after_a_merge() {
+    // H2 favors leak. A worker's alloc-test of H1 that favors leak is merged; then the core
+    // records an alloc-test of H1 that favors non-leak. By evidence ID the worker's `w/E1`
+    // sorts after the core's `E<n>`, so reading the ID order took the older, leak-favoring
+    // one for the newest and the two drivers looked as if they agreed.
+    let mut s = scene("python");
+    let leak_h2 = alloc_test(&mut s.ledger, "leak", "H2");
+    let dir = s.dir.path().to_path_buf();
+    let mut w = Ledger::load_for(&dir, Some("w")).unwrap();
+    let old = alloc_test(&mut w, "leak", "H1");
+    assert_eq!(old.to_string(), "w/E1");
+    w.finish_slice().unwrap();
+    crate::merge::merge(&dir).unwrap();
+    s.ledger = Ledger::load(&dir).unwrap();
+    let newest = alloc_test(&mut s.ledger, FLAT, "H1");
+    assert!(newest.to_string().starts_with('E'));
+    let (_d, view) = s.view();
+    let drivers = drivers_of(&view, &f("F1"));
+    let h1 = drivers.iter().find(|d| d.harness == "H1").unwrap();
+    assert_eq!(
+        (h1.evidence.clone(), h1.favors),
+        (newest.clone(), Favors::NonLeak)
+    );
+    // drivers_of is oldest first: H2's, then the worker's alloc-test is gone (H1's newest moved).
+    assert_eq!(drivers.last().unwrap().evidence, newest);
+    let d = drivers_disagree(&view, &f("F1")).expect("H1 now favors non-leak, H2 leak");
+    assert_eq!((d.flat.evidence, d.leak.evidence), (newest, leak_h2));
 }

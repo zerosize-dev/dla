@@ -51,7 +51,8 @@ pub fn is_allowed(from: FindingState, to: FindingState) -> bool {
 pub trait EvidenceLookup {
     /// The record with this ID, if it exists.
     fn evidence(&self, id: &EvidenceId) -> Option<&EvidenceRecord>;
-    /// Every existing evidence ID, in order (used to make refusals actionable).
+    /// Every existing evidence ID, oldest first (used to make refusals actionable, and by the
+    /// rules that read the newest record).
     fn evidence_ids(&self) -> Vec<EvidenceId>;
 }
 

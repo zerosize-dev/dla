@@ -651,7 +651,7 @@ fn naming_records(ledger: &dla_core::Ledger, f: &dla_core::Finding) -> Vec<Evide
     let mut out = Vec::new();
     for kind in [EvidenceKind::AllocStack, EvidenceKind::RetentionPath] {
         let mut named: Vec<EvidenceId> = ledger
-            .evidence()
+            .evidence_in_order()
             .filter(|e| e.kind == kind && dla_core::labels::about_finding(e, &subjects))
             .map(|e| e.evidence_id.clone())
             .collect();
@@ -765,7 +765,7 @@ pub(crate) fn literal_summarize(
         harness_files.extend(files);
     }
     for rec in ledger
-        .evidence()
+        .evidence_in_order()
         .filter(|e| {
             e.kind == EvidenceKind::AllocStack
                 && !dla_core::labels::names_finding(e, &subjects)

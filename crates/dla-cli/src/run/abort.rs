@@ -339,7 +339,7 @@ pub fn run(ctx: &Ctx, project: &Path, a: AbortArgs) -> Res<Value> {
                         code,
                         message,
                         "a blocker of the run, with the reason that names it",
-                        format!("dla run abort --blocker {kind} {fix}"),
+                        fix,
                     )
                 },
             )?,
@@ -419,4 +419,95 @@ pub fn run(ctx: &Ctx, project: &Path, a: AbortArgs) -> Res<Value> {
         ));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    /// A printed fix with its `<placeholders>` and its one `a|b|c` choice filled in, split the
+    /// way a shell splits it (double quotes keep a reason together).
+    fn filled(fix: &str) -> Vec<String> {
+        let mut text = String::new();
+        let mut chars = fix.chars();
+        while let Some(c) = chars.next() {
+            if c != '<' {
+                text.push(c);
+                continue;
+            }
+            let name: String = chars.by_ref().take_while(|c| *c != '>').collect();
+            text.push_str(if name.starts_with("refusal code") {
+                "time-left"
+            } else {
+                "the go toolchain is not installed"
+            });
+        }
+        let (mut words, mut word, mut quoted, mut any) = (Vec::new(), String::new(), false, false);
+        for c in text.chars() {
+            match c {
+                '"' => {
+                    quoted = !quoted;
+                    any = true;
+                }
+                c if c.is_whitespace() && !quoted => {
+                    if any || !word.is_empty() {
+                        words.push(std::mem::take(&mut word));
+                    }
+                    any = false;
+                }
+                c => word.push(c),
+            }
+        }
+        if any || !word.is_empty() {
+            words.push(word);
+        }
+        // The one choice `a|b|c`: the first alternative.
+        words
+            .into_iter()
+            .map(|w| w.split('|').next().unwrap_or_default().to_owned())
+            .collect()
+    }
+
+    /// Every fix `check_blocker` can return is a whole command, with one `--blocker`, that the
+    /// argument parser accepts once filled in, and whose arguments `check_blocker` then accepts.
+    #[test]
+    fn every_fix_of_a_failed_blocker_check_runs_as_printed() {
+        let reason = Some("the capture needs a privilege the run does not have");
+        let cases: [(&str, Option<&str>, Option<&str>); 8] = [
+            ("sleepy", None, None),
+            ("sleepy", reason, Some("time-left")),
+            ("tool", reason, Some("time-left")),
+            ("user", None, Some("time-left")),
+            ("refusal", reason, None),
+            ("refusal", reason, Some("Not A Code")),
+            ("tool", Some("no go"), None),
+            ("refusal", Some("no go"), Some("time-left")),
+        ];
+        for (kind, reason, code) in cases {
+            let (_, _, fix) = abort_rule::check_blocker(kind, reason, code)
+                .expect_err(&format!("{kind} {reason:?} {code:?} is refused"));
+            assert!(
+                fix.starts_with("dla run abort "),
+                "{kind}: a whole command: {fix}"
+            );
+            assert_eq!(fix.matches("--blocker").count(), 1, "{kind}: {fix}");
+            assert!(fix.matches("--reason").count() <= 1, "{kind}: {fix}");
+            assert!(
+                fix.split_whitespace().filter(|w| w.contains('|')).count() <= 1,
+                "{fix}"
+            );
+            let words = filled(&fix);
+            let cli =
+                crate::Cli::try_parse_from(&words).unwrap_or_else(|e| panic!("{kind}: {fix}\n{e}"));
+            let crate::Command::Run(crate::run::RunCmd::Abort(a)) = cli.command else {
+                panic!("{kind}: not `dla run abort`: {fix}");
+            };
+            let blocker = a.blocker.as_deref().expect("a blocker");
+            assert!(
+                abort_rule::check_blocker(blocker, a.reason.as_deref(), a.code.as_deref()).is_ok(),
+                "{kind}: the fix is refused again: {fix}"
+            );
+        }
+    }
 }

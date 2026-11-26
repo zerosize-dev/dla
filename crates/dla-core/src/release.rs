@@ -9,13 +9,16 @@
 //!   releases the holder (its `remover`). An alloc-test decides it only when it ran on a harness
 //!   made for the finding and the remover line ran there ([`remover_run`]): a flat series from a
 //!   driver that never reached the release says nothing about what the release does. Where a
-//!   runtime cannot count lines (the JVM, native code) the harness is accepted and the decision
-//!   carries the note [`NOT_SHOWN`].
+//!   runtime cannot count lines (the JVM, native code, or a coverage record that itself says the
+//!   tool could not count the line) the harness is accepted and the decision carries the note
+//!   [`NOT_SHOWN`]. A runtime that counts lines but left no record of the run is refused: the
+//!   release was not shown to run.
 //! * **Drivers that disagree hold the confirm** ([`drivers_disagree`]): two drivers made for the
 //!   finding whose newest alloc-tests favor leak and non-leak do not decide it until something
 //!   names and tests what differs between them.
 //! * **An explanation that says the remover runs on the caller's release asks for the release
-//!   run** ([`release_untested`]): `removal: on-release` only; `conditional` asks for nothing.
+//!   run** ([`release_untested`]): `removal: on-release` only; `conditional` asks for nothing. A
+//!   decided `N-RELEASE` sibling answers it only when it names the same remover line.
 //!
 //! The ledger itself never reads a run directory, so these checks run in the command layer
 //! (`dla ledger confirm`, `refute`) and in the gate, over a [`RunView`].
@@ -33,7 +36,7 @@ use crate::{
     harness::{HarnessManifest, LineRuns},
     ids::{EvidenceId, FindingId},
     ledger::Ledger,
-    record::{Record, RemovalClaim},
+    record::RemovalClaim,
     view::RunView,
 };
 
@@ -94,11 +97,17 @@ pub enum RemoverRun {
     /// The runtime counts lines, but the run of the harness did not ask about this one (it ran
     /// before the sibling named it): the run has to be repeated.
     NotAsked,
-    /// The runtime cannot count the line here; the string says why.
+    /// The runtime counts lines, but no record of a run exists (the harness was never run with
+    /// `dla alloc-test`, or the agent wrote no counts): nothing shows the release ran. The string
+    /// says what is missing.
+    NoRecord(String),
+    /// The runtime cannot count the line here (the JVM, native code, or a record of the run that
+    /// says the tool could not count it); the string says why.
     NotShown(String),
 }
 
 /// One count of a coverage record of a harness run.
+#[derive(Debug)]
 enum Counted {
     Count(u64),
     Unknown(String),
@@ -118,22 +127,36 @@ fn split_site(site: &str) -> Option<(&str, u64)> {
     Some((file, line.parse().ok()?))
 }
 
-/// The coverage record `executed.json` of the last run of `harness`, read for `remover`.
+/// True when two remover lines are the same line of the same file (`same_file` for the file,
+/// the number for the line); lines that are not `file:line` are the same only when equal.
+pub fn same_remover(a: &str, b: &str) -> bool {
+    match (split_site(a.trim()), split_site(b.trim())) {
+        (Some((fa, la)), Some((fb, lb))) => la == lb && same_file(fa, fb),
+        _ => a.trim() == b.trim(),
+    }
+}
+
+/// The coverage record `executed.json` of the last `dla alloc-test` of `harness`, read for
+/// `remover`. `Err` says there is no record (`dla harness run` moves the one it writes to
+/// `executed-<S>.json`, which belongs to its own series); a record that lists no functions says
+/// the tool could not count and is `Counted::Unknown`.
 fn counted_in_coverage(run_dir: &Path, harness: &str, remover: &str) -> Result<Counted, String> {
     let path = HarnessManifest::dir_in(run_dir, harness).join("executed.json");
     let Some(doc) = std::fs::read_to_string(&path)
         .ok()
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
     else {
-        return Err("the harness run wrote no coverage record".to_owned());
+        return Err(format!(
+            "{harness} has no coverage record (harness/{harness}/executed.json), which `dla alloc-test` writes"
+        ));
     };
     if doc.get("kind").and_then(Value::as_str) != Some("functions") {
         let note = doc.get("note").and_then(Value::as_str).unwrap_or("");
-        return Err(if note.is_empty() {
+        return Ok(Counted::Unknown(if note.is_empty() {
             "the coverage record of the run lists no functions, so no line is counted".to_owned()
         } else {
             note.to_owned()
-        });
+        }));
     }
     let Some((file, line)) = split_site(remover) else {
         return Ok(Counted::Absent);
@@ -165,9 +188,13 @@ fn counted_in_coverage(run_dir: &Path, harness: &str, remover: &str) -> Result<C
 ///
 /// | Runtime | Source |
 /// |---|---|
-/// | Rust, Go, Node | the `lines` of `harness/<H>/executed.json` (coverage regions, blocks, ranges) |
-/// | Python | `harness/<H>/lines-<S>.json`, the agent's `line_counts` per point |
+/// | Rust, Go, Node | the `lines` of `harness/<H>/executed.json` (coverage regions, blocks, ranges), written by `dla alloc-test`; no record is [`RemoverRun::NoRecord`] |
+/// | Python | `harness/<H>/lines-<S>.json`, the agent's `line_counts` per point; no record is [`RemoverRun::NoRecord`] |
 /// | JVM, native | not counted: [`RemoverRun::NotShown`] |
+///
+/// A record that says the tool could not count the line is [`RemoverRun::NotShown`]; a missing
+/// record, or one from a run before the sibling named the line ([`RemoverRun::NotAsked`]), shows
+/// nothing and the run has to be made again.
 pub fn remover_run(
     run_dir: &Path,
     manifest: &HarnessManifest,
@@ -183,16 +210,22 @@ pub fn remover_run(
     match manifest.runtime.as_str() {
         "rust" | "go" | "node" => match counted_in_coverage(run_dir, &manifest.id, remover) {
             Ok(c) => by(c),
-            Err(why) => RemoverRun::NotShown(why),
+            Err(why) => RemoverRun::NoRecord(why),
         },
         "python" => {
-            let runs = series
-                .and_then(|s| LineRuns::load(run_dir, &manifest.id, s))
-                .or_else(|| newest_line_runs(run_dir, &manifest.id));
+            // The counts of the series the alloc-test measured; only a test that names no series
+            // is read from the newest counts of the harness.
+            let runs = match series {
+                Some(s) => LineRuns::load(run_dir, &manifest.id, s),
+                None => newest_line_runs(run_dir, &manifest.id),
+            };
             let Some(runs) = runs else {
-                return RemoverRun::NotShown(
-                    "the Python agent wrote no line counts for the run".to_owned(),
-                );
+                return RemoverRun::NoRecord(format!(
+                    "{} has no line counts for {} (harness/{}/lines-<S>.json), which a run of the Python agent writes",
+                    manifest.id,
+                    series.unwrap_or("the run"),
+                    manifest.id
+                ));
             };
             let Some((file, line)) = split_site(remover) else {
                 return RemoverRun::NotAsked;
@@ -283,7 +316,7 @@ pub fn drivers_of(view: &RunView, root: &FindingId) -> Vec<Driver> {
         return Vec::new();
     };
     let family = family_ids(&view.ledger, root);
-    let records: Vec<&EvidenceRecord> = view.ledger.evidence().collect();
+    let records: Vec<&EvidenceRecord> = view.ledger.evidence_in_order().collect();
     let mut newest: Vec<Driver> = Vec::new();
     let mut made: std::collections::BTreeMap<String, bool> = Default::default();
     for (e, favors) in bound_alloc_tests(&records, &family) {
@@ -309,20 +342,6 @@ pub fn drivers_of(view: &RunView, root: &FindingId) -> Vec<Driver> {
         });
     }
     newest
-}
-
-fn seq_of_evidence(ledger: &Ledger, id: &EvidenceId) -> Option<u64> {
-    ledger.lines().iter().find_map(|l| match &l.record {
-        Record::Evidence(e) if &e.evidence_id == id => Some(l.seq),
-        _ => None,
-    })
-}
-
-fn seq_of_finding(ledger: &Ledger, id: &FindingId) -> Option<u64> {
-    ledger.lines().iter().find_map(|l| match &l.record {
-        Record::FindingAdded { finding } if &finding.id == id => Some(l.seq),
-        _ => None,
-    })
 }
 
 /// Two drivers made for a finding whose newest alloc-tests favor leak and non-leak.
@@ -363,8 +382,8 @@ pub fn drivers_disagree(view: &RunView, root: &FindingId) -> Option<Disagreement
     // the leak-favoring one of the pair.
     let settled = |l: &Driver, n: &Driver| -> Option<bool> {
         let (ls, ns) = (
-            seq_of_evidence(ledger, &l.evidence)?,
-            seq_of_evidence(ledger, &n.evidence)?,
+            ledger.evidence_order(&l.evidence)?,
+            ledger.evidence_order(&n.evidence)?,
         );
         let (older, newer) = (ls.min(ns), ls.max(ns));
         Some(
@@ -374,13 +393,13 @@ pub fn drivers_disagree(view: &RunView, root: &FindingId) -> Option<Disagreement
                     s.parent.as_ref() == Some(root)
                         && s.polarity() == Polarity::NonLeak
                         && s.state == FindingState::Refuted
-                        && seq_of_finding(ledger, &s.id).is_some_and(|q| q > older)
+                        && ledger.finding_order(&s.id).is_some_and(|q| q > older)
                 })
                 .any(|s| {
                     s.contradicts.iter().any(|d| {
                         all.iter().any(|x| {
                             &x.evidence == d && x.favors == Favors::Leak && x.harness != l.harness
-                        }) && seq_of_evidence(ledger, d).is_some_and(|q| q > newer)
+                        }) && ledger.evidence_order(d).is_some_and(|q| q > newer)
                     })
                 }),
         )
@@ -404,7 +423,7 @@ fn drivers_all(view: &RunView, root: &FindingId) -> Vec<Driver> {
         return Vec::new();
     };
     let family = family_ids(&view.ledger, root);
-    let records: Vec<&EvidenceRecord> = view.ledger.evidence().collect();
+    let records: Vec<&EvidenceRecord> = view.ledger.evidence_in_order().collect();
     bound_alloc_tests(&records, &family)
         .into_iter()
         .filter_map(|(e, favors)| {
@@ -440,7 +459,7 @@ pub fn release_route(
     // harness and the evidence; without one the harness of the newest workload record and the
     // evidence the root cites.
     let family = family_ids(&view.ledger, root);
-    let records: Vec<&EvidenceRecord> = view.ledger.evidence().collect();
+    let records: Vec<&EvidenceRecord> = view.ledger.evidence_in_order().collect();
     let newest = bound_alloc_tests(&records, &family).pop().map(|(e, _)| e);
     let h = driver
         .as_ref()
@@ -467,7 +486,7 @@ pub fn release_route(
         .unwrap_or_else(|| "<id>".to_owned());
     let workload = view
         .ledger
-        .evidence()
+        .evidence_in_order()
         .filter(|e| {
             e.kind == EvidenceKind::Workload
                 && crate::harness::harness_id_of(&e.result) == Some(h.as_str())
@@ -512,8 +531,10 @@ pub struct Untested {
 }
 
 /// The explanation of `f` when it says `removal: on-release` with a remover and no `N-RELEASE`
-/// sibling of its root has been decided by a run with the release called (refuted, or confirmed
-/// which counts the finding apart).
+/// sibling of its root that names that same remover line (same line of the same file,
+/// [`same_remover`]) has been decided by a run with the release called (refuted, or confirmed
+/// which counts the finding apart). A sibling that names another release says nothing about
+/// this one: the run called that line, not the one the explanation relies on.
 pub fn release_untested(ledger: &Ledger, f: &Finding) -> Option<Untested> {
     if f.polarity() != Polarity::Leak {
         return None;
@@ -524,7 +545,13 @@ pub fn release_untested(ledger: &Ledger, f: &Finding) -> Option<Untested> {
     }
     let remover = x.remover.as_deref()?.to_owned();
     let root = f.root_id();
-    if release_refuted(ledger, &root) || release_confirmed(ledger, &root).is_some() {
+    let decided = release_siblings(ledger, &root).into_iter().any(|s| {
+        matches!(s.state, FindingState::Refuted | FindingState::Confirmed)
+            && s.remover
+                .as_deref()
+                .is_some_and(|r| same_remover(r, &remover))
+    });
+    if decided {
         return None;
     }
     Some(Untested {
@@ -539,11 +566,11 @@ pub fn release_untested_refusal(view: &RunView, u: &Untested) -> Refusal {
     Refusal::new(
         codes::RELEASE_UNTESTED,
         format!(
-            "{} cannot be confirmed as a leak: its explanation says the holder is released by {} only when the caller calls the release, and no run called that release (an N-RELEASE sibling of {root} refuted). A caller that skips a release the API requires is misusing it, which is no leak of the library",
-            u.finding, u.remover
+            "{} cannot be confirmed as a leak: its explanation says the holder is released by {} only when the caller calls the release, and no run called that release (no N-RELEASE sibling of {root} that names {} is decided). A caller that skips a release the API requires is misusing it, which is no leak of the library",
+            u.finding, u.remover, u.remover
         ),
         format!(
-            "an N-RELEASE sibling of {root} refuted by an alloc-test with {} called",
+            "an N-RELEASE sibling of {root} that names {}, decided by an alloc-test with it called (refuted: the holder still grows; confirmed: the growth exists only while it is skipped, and the finding is counted apart)",
             u.remover
         ),
         release_route(view, &root, Some(&u.remover), None),
@@ -578,10 +605,13 @@ pub fn check_release_decision(
     let remover = s.remover.clone().unwrap_or_default();
     let family = family_ids(&view.ledger, &root);
     let run_dir = view.run_dir.as_deref();
-    let all: Vec<&EvidenceRecord> = view.ledger.evidence().collect();
+    let all: Vec<&EvidenceRecord> = view.ledger.evidence_in_order().collect();
     let alloc: Vec<(&EvidenceRecord, Favors)> = bound_alloc_tests(&all, &family);
 
-    // How one alloc-test fares: `Ok(note)` when it decides, `Err(why)` when it does not.
+    // How one alloc-test fares: `Ok(note)` when it decides, `Err(why)` when it does not. The
+    // harness is returned with a run that has to be made again (no record, or a record that did
+    // not ask about the line): the alloc-test writes the record.
+    let rerun: std::cell::RefCell<Vec<String>> = Default::default();
     let judge = |e: &EvidenceRecord, favors: Favors| -> Result<Option<String>, String> {
         let id = &e.evidence_id;
         if favors != want {
@@ -601,15 +631,30 @@ pub fn check_release_decision(
             ));
         }
         let series = e.result.get("series").and_then(Value::as_str);
+        let again = |h: &str| {
+            let mut r = rerun.borrow_mut();
+            if !r.iter().any(|x| x == h) {
+                r.push(h.to_owned());
+            }
+        };
         match remover_run(dir, &m, series, &remover) {
             RemoverRun::Ran(_) => Ok(None),
             RemoverRun::NotShown(_) => Ok(Some(NOT_SHOWN.to_owned())),
             RemoverRun::NotRun => Err(format!(
                 "{id} ran on {h}, where the remover line {remover} ran 0 times: a run that never reached the release says nothing about what the release does"
             )),
-            RemoverRun::NotAsked => Err(format!(
-                "{id} ran on {h}, whose coverage run did not count {remover} (it ran before the sibling named it)"
-            )),
+            RemoverRun::NotAsked => {
+                again(h);
+                Err(format!(
+                    "{id} ran on {h}, whose coverage run did not count {remover} (it ran before the sibling named it)"
+                ))
+            }
+            RemoverRun::NoRecord(w) => {
+                again(h);
+                Err(format!(
+                    "{id} ran on {h}, but {w}: nothing shows that the release {remover} ran"
+                ))
+            }
         }
     };
 
@@ -649,12 +694,22 @@ pub fn check_release_decision(
             codes::RELEASE_NOT_RUN,
             format!("dla ledger {verb} {id} --evidence {u}"),
         ),
-        None => (
-            codes::RELEASE_NOT_RUN,
-            format!(
-                "dla alloc-test <H> --finding {root} on a driver made for {root} that calls {remover} on every unit (dla harness run <H> first when the line has to be counted), then dla ledger {verb} {id} --evidence <that alloc-test>"
-            ),
-        ),
+        None => {
+            let h = rerun.borrow().first().cloned();
+            (
+                codes::RELEASE_NOT_RUN,
+                match h {
+                    // The sibling names the line now, so this alloc-test counts it and writes
+                    // the coverage record the decision reads.
+                    Some(h) => format!(
+                        "dla alloc-test {h} --finding {root}   (it counts {remover} and writes the coverage record), then dla ledger {verb} {id} --evidence <the id it prints>"
+                    ),
+                    None => format!(
+                        "dla alloc-test <H> --finding {root} on a driver made for {root} that calls {remover} on every unit (it counts the line and writes the coverage record), then dla ledger {verb} {id} --evidence <the id it prints>"
+                    ),
+                },
+            )
+        }
     };
     Err(Refusal::new(
         code,
@@ -677,7 +732,7 @@ pub fn decision_note(view: &RunView, s: &Finding) -> Option<String> {
     let remover = s.remover.as_deref()?;
     let root = s.root_id();
     let family = family_ids(&view.ledger, &root);
-    let all: Vec<&EvidenceRecord> = view.ledger.evidence().collect();
+    let all: Vec<&EvidenceRecord> = view.ledger.evidence_in_order().collect();
     let alloc = bound_alloc_tests(&all, &family);
     s.supports
         .iter()

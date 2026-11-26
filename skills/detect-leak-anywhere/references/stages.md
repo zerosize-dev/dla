@@ -445,17 +445,22 @@ For each passed column tied to a candidate `F3`:
   names the line that releases the holder: `dla ledger add --sibling-of F3 --origin hypothesis --hypothesis
   N-RELEASE --remover <file:line> --refute-if "<result>" --evidence E7`. Only an alloc-test on a driver made for the finding in which that
   line ran decides it (confirm when it favors non-leak, refute when it favors leak: the holder grows with the
-  release called, a leak of the project); a runtime that cannot count lines (the JVM, native code) is accepted
-  and the decision carries the note `remover run not shown`.
+  release called, a leak of the project); a runtime that cannot count lines (the JVM, native code, or a coverage
+  record that says the tool could not count the line) is accepted and the decision carries the note `remover run
+  not shown`. Where the runtime counts lines (Rust, Go, Node, Python) an alloc-test with no coverage record, or
+  one made before the sibling named the line, is refused (`release-not-run`): `dla alloc-test <H> --finding F3`
+  after the sibling is added writes the record.
 - Two drivers made for the finding whose newest alloc-tests disagree (one favors leak, one non-leak) hold the
   confirm of the leak (`drivers-disagree`): the refusal asks what the flat driver does that the other does not,
   and the way out is the `N-RELEASE` sibling above, or another non-leak sibling that names the difference,
   refuted by a new alloc-test on a driver made for the finding.
 - An explanation that says `removal: on-release` with a remover (`dla ledger explain F3 --removal on-release
-  --remover <file:line>`, accepted for a finding under test as well as a confirmed one) asks for the same run with the release called: until an `N-RELEASE` sibling of the root is
-  refuted, `dla ledger confirm` is refused (`release-untested`) and a confirmed finding is listed by the final gate
-  under that name; with the sibling confirmed the report counts the finding apart ("grows only while callers
-  skip the release"), never as a confirmed leak.
+  --remover <file:line>`, accepted for a finding under test as well as a confirmed one) asks for the same run
+  with the release called: until an `N-RELEASE` sibling of the root that names that same remover line is
+  decided, `dla ledger confirm` is refused (`release-untested`) and a confirmed finding is listed by the final
+  gate under that name; a sibling that names another release decides nothing about this one. With the sibling
+  confirmed the report counts the finding apart ("grows only while callers skip the release"), never as a
+  confirmed leak.
 - `dla ledger test F3 --evidence E9`, citing the harness `workload` evidence.
 - `dla alloc-test H1 --finding F3` re-runs the harness with extra points and a purge and records a
   discriminator whose `favors` is `leak`, `non-leak` or `inconclusive`. The alloc-test runs on a harness that

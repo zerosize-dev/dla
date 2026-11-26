@@ -212,6 +212,15 @@ struct Index {
     explanations: BTreeMap<FindingId, FindingExplained>,
     /// Every `integrity_resealed` record, oldest first (schema 6).
     reseals: Vec<IntegrityResealed>,
+    /// Records committed so far: the main ledger's line count after a plain replay, and the
+    /// slice's own lines counted on top of the main lines under it in a worker slice.
+    clock: u64,
+    /// The chronological key of every evidence record (see [`Ledger::evidence_order`]).
+    evidence_order: BTreeMap<EvidenceId, u64>,
+    /// The chronological key of every `finding_added` record.
+    finding_order: BTreeMap<FindingId, u64>,
+    /// The chronological key of the latest transition of a finding to `confirmed`.
+    confirmed_order: BTreeMap<FindingId, u64>,
 }
 
 impl Index {
@@ -230,6 +239,10 @@ impl Index {
             labels: BTreeMap::new(),
             explanations: BTreeMap::new(),
             reseals: Vec::new(),
+            clock: 0,
+            evidence_order: BTreeMap::new(),
+            finding_order: BTreeMap::new(),
+            confirmed_order: BTreeMap::new(),
         }
     }
 }
@@ -324,7 +337,13 @@ impl EvidenceLookup for Index {
         self.evidence.get(id)
     }
     fn evidence_ids(&self) -> Vec<EvidenceId> {
-        self.evidence.keys().cloned().collect()
+        let mut ids: Vec<(u64, &EvidenceId)> = self
+            .evidence
+            .keys()
+            .map(|id| (self.evidence_order.get(id).copied().unwrap_or(0), id))
+            .collect();
+        ids.sort_by_key(|(at, _)| *at);
+        ids.into_iter().map(|(_, id)| id.clone()).collect()
     }
 }
 
@@ -1588,11 +1607,15 @@ impl Index {
 
     /// Applies a record that [`Index::check`] accepted. Cannot fail.
     fn commit(&mut self, record: &Record, version: u32) {
+        self.clock += 1;
+        let at = self.clock;
         match record {
             Record::Evidence(e) => {
                 self.evidence.insert(e.evidence_id.clone(), e.clone());
+                self.evidence_order.insert(e.evidence_id.clone(), at);
             }
             Record::FindingAdded { finding } => {
+                self.finding_order.insert(finding.id.clone(), at);
                 if let Some(parent) = finding.id.parent()
                     && let Some(p) = self.findings.get_mut(&parent)
                 {
@@ -1601,6 +1624,9 @@ impl Index {
                 self.findings.insert(finding.id.clone(), finding.clone());
             }
             Record::Transition(t) => {
+                if t.to == FindingState::Confirmed {
+                    self.confirmed_order.insert(t.finding.clone(), at);
+                }
                 if let Some(f) = self.findings.get_mut(&t.finding) {
                     f.state = t.to;
                     f.reason = None;
@@ -2202,9 +2228,42 @@ impl Ledger {
     pub fn reseals(&self) -> &[IntegrityResealed] {
         &self.index.reseals
     }
-    /// All evidence, ordered by ID.
+    /// All evidence, ordered by ID. The ID is no clock: after a merge `W/E1` sorts after every
+    /// plain `E<n>` whatever was recorded first. Where "newer" or "older" matters use
+    /// [`Ledger::evidence_in_order`].
     pub fn evidence(&self) -> impl Iterator<Item = &EvidenceRecord> {
         self.index.evidence.values()
+    }
+    /// All evidence, oldest first: by [`Ledger::evidence_order`].
+    pub fn evidence_in_order(&self) -> impl Iterator<Item = &EvidenceRecord> {
+        let mut rows: Vec<(u64, &EvidenceRecord)> = self
+            .index
+            .evidence
+            .iter()
+            .map(|(id, e)| (self.index.evidence_order.get(id).copied().unwrap_or(0), e))
+            .collect();
+        rows.sort_by_key(|(at, _)| *at);
+        rows.into_iter().map(|(_, e)| e)
+    }
+    /// The chronological key of evidence `id`: the line it was written at. Valid in a plain
+    /// ledger (its `seq`), in a merged one (the main `seq` of the line the merge or the core
+    /// wrote, so a main record recorded after a merge is newer than every merged one) and in a
+    /// worker's view (the main records the slice was started on keep their main `seq`, the
+    /// slice's own come after them: `base_len + slice seq`). A worker's view stops at the
+    /// `base_seq` its slice recorded, so main lines written while the slice was open are not in
+    /// it, and nothing in the view can sort between its two parts.
+    pub fn evidence_order(&self, id: &EvidenceId) -> Option<u64> {
+        self.index.evidence_order.get(id).copied()
+    }
+    /// The chronological key of finding `id` (the line that added it), as
+    /// [`Ledger::evidence_order`].
+    pub fn finding_order(&self, id: &FindingId) -> Option<u64> {
+        self.index.finding_order.get(id).copied()
+    }
+    /// The chronological key of the latest transition of `id` to `confirmed`, as
+    /// [`Ledger::evidence_order`]; `None` when it never was.
+    pub fn confirmed_order(&self, id: &FindingId) -> Option<u64> {
+        self.index.confirmed_order.get(id).copied()
     }
     /// One evidence record.
     pub fn evidence_by_id(&self, id: &EvidenceId) -> Option<&EvidenceRecord> {

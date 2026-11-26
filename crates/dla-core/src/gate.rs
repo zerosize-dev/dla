@@ -727,7 +727,7 @@ fn evidence_for_column(view: &RunView, t: &TrendReport, c: &ColumnTrend) -> Opti
         ColumnKind::Counter => EvidenceKind::UnitCountSeries,
     };
     view.ledger
-        .evidence()
+        .evidence_in_order()
         .filter(|e| e.kind == want)
         .find(|e| e.result.get("trend").and_then(|v| v.as_str()) == Some(t.id.as_str()))
         .map(|e| e.evidence_id.to_string())
@@ -1126,7 +1126,7 @@ fn series_harness(view: &RunView, series: Option<&str>) -> Option<HarnessId> {
 fn residual_evidence_of(view: &RunView, series: Option<&str>) -> Option<String> {
     let series = series?;
     view.ledger
-        .evidence()
+        .evidence_in_order()
         .filter(|e| {
             e.kind == EvidenceKind::Residual
                 && e.result.get("series").and_then(|v| v.as_str()) == Some(series)
@@ -2171,8 +2171,9 @@ fn final_items(view: &RunView, out: &mut Out) {
 
 /// An item `release-untested` for every confirmed or strong leak-side finding whose explanation
 /// says `removal: on-release` with a remover and whose release no run decided: no `N-RELEASE`
-/// sibling of its root is refuted (the holder grows with the release called) or confirmed (the
-/// growth exists only while callers skip it, which the report counts apart from the leaks).
+/// sibling of its root that names that remover line is refuted (the holder grows with the release
+/// called) or confirmed (the growth exists only while callers skip it, which the report counts
+/// apart from the leaks). A sibling that names another release decides nothing about this one.
 fn release_untested_items(view: &RunView, out: &mut Out) {
     for f in confirmed_leaks(view) {
         let Some(u) = crate::release::release_untested(&view.ledger, f) else {
@@ -2182,8 +2183,8 @@ fn release_untested_items(view: &RunView, out: &mut Out) {
             crate::release::codes::RELEASE_UNTESTED,
             f.id.to_string(),
             format!(
-                "finding {} is {} and its explanation says the holder is released by {} only when the caller calls the release; no run called that release, so the growth may exist only while callers skip it",
-                f.id, f.state, u.remover
+                "finding {} is {} and its explanation says the holder is released by {} only when the caller calls the release; no run called that release (no N-RELEASE sibling naming {} is decided), so the growth may exist only while callers skip it",
+                f.id, f.state, u.remover, u.remover
             ),
             crate::release::release_route(view, &f.root_id(), Some(&u.remover), None),
         );

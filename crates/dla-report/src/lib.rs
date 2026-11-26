@@ -267,8 +267,16 @@ fn header(out: &mut String, view: &RunView, st: &ReportStatus) {
         .iter()
         .filter(|f| f.state == FindingState::Strong)
         .count();
-    let released = (skipped.len() - released_strong, released_strong);
-    let mut line = findings_line(c, &disputed, released);
+    // A finding goes in one bucket of the line: the verifier's word comes first, so a confirmed
+    // finding it disputes is counted as disputed even when its family holds a confirmed
+    // `N-RELEASE` sibling (its own section says so).
+    let released_confirmed = skipped
+        .iter()
+        .filter(|f| f.state == FindingState::Confirmed)
+        .filter(|f| !disputed.iter().any(|(id, _)| id == &f.id))
+        .count();
+    let labels: Vec<String> = disputed.into_iter().map(|(_, label)| label).collect();
+    let mut line = findings_line(c, &labels, (released_confirmed, released_strong));
     if let Some(clause) = TRIGGERS.with(|t| t.borrow().as_ref().and_then(|f| f.clause())) {
         line.push_str("; ");
         line.push_str(&clause);
@@ -319,12 +327,12 @@ fn disputed_label(view: &RunView, f: &Finding) -> Option<String> {
         .map(|v| v.label.clone())
 }
 
-/// [`disputed_label`] of every finding it applies to.
-fn disputed_confirmed(view: &RunView) -> Vec<String> {
+/// [`disputed_label`] of every finding it applies to, with the finding.
+fn disputed_confirmed(view: &RunView) -> Vec<(dla_core::FindingId, String)> {
     view.ledger
         .findings()
         .filter(|f| view.ledger.merged_into(&f.id).is_none())
-        .filter_map(|f| disputed_label(view, f))
+        .filter_map(|f| disputed_label(view, f).map(|l| (f.id.clone(), l)))
         .collect()
 }
 
@@ -358,6 +366,11 @@ fn unverified_clause(view: &RunView) -> Option<String> {
 /// its leak-side root is `refuted` on the other, so one test read as two leaks when the two
 /// were added together. When something was measured and no leak is confirmed or strong,
 /// the line says so in words.
+///
+/// Every finding is in one bucket, so the counts add up: `disputed` are the labels the verifier
+/// read for the confirmed findings it disputes, and `released` the confirmed and strong leaks
+/// whose family holds a confirmed `N-RELEASE` sibling, those already disputed left out (the
+/// caller does that: it knows which findings they are).
 fn findings_line(
     c: &dla_core::view::StatusCounts,
     disputed: &[String],
@@ -1795,6 +1808,41 @@ mod tests {
         assert!(
             out.starts_with("### F1.n1: Hypothesis N-WARM (UNCLASSIFIED)\n"),
             "{out}"
+        );
+    }
+
+    #[test]
+    fn every_count_of_the_findings_line_adds_up_for_confirmed_and_strong_leaks() {
+        let mut c = dla_core::view::StatusCounts {
+            enumerated: 6,
+            ..Default::default()
+        };
+        c.by_state.confirmed = 3;
+        c.by_state.strong = 3;
+        // The caller leaves a disputed finding out of the released count, so with three
+        // confirmed (one disputed, one released, one plain) and three strong (two released):
+        let line = findings_line(&c, &["N-INTENT".to_owned()], (1, 2));
+        assert!(
+            line.contains("confirmed 1, confirmed but disputed by the verifier (reads N-INTENT) 1, grows only while callers skip the release: 1, strong 1, grows only while callers skip the release: 2, refuted 0"),
+            "{line}"
+        );
+        assert!(!line.contains("no leak confirmed"), "{line}");
+        // Nothing disputed: the confirmed are the plain ones and the released.
+        let line = findings_line(&c, &[], (2, 3));
+        assert!(
+            line.contains("confirmed 1, grows only while callers skip the release: 2, strong 0, grows only while callers skip the release: 3, refuted 0"),
+            "{line}"
+        );
+        // Everything released: no leak is confirmed.
+        c.measured = true;
+        let line = findings_line(&c, &[], (3, 3));
+        assert!(line.ends_with("; no leak confirmed"), "{line}");
+        // A disputed finding that is also released is one finding: a plain count that left it
+        // in both would hide the plain one. Disputed and released counts never exceed the whole.
+        let line = findings_line(&c, &["N-INTENT".to_owned()], (2, 0));
+        assert!(
+            line.contains("confirmed 0, confirmed but disputed by the verifier (reads N-INTENT) 1, grows only while callers skip the release: 2"),
+            "{line}"
         );
     }
 
