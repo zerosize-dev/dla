@@ -3702,3 +3702,27 @@ unattended run at a time and no builder beside it.
   VERIFY row updated. fmt + clippy clean. Workspace tests running (u141/ws-test-M.log).
   Commit message 40 drafted.
 - M tree workspace tests: 184 ok, 0 failed. Deleted target build dirs (disk 1.5G). Next: L rerun green -> commit 0f80f18 (msg 39) -> push -> THEN push M snapshot with CI (a CI push now would cancel L's rerun).
+- 06:25 UTC: L's rerun green -> main 340da63 (msg 39), pushed main + dev. M's tree snapshot 9b24572
+  pushed WITH CI (waiter u115/ci-wip-45, task bov3ujcmq). When green: commit-snapshot-tree.sh
+  9b2457266b95c53340cf60c5b59c34a390fbdc5b commit-message-40.txt; push; version preview.11.
+- r4-fastrace started 06:27 (pid 29715) on preview.10 rig (Rust dumps are small; J's set-up rule
+  and K's hold are in preview.10). Judge vs key section 7. Node/JVM reruns wait for preview.11.
+
+## 06:45 UTC 2026-11-26: r4-fastrace PARTLY (leak measured, then lost two ways)
+
+- r4-fastrace (preview.10): COMPLETE after 5 of 167 min. Key section 7: documented =
+  spsc.rs:21 Sender.pending_messages (grows after the 10240 ring is full, no reporter). The model
+  enabled the feature, built a driver with spans and no reporter (J's set-up rule helped), and
+  MEASURED it: F41 alloc-test E27 on H3 (--probe F41, made for it) favored leak (os.rss_anon
+  growth-continues); F41.n1 refuted; then a growth-series finding F45 at spsc.rs:55 (same owner);
+  E36 inconclusive, E37 (100 spans/unit, extra 16) NON-LEAK: native.live_bytes "plateau" with
+  extra_rise 62.9 MB vs noise 37.3 MB (Vec doubling: stair column, step-sized noise) while os.rss
+  growth-continues 119 MB. F45 closed unresolved inconclusive; F41 MERGED into F45 (ledger
+  duplicate) -> F41's leak route vanished (route_to_confirm skips merged findings, F45's newest
+  alloc-test is non-leak). Report: no leak confirmed. Kept r4-fastrace-keep; run dir deleted.
+- TWO GENERAL CAUSES (builder N): (1) a merge drops the duplicate's leak-favoring alloc-test on a
+  driver made for it (refuse, or carry the route to the canonical); (2) plateau verdict on a
+  stair-shaped column whose extra window rose well above zero (step-sized noise hides doubling
+  growth): growth in the extra window of a stair column is not a plateau; no step in a window
+  shorter than the step gap is inconclusive with a wider --extra, not non-leak.
+- Builder N (sonnet) started ~06:55 on wip-notes/merge-stair-brief.md (scratch u144). No rig run beside it. M's CI (9b24572) still running; commit M from the snapshot tree (N's edits stay out).
