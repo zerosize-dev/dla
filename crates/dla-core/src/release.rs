@@ -510,7 +510,7 @@ pub struct Untested {
     pub remover: String,
 }
 
-/// The explanation of `f` when it says `removal: conditional` with a remover and no `N-RELEASE`
+/// The explanation of `f` when it says `removal: on-release` with a remover and no `N-RELEASE`
 /// sibling of its root has been decided by a run with the release called (refuted, or confirmed
 /// which counts the finding apart).
 pub fn release_untested(ledger: &Ledger, f: &Finding) -> Option<Untested> {
@@ -518,7 +518,7 @@ pub fn release_untested(ledger: &Ledger, f: &Finding) -> Option<Untested> {
         return None;
     }
     let x = ledger.explanation(&f.id)?;
-    if x.removal != RemovalClaim::Conditional {
+    if x.removal != RemovalClaim::OnRelease {
         return None;
     }
     let remover = x.remover.as_deref()?.to_owned();
@@ -538,7 +538,7 @@ pub fn release_untested_refusal(view: &RunView, u: &Untested) -> Refusal {
     Refusal::new(
         codes::RELEASE_UNTESTED,
         format!(
-            "{} cannot be confirmed as a leak: its explanation says the holder is released by {} only under a condition, and no run called that release (an N-RELEASE sibling of {root} refuted). A caller that skips a release the API requires is misusing it, which is no leak of the library",
+            "{} cannot be confirmed as a leak: its explanation says the holder is released by {} only when the caller calls the release, and no run called that release (an N-RELEASE sibling of {root} refuted). A caller that skips a release the API requires is misusing it, which is no leak of the library",
             u.finding, u.remover
         ),
         format!(

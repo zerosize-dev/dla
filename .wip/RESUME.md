@@ -3863,3 +3863,16 @@ unattended run at a time and no builder beside it.
   (abort-budget-brief.md, u151: abort refused `budget-left` without --blocker, hook/SKILL line 106
   stop advertising abort, verifier after abort) run NOW, before the reruns, so the reruns measure
   N+O+P+Q+R together on preview.13. No rig run beside them. The os.rs test fix rides in this round.
+- 19:20 UTC: builder R DONE (abort_rule.rs: budget-left refusal unless --blocker user|tool|build|
+  environment|privilege|refusal(--code); reason word heuristic refuses a bare count of work left;
+  hook held_note names next measurement then blocker form; SKILL.md:106 at exactly 18432 bytes;
+  verifier records count after abort; abort output lists unverified; Stop hook on aborted run holds
+  while confirmed unverified (STOP_LIMIT 3); report "not verified: run aborted"). Reviewed diff:
+  sound. go- 14/15, python- 8/9: the 2 fails were Q's release-untested (WIP then).
+- 19:30 UTC: builder Q DONE first pass (N-RELEASE + --remover; release-not-run unless the remover
+  line ran: Rust/Go/Node executed.json, Python lines-<S>.json; JVM/native accepted with note
+  "remover run not shown"; drivers-disagree; release-untested on `--removal conditional`; explain
+  allowed under_test). Full dynamic 63+xfail BUT 13 leak fixtures pass only via known_gap for
+  release-untested -> rule 3 too broad (conditional covers eviction, library error paths, caller
+  release). Sent Q a follow-up: new RemovalClaim `on-release`; release-untested only for it;
+  policy keeps conditional; drop known_gap path; N-RELEASE beside strong root too.

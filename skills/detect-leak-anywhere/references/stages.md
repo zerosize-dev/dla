@@ -451,7 +451,7 @@ For each passed column tied to a candidate `F3`:
   confirm of the leak (`drivers-disagree`): the refusal asks what the flat driver does that the other does not,
   and the way out is the `N-RELEASE` sibling above, or another non-leak sibling that names the difference,
   refuted by a new alloc-test on a driver made for the finding.
-- An explanation that says `removal: conditional` with a remover (`dla ledger explain F3 --removal conditional
+- An explanation that says `removal: on-release` with a remover (`dla ledger explain F3 --removal on-release
   --remover <file:line>`, accepted for a finding under test as well as a confirmed one) asks for the same run with the release called: until an `N-RELEASE` sibling of the root is
   refuted, `dla ledger confirm` is refused (`release-untested`) and a confirmed finding is listed by the final gate
   under that name; with the sibling confirmed the report counts the finding apart ("grows only while callers
@@ -574,8 +574,8 @@ dla ledger explain F3 --tag inferred --adds src/Cache.java:88 --removal never --
 - `--tag observed` needs `--evidence` (a retention, intervention or tied growth record that shows the
   pairing); `inferred` is a reading of the code.
 - `--adds` names the sites that add to the holder; they must be recorded writers (annotate them
-  first) or the finding's site. `--removal` is `never`, `not-found`, `conditional`, `wrong-key` or
-  `unreachable`; the last three need `--remover file:line`, which must match a recorded remover.
+  first) or the finding's site. `--removal` is `never`, `not-found`, `conditional`, `wrong-key`, `on-release` or
+  `unreachable`; the last four need `--remover file:line`, which must match a recorded remover. `on-release`: removed only when the caller calls the API's release; a confirm then needs N-RELEASE refuted on a driver that calls it.
 - `--text` is 40 to 600 characters on one line. It must name the site or the owner, the holder kind or
   the owner's last name, an adding site and how removal fails. DLA checks that these are stated and
   consistent with the record; it cannot check that they are true, so read the code first.

@@ -2170,7 +2170,7 @@ fn final_items(view: &RunView, out: &mut Out) {
 }
 
 /// An item `release-untested` for every confirmed or strong leak-side finding whose explanation
-/// says `removal: conditional` with a remover and whose release no run decided: no `N-RELEASE`
+/// says `removal: on-release` with a remover and whose release no run decided: no `N-RELEASE`
 /// sibling of its root is refuted (the holder grows with the release called) or confirmed (the
 /// growth exists only while callers skip it, which the report counts apart from the leaks).
 fn release_untested_items(view: &RunView, out: &mut Out) {
@@ -2182,7 +2182,7 @@ fn release_untested_items(view: &RunView, out: &mut Out) {
             crate::release::codes::RELEASE_UNTESTED,
             f.id.to_string(),
             format!(
-                "finding {} is {} and its explanation says the holder is released by {} only under a condition; no run called that release, so the growth may exist only while callers skip it",
+                "finding {} is {} and its explanation says the holder is released by {} only when the caller calls the release; no run called that release, so the growth may exist only while callers skip it",
                 f.id, f.state, u.remover
             ),
             crate::release::release_route(view, &f.root_id(), Some(&u.remover), None),
