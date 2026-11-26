@@ -285,6 +285,10 @@
           "description": "Run-relative path, for example `harness/H1/out/p1-fresh/capture/812/heap-2.hprof`.",
           "type": "string"
         },
+        "pruned": {
+          "description": "The tool deleted the file to keep the large captures of the run under\n`DLA_CAPTURE_KEEP_MB` (see [`crate::capture_keep`]). The entry stays, with its digest.",
+          "type": "boolean"
+        },
         "role": {
           "description": "What this file is, in a few words (`threads.json`, `nmt summary`).",
           "type": [
@@ -297,6 +301,13 @@
           "type": "integer",
           "format": "uint32",
           "minimum": 0
+        },
+        "sha256": {
+          "description": "SHA-256 of the file's bytes (lowercase hex), taken when the file was listed. A summary\nrecord lists the digest of each input it read, so this ties a summary to the capture\nwithout reading the file again, and still does after the file was deleted\n([`CaptureFile::pruned`]). Absent in a `captures.json` an older version wrote.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "x": {
           "description": "Position on the axis (units completed or `n`), when known.",

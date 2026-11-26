@@ -687,6 +687,20 @@ fn alloc_captures(
     (has_alloc && !files.is_empty()).then_some((files, at))
 }
 
+/// The SHA-256 of the capture file at run-relative `rel`: the digest its entry in `files` stores
+/// (a file deleted to keep the run under its size limit keeps it), else the digest of the file.
+fn digest_of(
+    run_dir: &Path,
+    files: &[dla_core::harness::CaptureFile],
+    rel: &str,
+) -> Option<String> {
+    files
+        .iter()
+        .find(|f| f.path == rel)
+        .and_then(|f| f.sha256.clone())
+        .or_else(|| fs::read(run_dir.join(rel)).ok().map(|b| sha(&b)))
+}
+
 /// The summarize commands of the capture `files` that were not run: an `alloc-stack-diff`
 /// command is run when an allocation-stack record was made from one of its files, a `heap-graph`
 /// command when a retention-path record was. The raw file of a summary lists the sha256 of each
@@ -719,8 +733,7 @@ fn unrun_commands(
                 .split_whitespace()
                 .skip(3)
                 .filter_map(|p| p.strip_prefix(&base))
-                .filter_map(|rel| fs::read(tc.run_dir.join(rel)).ok())
-                .map(|b| sha(&b))
+                .filter_map(|rel| digest_of(&tc.run_dir, files, rel))
                 .collect();
             !made_from(&tc.run_dir, ledger, kind, &digests)
         })
@@ -781,8 +794,8 @@ pub(crate) fn literal_summarize(
                     .split_whitespace()
                     .skip(3)
                     .filter_map(|p| p.strip_prefix(&base))
-                    .filter_map(|rel| fs::read(run_dir.join(rel)).ok())
-                    .any(|b| used.contains(&sha(&b).as_str()));
+                    .filter_map(|rel| digest_of(run_dir, files, rel))
+                    .any(|d| used.contains(&d.as_str()));
                 if hit {
                     return Some(cmd.replacen(
                         "dla summarize alloc-stack-diff ",

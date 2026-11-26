@@ -389,7 +389,10 @@ under the run directory and need tier 1.
   `harness-not-generated` and prints `dla harness gen --lang <rt>`. The blocker reasons and a blocker
   recorded on `intake.workload` stay accepted, so an unattended run can always finish.
 - Raw captures for stage 6 come from flags of the same command; each is a separate, costlier run, so
-  add one only for a harness that grew (a passing column), not for every harness:
+  add one only for a harness that grew (a passing column), not for every harness. The run keeps its heap
+  dumps under `DLA_CAPTURE_KEEP_MB` (default 2048) by deleting whole sets of other harnesses that a summary already read, oldest first
+  (the entries stay in `captures.json` as `pruned`, and `dla summarize` of such a file prints the `dla harness run` that takes it again), and refuses
+  (`insufficient-resources`) a capture that would leave less than `DLA_DISK_FLOOR_MB` (default 1024) free, with the `dla summarize` of the oldest unread set and a smaller `--dumps`:
   - JVM: `--capture heap,histogram,jfr,nonheap` or `--capture all` (`--dumps <N>` heap dumps,
     default 4). Command-mode heap dumps are separate processes, so `heap-graph` cannot compare them;
     a driver (`--driver`) takes all dumps in one process.

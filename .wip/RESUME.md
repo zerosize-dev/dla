@@ -3687,3 +3687,17 @@ unattended run at a time and no builder beside it.
 - Kept r4-interceptors-keep (ledger, state, harness.json x6, snapshot counts, redacted transcript).
 - NEXT: builder M (capture retention across harnesses + free-disk check before a capture run).
 - Builder M (sonnet) started ~05:15 on wip-notes/capture-disk-brief.md (scratch u143). Reruns wait for M and preview.11 (L + M). CI 0f80f18 still running (waiter bi2wde5hs).
+
+## 06:00 UTC 2026-11-26: builder M done; checked; L's CI hit the alloc_test flake
+
+- CI 0f80f18 (run 45757825402): all green except clippy+test ubuntu: the known flake
+  alloc_test::a_flat_file_backed_column_that_passed_the_gate_reads_non_leak_on_a_flat_run
+  (os.rss_file AND os.rss growth-continues on a bounded Python fixture on the runner; third time).
+  Plan: rerun failed jobs when the dynamic job finishes, then commit 0f80f18 (msg 39) to main.
+  Task 110: a real fix is still owed (file-backed rss should not decide leak; os.rss noise).
+- M: capture_keep (core), keep.rs (workload), CaptureFile.sha256/pruned, made_from_capture_of
+  uses stored digest, bundle digest_of, summarize refusal for pruned path, preflight free-disk
+  refusal insufficient-resources. MINE: a set counts as read when ANY of its large files was read
+  (M had "every"); new test a_set_of_which_a_summary_read_one_dump_is_read, mutation caught;
+  VERIFY row updated. fmt + clippy clean. Workspace tests running (u141/ws-test-M.log).
+  Commit message 40 drafted.

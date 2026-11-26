@@ -1,0 +1,26 @@
+Heap dumps of a run stay under a size limit, and a capture checks free disk first
+
+An unattended run on a Node library ran each harness once with `--capture alloc,heap --dumps 9`.
+The nine V8 snapshots of a harness took about 1 GB, so five harnesses used 4 GB in 12 minutes,
+and free disk fell to 1.1 GB. A 3-hour run makes tens of harnesses. Within one harness only the
+newest set of dumps was kept; across harnesses nothing was bounded, and a capture started without
+looking at the disk. A full disk breaks every later write of the run, and the model reads the
+errors as findings about the project.
+
+- `CaptureFile` stores the SHA-256 of each file and whether it was pruned. `made_from_capture_of`
+  uses the stored digest, so a summary still links to its harness after the files are gone, and
+  a large capture set is no longer hashed again on every call.
+- After a capturing `harness run`, the large captures of the run directory (heap dumps and flight
+  recordings) stay under `DLA_CAPTURE_KEEP_MB` (default 2048). Whole sets of other harnesses that
+  a summary read are deleted, oldest first, and only as many as it takes. A set no summary read,
+  and the run's own set, are never deleted. A set counts as read when a summary read one of its
+  dumps. The deleted files stay listed as pruned with their digests, and the run output lists
+  them with one `_attention` line.
+- Before a run that takes heap dumps starts anything, it estimates what the dumps will write. If
+  that would leave less than `DLA_DISK_FLOOR_MB` free (default 1024), read sets are deleted first.
+  If that is still not enough, the run is refused (`insufficient-resources`). The refusal names the
+  summarize command of the oldest unread set and the largest `--dumps` that fits.
+- A summarize of a pruned file is refused with the `harness run` command that takes new dumps.
+- `dla bundle` reads the stored digests too.
+
+Not covered: a real JVM run past the limit; concurrent capture runs of two workers.
