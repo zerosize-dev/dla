@@ -3800,3 +3800,12 @@ unattended run at a time and no builder beside it.
   alloc_test 5/5; python-/jvm-pool/native-/rust- dynamic pass. One existing test changed
   (growing file column now inconclusive, rss still leak). Not proven on the runner (could not
   reproduce); if the runner's anon also rose the CLI test can still fail. Reviewed: sound.
+- 14:20 UTC: builder O done (measurement.rs predicate; summarizers left_out line; gate/dump_grown
+  skip; N-OBSERVER/N-INTENT sibling confirmed on a dump retention-path record lifts the dump lead;
+  alloc-test before a placeholder; bench policy runs it). MINE: O also let the confirmed sibling
+  REFUTE the root with no discriminator (refuted_by_explanation in two guards): removed; the
+  route's last step is now `dla ledger resolve F --as unresolved --reason inconclusive --remedy
+  "explained by F.n<k>: ..."`; tests updated (grown_dump renamed
+  a_confirmed_explanation_lifts_the_lead_and_the_root_is_closed_not_refuted; asserts refute
+  refused discriminator-required); mutation (both guards reopened) caught; docs + VERIFY fixed.
+  fmt + clippy clean; workspace tests running (u149/ws-test.log). Commit message 42 drafted.

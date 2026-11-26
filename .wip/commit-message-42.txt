@@ -1,0 +1,30 @@
+Dump leads leave out the measurement's own holders and can be decided without a false confirm
+
+An unattended run on a JVM library ended itself with `dla run abort` after 76 of 180 minutes.
+Its open items were heap-dump holders of the model's own driver class, of the agent, of the
+flight recorder the capture starts, and of JDK caches. Growth over dumps made each one a lead,
+and a dump lead offered only the route that confirms it as a leak. Confirming would have been
+false, so the model had no way on. On CI, a non-leak fixture's heap-graph gate passed by chance
+while its bounded holder filled, and that dump route ended at `annotate --site <file:line>`, a
+placeholder nobody can fill.
+
+- The measurement's own holders are left out of findings, dump leads and residual-capture items:
+  classes and modules of the harness's own driver and agent files, the agent's package, and the
+  flight recorder's. Every heap-graph summarizer names them on one `left_out` line. JDK caches,
+  thread holders and project classes stay leads.
+- A dump lead is lifted by a confirmed non-leak explanation of its holder (`N-OBSERVER` or
+  `N-INTENT`). That confirmation needs a retention-path record of the holder read from a dump,
+  which shows what keeps it; any other evidence is refused. The explanation does not refute the
+  root: a retention record shows what keeps a holder, not that its growth stops, so a refute still
+  needs a discriminator that favors non-leak. The printed route ends with closing the root
+  `unresolved`, with the explanation as its remedy.
+- A dump route that needs a site or holder nobody can fill first offers `dla alloc-test <H>
+  --finding <F>` on the harness of the dumps; one that favors non-leak lifts the lead. The bench
+  policy runs that alloc-test where the route reaches a placeholder.
+- File-backed resident memory (`os.rss_file`, pages of mapped files) never decides a leak. Where
+  `os.rss_anon` is sampled and plateaued while `os.rss_file` grew, `os.rss` cannot favor leak
+  either: that growth is file-backed. This is the false leak a CI runner showed on a flat Python
+  fixture, four times in two days.
+
+Not covered: Go, Rust and native driver files are not read for the measurement's own holders; a
+real JVM run of the explanation route.

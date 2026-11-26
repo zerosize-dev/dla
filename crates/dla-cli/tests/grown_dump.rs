@@ -926,7 +926,12 @@ fn a_non_leak_explanation_confirmed_on_the_retention_record_of_the_holder_lifts_
         alt[2],
         format!("dla ledger confirm F1.n1 --evidence {record}")
     );
-    assert_eq!(alt[3], format!("dla ledger refute F1 --evidence {record}"));
+    assert_eq!(
+        alt[3],
+        format!(
+            "dla ledger resolve F1 --as unresolved --reason inconclusive --remedy \"explained by F1.n1: <what keeps the holder, from {record}>\""
+        )
+    );
     // The first two steps as printed.
     for step in &alt[..2] {
         let w = words_of(step);
@@ -983,7 +988,7 @@ fn a_non_leak_explanation_confirmed_on_the_retention_record_of_the_holder_lifts_
 }
 
 #[test]
-fn the_root_is_refuted_by_its_confirmed_explanation_and_not_before() {
+fn a_confirmed_explanation_lifts_the_lead_and_the_root_is_closed_not_refuted() {
     let (r, _workload) = scene();
     dump_series(&r, Some("leak"));
     let record = add(
@@ -1005,10 +1010,19 @@ fn the_root_is_refuted_by_its_confirmed_explanation_and_not_before() {
         let w = words_of(step);
         r.ok(&w.iter().map(String::as_str).collect::<Vec<_>>());
     }
-    // Confirmed: the root can be refuted citing the same record (or closed, the lead being
-    // lifted), as it is refuted before a sibling is confirmed on the other routes.
+    assert_eq!(r.state("F1.n1"), "confirmed");
+    // Confirmed: the explanation does not refute the root (a retention record shows what keeps
+    // the holder, not that the growth stops: a refute still needs a discriminator)...
+    let (code, v) = r.run(&["ledger", "refute", "F1", "--evidence", &record]);
+    assert_ne!(code, 0, "{v}");
+    assert_eq!(v["error"]["code"], "discriminator-required", "{v}");
+    // ...but the lead is lifted, and the printed last step closes the root unresolved.
+    assert!(
+        alt[3].starts_with("dla ledger resolve F1 --as unresolved --reason inconclusive"),
+        "{}",
+        alt[3]
+    );
     let w = words_of(&alt[3]);
     r.ok(&w.iter().map(String::as_str).collect::<Vec<_>>());
-    assert_eq!(r.state("F1"), "refuted");
-    assert_eq!(r.state("F1.n1"), "confirmed");
+    assert!(r.state("F1").starts_with("unresolved"), "{}", r.state("F1"));
 }

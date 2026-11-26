@@ -1580,7 +1580,11 @@ pub fn explanation_route(
         }
     };
     steps.push(format!("dla ledger confirm {sibling} --evidence {cite}"));
-    steps.push(format!("dla ledger refute {id} --evidence {cite}"));
+    // The lead is lifted; the root is closed with the explanation, not refuted (a retention record
+    // shows what keeps the holder, not that the growth stops).
+    steps.push(format!(
+        "dla ledger resolve {id} --as unresolved --reason inconclusive --remedy \"explained by {sibling}: <what keeps the holder, from {cite}>\""
+    ));
     steps.join("; ")
 }
 
@@ -2946,7 +2950,8 @@ mod tests {
         assert!(
             cmds[3].contains("dla ledger test F1.n2 --evidence")
                 && cmds[3].contains("dla ledger confirm F1.n2 --evidence")
-                && cmds[3].contains("dla ledger refute F1 --evidence"),
+                && cmds[3].contains("dla ledger resolve F1 --as unresolved --reason inconclusive")
+                && !cmds[3].contains("dla ledger refute F1 --evidence"),
             "{cmds:?}"
         );
         assert!(g1.grew_text().contains("grew over every dump"));
@@ -3052,7 +3057,9 @@ mod tests {
         let last = grown[0].commands().pop().unwrap();
         assert!(
             last.contains(&format!("dla ledger confirm F1.n2 --evidence {record}"))
-                && last.contains(&format!("dla ledger refute F1 --evidence {record}")),
+                && last.contains(&format!(
+                    "dla ledger resolve F1 --as unresolved --reason inconclusive --remedy \"explained by F1.n2: <what keeps the holder, from {record}>\""
+                )),
             "{last}"
         );
         assert!(!last.contains("dla summarize heap-graph"), "{last}");

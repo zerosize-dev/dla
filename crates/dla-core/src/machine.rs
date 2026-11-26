@@ -347,9 +347,7 @@ fn check_m0(ctx: &TransitionContext<'_>, dump_retention: bool) -> Result<(), Ref
                 .chain(ctx.evidence)
                 .filter_map(|e| ctx.lookup.evidence(e))
                 .any(|e| e.kind == EvidenceKind::Discriminator);
-            // A leak-side root whose non-leak explanation of the holder was confirmed needs no
-            // discriminator: see [`refuted_by_explanation`].
-            if !has_disc && !refuted_by_explanation(ctx) {
+            if !has_disc {
                 return Err(Refusal::new(
                     codes::DISCRIMINATOR_REQUIRED,
                     format!("{id} cannot be refuted without discriminator evidence in contradicts"),
@@ -1393,8 +1391,8 @@ pub fn shows_holder_of(e: &EvidenceRecord, root: &Finding) -> bool {
 /// The confirm of an `N-OBSERVER` or `N-INTENT` sibling whose leak-side root is not refuted: the
 /// growth is no leak of the project because of what keeps the holder, so the evidence has to show
 /// the holder and what keeps it, a retention-path record of authority `dump` that names it. Any
-/// other record, a discriminator included, is refused. The root is then refuted by the sibling
-/// ([`refute`]).
+/// other record, a discriminator included, is refused. The root is then closed unresolved (the
+/// dump lead is lifted); it is not refuted by the sibling ([`refute`]).
 fn confirm_on_holder_record(
     ctx: &TransitionContext<'_>,
     root: Option<&Finding>,
@@ -1455,27 +1453,12 @@ fn confirm_nonleak(ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
     Ok(())
 }
 
-/// True when the move refutes a leak-side root whose non-leak explanation of the holder
-/// (`N-OBSERVER`, `N-INTENT`) is confirmed: that sibling, confirmed on the retention record of the
-/// holder, is what refutes the root.
-fn refuted_by_explanation(ctx: &TransitionContext<'_>) -> bool {
-    ctx.finding.polarity() == Polarity::Leak
-        && !ctx.finding.id.is_sibling()
-        && ctx
-            .findings
-            .family(&ctx.finding.id)
-            .iter()
-            .any(|s| s.state == FindingState::Confirmed && is_explanation_of_holder(s))
-}
-
 fn refute(ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
-    // A leak-side root whose non-leak explanation of the holder is confirmed (on the retention
-    // record that shows what keeps the holder, see [`confirm_on_holder_record`]) is refuted by
-    // that sibling: no discriminator is needed, none that favors non-leak exists for a holder
-    // the measurement or the code keeps on purpose.
-    if refuted_by_explanation(ctx) {
-        return Ok(());
-    }
+    // A confirmed non-leak explanation of a holder (`N-OBSERVER`, `N-INTENT`, confirmed on the
+    // retention record that shows what keeps the holder) lifts the dump lead of its root, which can
+    // then be closed unresolved with the explanation as its remedy. It does not refute the root: a
+    // retention record shows what keeps a holder, not that the growth stops, and a refute still
+    // needs a discriminator that favors non-leak.
     let want = match ctx.finding.polarity() {
         Polarity::Leak => Favors::NonLeak,
         Polarity::NonLeak => Favors::Leak,
