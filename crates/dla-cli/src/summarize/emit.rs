@@ -95,6 +95,34 @@ pub fn next_nonheap(tc: &ToolCtx) -> Result<(String, String), Refusal> {
     next_id(tc, "nonheap", 'N')
 }
 
+/// Holders named on the left-out line at most.
+const LEFT_OUT_SHOWN: usize = 4;
+
+/// The one line that says which holders of the measurement (the driver's statics, the agent, the
+/// profiler) a heap-graph summary left out of its holder table, findings and commands: they belong
+/// to the measurement and not to the project, so no finding, lead or item is made for them. `None`
+/// when none was left out.
+pub fn left_out_line(owners: &[String]) -> Option<String> {
+    if owners.is_empty() {
+        return None;
+    }
+    let shown: Vec<&str> = owners
+        .iter()
+        .take(LEFT_OUT_SHOWN)
+        .map(String::as_str)
+        .collect();
+    let more = owners.len().saturating_sub(LEFT_OUT_SHOWN);
+    Some(format!(
+        "the measurement's own holders, left out: {}{}",
+        shown.join(", "),
+        if more > 0 {
+            format!(" and {more} more")
+        } else {
+            String::new()
+        }
+    ))
+}
+
 /// A file stem cleaned for use in a raw file name: ASCII alphanumerics and `._-`, at
 /// most 40 characters.
 pub fn clean_stem(name: &str) -> String {

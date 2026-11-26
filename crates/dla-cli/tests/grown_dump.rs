@@ -107,6 +107,11 @@ fn add(r: &R, e: NewEvidence) -> String {
 /// A Node run with one candidate F1 (`app.Conn.request`, at `src/conn.js:3`), harness H1 that
 /// ran (workload evidence) and nothing else: no trend, and no series of harness H1.
 fn scene() -> (R, String) {
+    scene_with(Some("src/conn.js:3"))
+}
+
+/// [`scene`] whose F1 has the given site, or none.
+fn scene_with(site: Option<&str>) -> (R, String) {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join("src")).unwrap();
     fs::write(
@@ -148,20 +153,22 @@ fn scene() -> (R, String) {
             json!({"series": "S1", "axis": "dump", "n": 3, "gate": "pass", "passed": []}),
         ),
     );
-    let added = r.ok(&[
+    let mut args = vec![
         "ledger",
         "add",
         "--origin",
         "growth-series",
         "--evidence",
         &seed,
-        "--site",
-        "src/conn.js:3",
         "--holder",
         "static/global",
         "--owner",
         "app.Conn.request",
-    ]);
+    ];
+    if let Some(site) = &site {
+        args.extend(["--site", site]);
+    }
+    let added = r.ok(&args);
     assert_eq!(added["id"], "F1", "{added}");
     (r, workload)
 }
@@ -384,8 +391,12 @@ fn a_finding_closed_before_its_dump_growth_is_listed_and_the_printed_commands_co
     let fix = item["fix"].as_str().unwrap().to_owned();
     assert!(fix.contains(&format!("dla ledger refute F1.n1 --evidence {d}")) || fix.contains(&format!("dla ledger add --sibling-of F1 --origin hypothesis --hypothesis N-WARM --refute-if \"growth continues over the extra cycles\" --evidence {d}")), "{fix}");
     assert!(fix.contains("dla ledger test F1 --evidence E"), "{fix}");
+    // The confirm route ends the commands; the way out of a growth that is no leak of the project
+    // follows it as a parenthesis.
     assert!(
-        fix.ends_with(&format!("dla ledger confirm F1 --evidence {growth}")),
+        fix.contains(&format!(
+            "dla ledger confirm F1 --evidence {growth}   (if the growth is not a leak of the project: "
+        )),
         "{fix}"
     );
     // close-rest does not touch it either (it closes candidates only), and a re-close is refused.
@@ -803,4 +814,201 @@ fn a_holder_that_grew_only_in_another_capture_stays_a_lead() {
     let (code, v) = close(&r, "F2", "unresolved");
     assert_ne!(code, 0, "{v}");
     assert_eq!(v["error"]["code"], "growth-not-measured", "{v}");
+}
+
+/// The alternative a dump lead's route prints after its last command, as commands: the text in
+/// the parenthesis that starts `if the growth is not a leak of the project: `, cut at `; `.
+fn alternative_of(why: &str) -> Vec<String> {
+    let start = why
+        .find("(if the growth is not a leak of the project: ")
+        .unwrap_or_else(|| panic!("no alternative in {why}"))
+        + "(if the growth is not a leak of the project: ".len();
+    let text = &why[start..];
+    let text = &text[..text.rfind(')').unwrap()];
+    text.split("; ")
+        .map(|c| c.replace("N-OBSERVER|N-INTENT", "N-OBSERVER"))
+        .collect()
+}
+
+#[test]
+fn a_dump_lead_with_no_site_offers_the_alloc_test_first_and_one_favoring_non_leak_lifts_it() {
+    let (r, _w) = scene_with(None);
+    dump_series(&r, Some("leak"));
+    let out = r.ok(&["ledger", "close-rest"]);
+    let why = left_of(&out, "F1").unwrap_or_else(|| panic!("F1 not left open: {out}"));
+    let route = why.split("nothing decided it: ").nth(1).unwrap();
+    // No placeholder blocks the route: the first command measures, on the harness of the dumps.
+    assert!(
+        route.starts_with("dla alloc-test H1 --finding F1"),
+        "{route}"
+    );
+    // The annotation stays behind it, for whoever can fill it in.
+    assert!(
+        route.contains("dla ledger annotate F1 --site <file:line>"),
+        "{route}"
+    );
+    // The refusal and the final gate print the same first command.
+    let (code, v) = close(&r, "F1", "unresolved");
+    assert_ne!(code, 0, "{v}");
+    assert!(
+        v["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .starts_with("dla alloc-test H1 --finding F1"),
+        "{v}"
+    );
+    let missing = r.final_gate();
+    let item = missing
+        .iter()
+        .find(|m| m["kind"] == "finding" || m["kind"] == "growth")
+        .unwrap_or_else(|| panic!("{missing:?}"));
+    assert!(
+        item["fix"]
+            .as_str()
+            .unwrap()
+            .starts_with("dla alloc-test H1 --finding F1"),
+        "{item}"
+    );
+    // An alloc-test of the harness that favors non-leak lifts the lead.
+    add(
+        &r,
+        evidence(
+            Authority::Test,
+            EvidenceKind::Discriminator,
+            None,
+            json!({"test": "plateau+purge", "favors": "non-leak", "supports": ["N-WARM"],
+                "finding": "F1", "harness": "H1"}),
+        ),
+    );
+    assert!(
+        !r.final_gate().iter().any(|m| m["kind"] == "growth"),
+        "{:?}",
+        r.final_gate()
+    );
+}
+
+#[test]
+fn a_non_leak_explanation_confirmed_on_the_retention_record_of_the_holder_lifts_the_dump_lead() {
+    let (r, workload) = scene();
+    let (growth, d) = dump_series(&r, Some("leak"));
+    let d = d.unwrap();
+    // A retention-path record of the holder, read from a dump of the harness.
+    let record = add(
+        &r,
+        evidence(
+            Authority::Dump,
+            EvidenceKind::RetentionPath,
+            Some("harness/H1/out/p3/capture/7/heap-3.heapsnapshot"),
+            json!({"holders": [{"key": "static:app.Conn.request", "retained": 900,
+                "holder_kind": "static/global"}]}),
+        ),
+    );
+    let out = r.ok(&["ledger", "close-rest"]);
+    let why = left_of(&out, "F1").unwrap_or_else(|| panic!("F1 not left open: {out}"));
+    // The confirm route as before, and the way out of a growth that is no leak of the project.
+    assert!(
+        why.contains(&format!("dla ledger confirm F1 --evidence {growth}")),
+        "{why}"
+    );
+    let alt = alternative_of(why);
+    assert_eq!(alt.len(), 4, "{alt:?}");
+    assert!(
+        alt[0].starts_with(
+            "dla ledger add --sibling-of F1 --origin hypothesis --hypothesis N-OBSERVER"
+        ),
+        "{alt:?}"
+    );
+    assert_eq!(
+        alt[1],
+        format!("dla ledger test F1.n1 --evidence {workload}")
+    );
+    assert_eq!(
+        alt[2],
+        format!("dla ledger confirm F1.n1 --evidence {record}")
+    );
+    assert_eq!(alt[3], format!("dla ledger refute F1 --evidence {record}"));
+    // The first two steps as printed.
+    for step in &alt[..2] {
+        let w = words_of(step);
+        let args: Vec<&str> = w.iter().map(String::as_str).collect();
+        r.ok(&args);
+    }
+    assert_eq!(r.state("F1.n1"), "under_test");
+    // Anything but the record of the holder is refused, with the record named in the fix: the
+    // growth record, the discriminator, and the workload.
+    for other in [&growth, &d, &workload] {
+        let (code, v) = r.run(&["ledger", "confirm", "F1.n1", "--evidence", other]);
+        assert_ne!(code, 0, "{other}: {v}");
+        assert_eq!(v["error"]["code"], "leak-refutation-required", "{v}");
+        assert!(
+            v["error"]["fix"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("dla ledger confirm F1.n1 --evidence {record}")),
+            "{v}"
+        );
+    }
+    assert_eq!(r.state("F1.n1"), "under_test");
+    // On the record of the holder it is confirmed, and the lead is gone.
+    let w = words_of(&alt[2]);
+    r.ok(&w.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(r.state("F1.n1"), "confirmed");
+    assert!(
+        !r.final_gate().iter().any(|m| m["id"] == "F1"
+            && m["fix"]
+                .as_str()
+                .is_some_and(|f| f.contains("dla ledger confirm F1 --evidence"))),
+        "{:?}",
+        r.final_gate()
+    );
+    // The newest record decides: a growth record of the holder written after brings it back.
+    let (growth2, _) = dump_series(&r, Some("leak"));
+    let missing = r.final_gate();
+    let item = missing
+        .iter()
+        .find(|m| {
+            m["id"] == "F1"
+                && m["fix"]
+                    .as_str()
+                    .is_some_and(|f| f.contains("dla ledger confirm F1 --evidence"))
+        })
+        .unwrap_or_else(|| panic!("{missing:?}"));
+    assert!(
+        item["fix"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("dla ledger confirm F1 --evidence {growth2}")),
+        "{item}"
+    );
+}
+
+#[test]
+fn the_root_is_refuted_by_its_confirmed_explanation_and_not_before() {
+    let (r, _workload) = scene();
+    dump_series(&r, Some("leak"));
+    let record = add(
+        &r,
+        evidence(
+            Authority::Dump,
+            EvidenceKind::RetentionPath,
+            Some("harness/H1/out/p3/capture/7/heap-3.heapsnapshot"),
+            json!({"holders": [{"key": "static:app.Conn.request", "retained": 900,
+                "holder_kind": "static/global"}]}),
+        ),
+    );
+    let out = r.ok(&["ledger", "close-rest"]);
+    let alt = alternative_of(left_of(&out, "F1").unwrap());
+    // No explanation yet: the root is not refuted by the record alone.
+    let (code, v) = r.run(&["ledger", "refute", "F1", "--evidence", &record]);
+    assert_ne!(code, 0, "{v}");
+    for step in &alt[..3] {
+        let w = words_of(step);
+        r.ok(&w.iter().map(String::as_str).collect::<Vec<_>>());
+    }
+    // Confirmed: the root can be refuted citing the same record (or closed, the lead being
+    // lifted), as it is refuted before a sibling is confirmed on the other routes.
+    let w = words_of(&alt[3]);
+    r.ok(&w.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(r.state("F1"), "refuted");
+    assert_eq!(r.state("F1.n1"), "confirmed");
 }

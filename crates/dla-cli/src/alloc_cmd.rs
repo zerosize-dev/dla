@@ -228,6 +228,58 @@ fn main_end_x(series: &SeriesFile, iterations: usize) -> f64 {
         .map_or(f64::INFINITY, |p| p.x)
 }
 
+/// The plateau verdict of another column of the series over the same windows, or `None` when
+/// the series has no such column.
+fn column_plateau(series: &SeriesFile, name: &str, iterations: usize) -> Option<PlateauVerdict> {
+    let idx = series.column_index(name)?;
+    let counter = series.columns[idx].kind == ColumnKind::Counter;
+    let points = series.post_warmup(idx);
+    let (main, extra) = judge::split(&points, main_end_x(series, iterations));
+    let min_rise = if series.columns[idx].unit == Unit::Bytes {
+        judge::MIN_BYTE_RISE
+    } else {
+        0.0
+    };
+    let reference = reference_level(series, idx);
+    Some(judge::plateau(main, extra, counter, reference, min_rise).verdict)
+}
+
+/// Why a leak reading of a column is not a leak, when the column is file-backed resident
+/// memory or resident memory that file-backed memory explains.
+///
+/// A leak is memory the program allocated and keeps, which is anonymous memory. Resident
+/// file-backed pages (`os.rss_file`: mapped libraries, modules and data files touched for the
+/// first time or kept warm) are the page cache of files, not an allocation, so:
+/// - `os.rss_file` never decides `leak` by itself. Its own reading is at most inconclusive; a
+///   leak another column shows still stands, with the file-backed column agreeing in the
+///   result.
+/// - `os.rss` growth that the file-backed part explains is not a leak either: when the series
+///   samples both `os.rss_anon` and `os.rss_file`, the anonymous part plateaued over the extra
+///   window and the file-backed part did not, the growth of `os.rss` is the file-backed growth
+///   and it cannot favor leak. Where `os.rss_anon` is not sampled (it comes from the Linux
+///   process status; the other platforms sample neither part) there is nothing to tell the
+///   parts apart with, and `os.rss` keeps its own reading: growth that cannot be shown to be
+///   file-backed is not excused.
+fn file_backed_note(series: &SeriesFile, name: &str, iterations: usize) -> Option<String> {
+    match name {
+        "os.rss_file" => Some(
+            "resident file-backed pages are the page cache of mapped files, not memory the program allocated and keeps: this column never decides a leak by itself"
+                .to_owned(),
+        ),
+        "os.rss" => {
+            let anon = column_plateau(series, "os.rss_anon", iterations)?;
+            let file = column_plateau(series, "os.rss_file", iterations)?;
+            let flat = matches!(anon, PlateauVerdict::Plateau | PlateauVerdict::NeverGrew);
+            let grew = matches!(file, PlateauVerdict::Continues | PlateauVerdict::Inconclusive);
+            (flat && grew).then(|| {
+                "os.rss grew over the extra window while os.rss_anon plateaued and os.rss_file did not: the growth is file-backed pages (mapped files), not memory the program holds"
+                    .to_owned()
+            })
+        }
+        _ => None,
+    }
+}
+
 fn test_column(
     series: &SeriesFile,
     name: &str,
@@ -307,20 +359,29 @@ fn test_column(
     let rises = (kept && !counter)
         .then(|| judge::rises(main, extra, warm_end(series, idx), plateau.noise?))
         .flatten();
-    let (favors, supports) = judge::combine(
+    let (mut favors, mut supports) = judge::combine(
         plateau.verdict,
         purge.as_ref(),
         gc,
         rises.map(|r| r.expected),
     );
+    // File-backed resident memory is never what decides a leak (see `file_backed_note`).
+    let mut file_note = None;
+    if favors == Favors::Leak {
+        file_note = file_backed_note(series, name, iterations);
+        if file_note.is_some() {
+            favors = Favors::Inconclusive;
+            supports.clear();
+        }
+    }
     let stair_need = (plateau.verdict == PlateauVerdict::Inconclusive)
         .then_some(plateau.points_needed)
         .flatten();
-    let note = stair_need.map(|n| {
+    let note = file_note.or(stair_need.map(|n| {
         format!(
             "the column grows in steps and its extra window is shorter than the gap between the steps of the main window, so a plateau cannot be told from a step that has not come yet: an extra window of {n} points would cover that gap"
         )
-    });
+    }));
     let note = note.or(rises.map(|r| {
         let main_part = format!(
             "the purge kept the growth (held memory, not allocator or collector headroom); the main window rose {} time(s), so {:.1} rise(s) were expected in the extra window",
@@ -4295,10 +4356,76 @@ mod tests {
         let (favors, results, picked) = unbound_run(s, &["os.rss", "os.rss_file"]);
         assert_eq!(picked.voting, ["os.rss", "os.rss_file"], "{}", picked.basis);
         assert_eq!(favors, Favors::Leak);
-        for name in ["os.rss", "os.rss_file"] {
-            let r = results.iter().find(|r| r.name == name).unwrap();
-            assert_eq!(r.favors, Favors::Leak, "{name}: {:?}", r.plateau);
+        // `os.rss_anon` is not sampled here, so `os.rss` keeps its own reading and carries the
+        // leak. The file-backed column grows (its plateau says so) but never decides a leak:
+        // its own reading is inconclusive and says why.
+        let rss = results.iter().find(|r| r.name == "os.rss").unwrap();
+        assert_eq!(rss.favors, Favors::Leak, "{:?}", rss.plateau);
+        let file = results.iter().find(|r| r.name == "os.rss_file").unwrap();
+        assert_eq!(file.plateau.verdict, PlateauVerdict::Continues, "{file:?}");
+        assert_eq!(file.favors, Favors::Inconclusive, "{file:?}");
+        assert!(file.note.is_some(), "{file:?}");
+    }
+
+    type PartsRun = (Favors, Vec<ColumnResult>);
+
+    /// `os.rss`, `os.rss_anon` and `os.rss_file` over the series: each `(start, step per point)`.
+    fn rss_parts_run(rss: (f64, f64), anon: (f64, f64), file: (f64, f64)) -> PartsRun {
+        let mut s = series(&[]);
+        s.columns = vec![col("os.rss"), col("os.rss_anon"), col("os.rss_file")];
+        for (i, p) in s.points.iter_mut().enumerate() {
+            let at = |(a, b): (f64, f64)| Some(a + b * i as f64);
+            p.values = vec![at(rss), at(anon), at(file)];
         }
+        // Only a column that rises passes the trend's gate.
+        let passed: Vec<&str> = [
+            ("os.rss", rss),
+            ("os.rss_anon", anon),
+            ("os.rss_file", file),
+        ]
+        .into_iter()
+        .filter(|(_, (_, step))| *step != 0.0)
+        .map(|(n, _)| n)
+        .collect();
+        let (favors, results, _) = unbound_run(s, &passed);
+        (favors, results)
+    }
+
+    fn favors_of(results: &[ColumnResult], name: &str) -> Favors {
+        results.iter().find(|r| r.name == name).unwrap().favors
+    }
+
+    #[test]
+    fn a_flat_anon_with_rising_file_pages_and_the_rss_they_explain_is_not_a_leak() {
+        // The CI case: the anonymous part is flat, the file-backed part rises and `os.rss`
+        // rises by the same amount. Neither file column decides a leak.
+        let (favors, results) = rss_parts_run((500e6, 2e6), (490e6, 0.0), (10e6, 2e6));
+        assert_ne!(favors, Favors::Leak, "{results:?}");
+        assert_ne!(favors_of(&results, "os.rss"), Favors::Leak);
+        assert_ne!(favors_of(&results, "os.rss_file"), Favors::Leak);
+        let rss = results.iter().find(|r| r.name == "os.rss").unwrap();
+        assert!(
+            rss.note
+                .as_deref()
+                .is_some_and(|n| n.contains("file-backed"))
+        );
+    }
+
+    #[test]
+    fn a_rising_anon_with_flat_file_pages_is_a_leak() {
+        let (favors, results) = rss_parts_run((500e6, 2e6), (490e6, 2e6), (10e6, 0.0));
+        assert_eq!(favors, Favors::Leak, "{results:?}");
+        assert_eq!(favors_of(&results, "os.rss_anon"), Favors::Leak);
+        assert_eq!(favors_of(&results, "os.rss"), Favors::Leak);
+    }
+
+    #[test]
+    fn a_rising_anon_beside_rising_file_pages_is_a_leak_decided_by_anon_and_rss() {
+        let (favors, results) = rss_parts_run((500e6, 4e6), (490e6, 2e6), (10e6, 2e6));
+        assert_eq!(favors, Favors::Leak, "{results:?}");
+        assert_eq!(favors_of(&results, "os.rss_anon"), Favors::Leak);
+        assert_eq!(favors_of(&results, "os.rss"), Favors::Leak);
+        assert_ne!(favors_of(&results, "os.rss_file"), Favors::Leak);
     }
 
     #[test]

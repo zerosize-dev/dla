@@ -878,6 +878,8 @@ fn retain(ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
         )));
     }
     let who = tie::Who::new(tc.worker.as_deref(), Some(Runtime::Python));
+    let own = dla_core::measurement::Measurement::of_run(&tc.run_dir);
+    let mut left_out: Vec<String> = Vec::new();
     let mut out = AdapterOut::default();
     let mut shown_holders: Vec<Value> = Vec::new();
     let mut next: Vec<String> = Vec::new();
@@ -888,7 +890,21 @@ fn retain(ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
     let mut no_chain_total = 0usize;
     let mut no_chain_reason: Option<String> = None;
     for (i, f) in inputs.iter().zip(&parsed) {
-        let (holders, unrooted) = holders_of(f, red);
+        let (mut holders, unrooted) = holders_of(f, red);
+        // A holder of the measurement (the driver's module, the agent) is the tests' to the
+        // gate and no finding, command or row of the project: it is named on one line.
+        let own_holder: Vec<bool> = holders
+            .iter()
+            .map(|h| h.owner.as_deref().is_some_and(|o| own.is_own(o)))
+            .collect();
+        for (h, _) in holders.iter_mut().zip(&own_holder).filter(|(_, o)| **o) {
+            h.of = Some(Of::Tests);
+            if let Some(o) = &h.owner
+                && !left_out.contains(o)
+            {
+                left_out.push(o.clone());
+            }
+        }
         all_unrooted += unrooted;
         unreferenced_sites += holders
             .iter()
@@ -1113,6 +1129,9 @@ fn retain(ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
         let evidence = rec.id.to_string();
         // ---- what is said, and what comes next
         for (k, h) in holders.iter().enumerate() {
+            if own_holder[k] {
+                continue;
+            }
             let named = &ties[k];
             let mut row = json!({
                 "key": clip(&h.key, 56),
@@ -1191,6 +1210,9 @@ fn retain(ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
     }
     body.insert("files".into(), json!(files));
     body.insert("holders".into(), json!(shown_holders));
+    if let Some(line) = emit::left_out_line(&left_out) {
+        body.insert("left_out".into(), json!(line));
+    }
     if unreferenced_sites > 0 {
         body.insert("unreferenced_sites".into(), json!(unreferenced_sites));
     }

@@ -741,8 +741,20 @@ fn series_part(
     let n = dumps.len();
     // ---- holders tracked: the largest by peak retained bytes, plus the bound one
     let mut peak: Vec<(String, u64)> = Vec::new();
+    // A holder of the measurement (the driver's statics, the DLA agent, the flight recorder) is
+    // no growth of the project: it gets no column, no finding and no lead. A holder a
+    // `--finding` bound stays, because the model asked for that one.
+    let own = dla_core::measurement::Measurement::of_run(&tc.run_dir);
+    let mut left_out: Vec<String> = Vec::new();
     for d in dumps {
         for h in &d.summary.tracked {
+            if own.is_own(&h.key) && bound.as_ref().is_none_or(|(_, k)| *k != h.key) {
+                let name = owner_of(h);
+                if !left_out.contains(&name) {
+                    left_out.push(name);
+                }
+                continue;
+            }
             match peak.iter_mut().find(|(k, _)| *k == h.key) {
                 Some((_, p)) => *p = (*p).max(h.retained),
                 None => peak.push((h.key.clone(), h.retained)),
@@ -1164,6 +1176,9 @@ fn series_part(
         recorded.push(rec);
     }
 
+    if let Some(line) = emit::left_out_line(&left_out) {
+        out.insert("left_out".into(), json!(line));
+    }
     out.insert("series".into(), json!(id));
     if let Some(xs) = &per_point {
         out.insert("series_kind".into(), json!("per-point"));

@@ -3738,3 +3738,65 @@ unattended run at a time and no builder beside it.
   After release: refresh rig (bin + plugin from 18a69c6), then reruns (interceptors, logstash,
   otel-go, otel-python) one at a time, when the local N dynamic run is done.
 - 08:30 UTC: preview.11 PUBLISHED (tag on 18a69c6, 11 assets). Rig: bin/dla = preview.11 musl (checked), plugin = git archive 18a69c6; .prev kept.
+- 08:10 UTC: N tree full dynamic 63/64 + xfail (no GC-runtime twin turned leak); VERIFY row says
+  so. Snapshot 896e396 pushed WITH CI (waiter u115/ci-wip-46, task bk4n6k15z). When green:
+  commit-snapshot-tree.sh 896e39649dc11a7120e98b6dde67aa8e9db90399 commit-message-41.txt;
+  push; preview.12 later (batch with the next fixes).
+- r5-interceptors started 08:10 (pid 7540) on preview.11 rig; waiter 7000 s. Deleted target
+  build dirs for disk (8+ GB free). Judge vs key section 6.
+- 09:45 UTC: CI N (run 45780871435): FAIL x2: (1) the alloc_test os.rss_file flake (4th time);
+  (2) dynamic jvm-invoice-render-trimmed (decoy): in CI heap-graph gate PASSED tied F9 -> G dump
+  lead -> route ends at `annotate F9 --site <file:line>` placeholder -> F9 under_test. Locally (same
+  tree) heap-graph gate failed -> pass. Path exists since d00a405 (G); N does not touch it.
+  Re-ran failed jobs. FOLLOW-UPS (next builder round): fix the alloc_test flake for real (task 110);
+  a dump lead on a bounded holder filling during the dumps: route needs a non-placeholder way to
+  decide (alloc-test bound to the finding lifts it on non-leak) and the bench policy should take it.
+- 10:30 UTC: N's re-run green -> main 4016bc9 (msg 41), pushed main + dev. Working tree == main
+  (clean). preview.12 later with the next fixes (alloc_test flake, dump lead on bounded holders).
+  r5-interceptors still running (waiter bkrtr1o68).
+
+## 11:05 UTC 2026-11-26: r5-interceptors FOUND on preview.11
+
+- r5-interceptors (preview.11): 2h53m of 3h used (was 47 min), 35 harness runs, 78 captures, disk
+  stable (capture cap works). INCOMPLETE 155 open (44 closed for lack of time). Key section 6:
+  FOUND. F129 confirmed, verifier AGREES: MockHttpSocket.request (MockHttpSocket.ts:566) kept by
+  a native HTTPParser global handle through bound callbacks; released only by destroy()
+  (:168). Evidence: dump growth holder column 6.8 MB/dump steady (E23), retention path. Also F76
+  and F126 confirmed but disputed (N-SCALE; listeners on the retained socket, same root).
+  History: blind NOT FOUND -> r3 PARTLY (preview.9) -> r5 FOUND (preview.11: G/H/K + L/M).
+- Kept r5-interceptors-keep; run dir deleted.
+- r5-logstash started 11:04 (pid 26467) on preview.11 (L's shared-loop rule). Judge vs key 9.
+  Then otel-go, otel-python on preview.11; fastrace on preview.12 (N).
+
+## 12:30 UTC 2026-11-26: r5-logstash PARTLY (documented holder confirmed, wrong mechanism); ABORTED by the model
+
+- r5-logstash (preview.11): 1h16m of 3h; 38 harness runs, 69 captures; model ran `dla run abort`:
+  "remaining open items are heap-dump holders owned by the measurement driver, the JFR/DLA agent or
+  the JUnit loop (F52, F112-F119, F124, F125, F130-F134) that the ledger lets me only confirm as
+  leaks; confirming them would be false". Owners: net.logstash.logback.DlaLoop.* (the model's driver
+  class), dla.harness.DlaDump.ROOT_CLASS (agent), jdk.jfr.internal.StringPool.cache (JFR),
+  java.net.InetAddress.cache/expirySet (JDK), thread:main thread-locals. G's dump leads give only a
+  confirm route -> forced abort.
+- Key section 9: F109 ThreadLocalHolder.threadValues :63 CONFIRMED (verifier did not run: abort),
+  but explanation = "encoder/layout dropped without stop() keeps the holder via the calling thread's
+  ThreadLocalMap; grows only with unstopped units (H11), not with stopped ones (H10 all-stop)" =
+  caller skipping a required stop(), NOT the documented trigger (ForkJoinPool common-pool workers,
+  JDK 16+). 35 confirmed in all (10 say stop()/close()), 32 unverified, 3 disputed. PARTLY.
+- CAUSES: (a) dump leads on holders outside the project (driver class, agent, JFR, JDK, thread:main)
+  with a confirm-only route -> abort. (b) over-confirmation of "caller skips the release call"
+  (growth only without stop()/close()): needs a non-leak explanation (N-INTENT or a new N-* for a
+  skipped release) that a with-release driver run can decide. (c) abort skips the verifier.
+- Kept r5-logstash-keep; run dir deleted.
+- 12:45 UTC: builders O (dump-lead routes: measurement-owned holders out, non-leak sibling with a
+  retention record lifts, alloc-test before a placeholder + bench policy; brief
+  dump-lead-routes-brief.md, scratch u147) and P (os.rss_file never decides leak; os.rss growth
+  explained by file-backed part is not leak; brief rss-file-flake-brief.md, scratch u148) started
+  in parallel. No rig run beside them. NEXT CAUSE (not built): over-confirmation of "caller skips
+  the release call" (logstash: 10 of 35 confirmations say stop()) - needs a non-leak hypothesis a
+  with-release driver decides; and abort skips the verifier.
+- 13:35 UTC: builder P done: alloc_cmd test_column: os.rss_file never decides leak (inconclusive +
+  note); os.rss with anon Plateau/NeverGrew and file Continues/Inconclusive -> inconclusive; no
+  os.rss_anon -> unchanged. 3 unit tests (CI case built as series), mutations caught; dla bin 378;
+  alloc_test 5/5; python-/jvm-pool/native-/rust- dynamic pass. One existing test changed
+  (growing file column now inconclusive, rss still leak). Not proven on the runner (could not
+  reproduce); if the runner's anon also rose the CLI test can still fail. Reviewed: sound.

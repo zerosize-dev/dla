@@ -167,6 +167,7 @@ pub fn scan(view: &RunView) -> Scan {
 /// [`scan`] over a ledger and the run directory its raw files are in.
 pub fn scan_in(ledger: &Ledger, run_dir: Option<&Path>) -> Scan {
     let mut out = Scan::default();
+    let own = run_dir.map(crate::measurement::Measurement::of_run);
     for rec in ledger.evidence() {
         if matches!(
             rec.kind,
@@ -213,6 +214,16 @@ pub fn scan_in(ledger: &Ledger, run_dir: Option<&Path>) -> Scan {
                                 .map(|k| k.trim().to_owned())
                                 .filter(|k| !k.is_empty())
                         });
+                    // A holder of the measurement (the driver's module, the agent) is no holder of
+                    // the project, whatever file the record read it from: its lines are the
+                    // tests' to the gate.
+                    if owner
+                        .as_deref()
+                        .is_some_and(|o| own.as_ref().is_some_and(|m| m.is_own(o)))
+                    {
+                        tests.extend(lines);
+                        continue;
+                    }
                     others.extend(lines.iter().cloned());
                     let Some(owner) = owner else { continue };
                     if lines.is_empty() {
