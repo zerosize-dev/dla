@@ -448,15 +448,10 @@ fn the_final_gate_needs_an_explanation_for_a_confirmed_finding() {
     assert_eq!(v["decision"], "block", "{v}");
     assert!(v["reason"].as_str().unwrap().contains("F1"));
 
-    r.ok(&[
-        "ledger",
-        "annotate",
-        "F1",
-        "--writer",
-        "a.go:9",
-        "--remover",
-        "a.go:40",
-    ]);
+    // An explanation that names a conditional remover would also ask for a run with the release
+    // called (`release-untested`, tests/release_hazard.rs); this one says nothing removes the
+    // entries, so the label is the one thing left.
+    r.ok(&["ledger", "annotate", "F1", "--writer", "a.go:9"]);
     r.ok(&[
         "ledger",
         "explain",
@@ -464,11 +459,9 @@ fn the_final_gate_needs_an_explanation_for_a_confirmed_finding() {
         "--tag",
         "inferred",
         "--removal",
-        "conditional",
-        "--remover",
-        "a.go:40",
+        "never",
         "--text",
-        "Requests add entries to the static/global table at a.go:1 through put at a.go:9, and a.go:40 removes them only when the flag is set.",
+        "Requests add entries to the static/global table at a.go:1 through put at a.go:9 and nothing removes them, so the table only grows.",
     ]);
     // Explained, but not yet labelled: the label decision is the one thing left.
     let o = r.gate("final");

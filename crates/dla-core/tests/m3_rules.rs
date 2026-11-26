@@ -60,6 +60,7 @@ fn polarity_follows_the_hypothesis_of_a_sibling() {
         ("N-SCALE", Polarity::NonLeak),
         ("N-INTENT", Polarity::NonLeak),
         ("N-OBSERVER", Polarity::NonLeak),
+        ("N-RELEASE", Polarity::NonLeak),
         ("N-WARM: the cache fills up", Polarity::NonLeak),
         ("N-HWM pool high-water mark", Polarity::NonLeak),
         ("the listener is never removed", Polarity::Leak),

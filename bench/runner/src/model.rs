@@ -205,8 +205,8 @@ pub const LEAK_CAUSES: [&str; 11] = [
     "UNCLASSIFIED",
 ];
 
-/// Causes a `[[non_leak]]` may carry: the seven non-leak archetypes or `UNCLASSIFIED`.
-pub const NON_LEAK_CAUSES: [&str; 8] = [
+/// Causes a `[[non_leak]]` may carry: the eight non-leak archetypes or `UNCLASSIFIED`.
+pub const NON_LEAK_CAUSES: [&str; 9] = [
     "N-ALLOC",
     "N-HEADROOM",
     "N-WARM",
@@ -214,6 +214,7 @@ pub const NON_LEAK_CAUSES: [&str; 8] = [
     "N-SCALE",
     "N-INTENT",
     "N-OBSERVER",
+    "N-RELEASE",
     "UNCLASSIFIED",
 ];
 
@@ -286,7 +287,7 @@ pub struct NonLeak {
     /// Non-leak ID (`N-*`) or `UNCLASSIFIED`.
     #[schemars(extend("enum" = [
         "N-ALLOC", "N-HEADROOM", "N-WARM", "N-HWM", "N-SCALE", "N-INTENT", "N-OBSERVER",
-        "UNCLASSIFIED"
+        "N-RELEASE", "UNCLASSIFIED"
     ]))]
     pub cause: String,
     /// The observation that rules the leak out.

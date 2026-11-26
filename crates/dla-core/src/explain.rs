@@ -187,12 +187,15 @@ fn structural(
         )
     })?;
     if f.polarity() != Polarity::Leak
-        || !matches!(f.state, FindingState::Confirmed | FindingState::Strong)
+        || !matches!(
+            f.state,
+            FindingState::UnderTest | FindingState::Confirmed | FindingState::Strong
+        )
     {
         return Err(refuse(
             codes::EXPLAIN_STATE,
             format!(
-                "{id} is {} ({}): only a confirmed or strong leak-side finding is explained",
+                "{id} is {} ({}): only a leak-side finding under test, confirmed or strong is explained",
                 f.state_label(),
                 if f.polarity() == Polarity::Leak {
                     "leak-side"
@@ -200,7 +203,7 @@ fn structural(
                     "non-leak"
                 }
             ),
-            "a confirmed or strong leak-side finding",
+            "a leak-side finding under test, confirmed or strong",
             format!("dla ledger confirm {id} --evidence <growth evidence id>"),
         ));
     }
@@ -571,15 +574,18 @@ pub fn plan(
 fn structural_state(findings: &dyn FindingLookup, id: &FindingId) -> Result<(), Refusal> {
     let f = findings.finding(id).expect("checked by the caller");
     if f.polarity() != Polarity::Leak
-        || !matches!(f.state, FindingState::Confirmed | FindingState::Strong)
+        || !matches!(
+            f.state,
+            FindingState::UnderTest | FindingState::Confirmed | FindingState::Strong
+        )
     {
         return Err(refuse(
             codes::EXPLAIN_STATE,
             format!(
-                "{id} is {}: only a confirmed or strong leak-side finding is explained",
+                "{id} is {}: only a leak-side finding under test, confirmed or strong is explained",
                 f.state_label()
             ),
-            "a confirmed or strong leak-side finding",
+            "a leak-side finding under test, confirmed or strong",
             format!("dla ledger confirm {id} --evidence <growth evidence id>"),
         ));
     }

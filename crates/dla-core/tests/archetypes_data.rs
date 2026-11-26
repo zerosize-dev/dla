@@ -452,7 +452,7 @@ fn the_verifiers_id_list_equals_the_table() {
         .entries()
         .map(|e| format!("- `{}`: {}", e.id, e.summary))
         .collect();
-    assert_eq!(want.len(), 17);
+    assert_eq!(want.len(), 18);
     assert_eq!(
         got, want,
         "regenerate the block between the archetypes markers"

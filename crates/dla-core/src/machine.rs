@@ -1129,7 +1129,7 @@ fn under_test(ctx: &TransitionContext<'_>, artifact: bool) -> Result<(), Refusal
             return Err(Refusal::new(
                 codes::SIBLING_REQUIRED,
                 format!(
-                    "{id} needs a non-leak sibling hypothesis (N-ALLOC, N-HEADROOM, N-WARM, N-HWM, N-SCALE, N-INTENT or N-OBSERVER) before it goes under test, so that something can rule it out"
+                    "{id} needs a non-leak sibling hypothesis (N-ALLOC, N-HEADROOM, N-WARM, N-HWM, N-SCALE, N-INTENT, N-OBSERVER or N-RELEASE) before it goes under test, so that something can rule it out"
                 ),
                 format!("a sibling of {root} whose hypothesis begins with an N-* id"),
                 format!(
@@ -1440,7 +1440,17 @@ fn confirm_nonleak(ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
         return confirm_on_holder_record(ctx, root);
     }
     check_direction(ctx, judged(ctx), Favors::NonLeak, "confirm")?;
-    if !root_refuted {
+    // A confirmed root cannot move to refuted, and a release that the project's callers must
+    // make is found out only after its leak was confirmed: the N-RELEASE sibling is confirmed
+    // beside it and the report counts the root apart from the leaks.
+    let release_of_confirmed = ctx
+        .finding
+        .hypothesis
+        .as_deref()
+        .and_then(crate::finding::nonleak_id)
+        == Some(crate::release::ID)
+        && root.is_some_and(|r| r.state == FindingState::Confirmed);
+    if !root_refuted && !release_of_confirmed {
         return Err(Refusal::new(
             codes::LEAK_REFUTATION_REQUIRED,
             format!(

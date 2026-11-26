@@ -18,6 +18,7 @@
 #[macro_use]
 mod macros;
 
+pub mod abort_rule;
 pub mod archetypes;
 pub mod attribution;
 pub mod capture_keep;
@@ -55,6 +56,7 @@ pub mod queue;
 pub mod rank;
 pub mod record;
 pub mod redact;
+pub mod release;
 pub mod runtime;
 pub mod schema;
 pub mod series;

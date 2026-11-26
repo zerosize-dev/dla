@@ -6,7 +6,8 @@ use std::path::{Component, Path};
 use chrono::{DateTime, Utc};
 use clap::Args;
 use dla_core::{
-    RunState,
+    RunState, RunView, abort_rule,
+    error::codes as core_codes,
     proc::{self, CLEANUP_TIMEOUT, CleanupAction, RunOutcome},
     state::{ProcessRecord, ProcessRole, RunStatus, now_utc},
 };
@@ -23,10 +24,18 @@ pub struct AbortArgs {
     /// Why the run is abandoned (recorded as the run's incomplete reason).
     #[arg(long)]
     reason: Option<String>,
+    /// What stands in the way of the run, when it is abandoned while budget is left and
+    /// something is open: user, tool, build, environment, privilege or refusal. The reason
+    /// then names it.
+    #[arg(long, value_name = "KIND")]
+    blocker: Option<String>,
+    /// The code of the refusal the run cannot satisfy (with `--blocker refusal`).
+    #[arg(long, value_name = "CODE")]
+    code: Option<String>,
 }
 
 /// What `dla run abort` prints about the run it ended.
-const ENDED: &str = "this run ends here: it is marked aborted for good and nothing more can be recorded in it that counts; dla run init starts a new run; to stop only what a cut command left and keep the run, use dla run stop";
+const ENDED: &str = "this run ends here: it is marked aborted for good and nothing more can be recorded in it that counts, except a verifier's record (dla bundle F, dla ledger verify F), which is still taken and counted; dla run init starts a new run; to stop only what a cut command left and keep the run, use dla run stop";
 
 /// What happened to one record.
 enum Fate {
@@ -321,8 +330,50 @@ pub fn run(ctx: &Ctx, project: &Path, a: AbortArgs) -> Res<Value> {
             format!("dla --run {} run abort", ctx.run_id),
         ));
     }
+    // Budget left and work open: an abort needs a blocker the run cannot pass.
+    let blocker = match a.blocker.as_deref() {
+        Some(kind) => Some(
+            abort_rule::check_blocker(kind, a.reason.as_deref(), a.code.as_deref()).map_err(
+                |(code, message, fix)| {
+                    Failure::refuse(
+                        code,
+                        message,
+                        "a blocker of the run, with the reason that names it",
+                        format!("dla run abort --blocker {kind} {fix}"),
+                    )
+                },
+            )?,
+        ),
+        None => None,
+    };
+    if blocker.as_ref().is_none_or(|b| b.kind != "user") {
+        // A run that cannot be loaded has no work to point at: the abort goes on to its own checks.
+        if blocker.is_none()
+            && let Some(open) = RunView::load(&ctx.run_dir)
+                .ok()
+                .and_then(|view| abort_rule::open_work(&view, &ctx.run_dir))
+        {
+            return Err(Failure::refuse(
+                core_codes::BUDGET_LEFT,
+                format!(
+                    "{} of {} budget minutes remain and work is open ({}); an abort is no way out while the run can still measure",
+                    open.left,
+                    open.total,
+                    open.describe()
+                ),
+                "the open work done, or a blocker the run cannot pass",
+                format!(
+                    "{}   or   dla run abort --blocker <user|tool|build|environment|privilege|refusal> --reason \"<what blocks the run>\"",
+                    open.first
+                ),
+            ));
+        }
+    }
     let stopped = stop_processes(ctx, project, None, "abort")?;
-    let given = a.reason.filter(|r| !r.trim().is_empty());
+    let given = match &blocker {
+        Some(b) => Some(b.incomplete_reason()),
+        None => a.reason.filter(|r| !r.trim().is_empty()),
+    };
     let stamp = now_utc();
     let status = RunState::update(&ctx.run_dir, |st| {
         stopped.apply(st, stamp, "abort");
@@ -339,7 +390,15 @@ pub fn run(ctx: &Ctx, project: &Path, a: AbortArgs) -> Res<Value> {
         Ok((st.status, st.incomplete_reason.clone().unwrap_or_default()))
     })?;
     let (status, reason) = status;
-    Ok(json!({
+    // The verifier is not skipped by an abort: the confirmed findings it has not read are
+    // listed with what to run.
+    let unverified: Vec<Value> = RunView::load(&ctx.run_dir)
+        .map(|v| abort_rule::unverified_confirmed(&v))
+        .unwrap_or_default()
+        .iter()
+        .map(|id| json!({"finding": id.to_string(), "verify": abort_rule::verify_steps(id)}))
+        .collect();
+    let mut out = json!({
         "ok": stopped.failed == 0,
         "run_id": ctx.run_id,
         "message": ENDED,
@@ -351,5 +410,13 @@ pub fn run(ctx: &Ctx, project: &Path, a: AbortArgs) -> Res<Value> {
         "skipped": stopped.skipped,
         "failed": stopped.failed,
         "notes": stopped.notes,
-    }))
+    });
+    if !unverified.is_empty() {
+        out["unverified"] = Value::Array(unverified.clone());
+        out["next"] = json!(format!(
+            "{} confirmed finding(s) have no verification record: run the verifier for each (dla bundle F, one dla:verifier subagent, dla ledger verify); the Stop hook holds the stop until they are verified",
+            unverified.len()
+        ));
+    }
+    Ok(out)
 }

@@ -1050,7 +1050,7 @@ fn a_stamped_run_at_the_floor_closes_with_time_budget() {
 #[test]
 fn an_aborted_run_keeps_its_queue_over_and_nothing_lifts_it() {
     let r = Run::new(&["--budget", "3h"]);
-    r.ok(&["run", "abort", "--reason", "x"]);
+    r.ok(&["run", "abort", "--blocker", "user", "--reason", "x"]);
     let st = r.ok(&["run", "status"]);
     assert_eq!(st["queue"]["python"]["closed"], "over", "{st}");
     let out = r.ok(&["ledger", "close-rest"]);

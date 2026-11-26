@@ -306,6 +306,7 @@
             "N-SCALE",
             "N-INTENT",
             "N-OBSERVER",
+            "N-RELEASE",
             "UNCLASSIFIED"
           ]
         },

@@ -147,6 +147,8 @@ pub struct NewFinding {
     pub amplifiers: Vec<String>,
     /// Repair class.
     pub repair_class: Option<RepairClass>,
+    /// `file:line` of the release an `N-RELEASE` sibling names.
+    pub remover: Option<String>,
     /// Explanation.
     pub explanation: Option<Explanation>,
 }
@@ -170,6 +172,7 @@ impl NewFinding {
             site: None,
             amplifiers: Vec::new(),
             repair_class: None,
+            remover: None,
             explanation: None,
         }
     }
@@ -1269,6 +1272,49 @@ impl Index {
                     f.root_id()
                 ),
             ));
+        }
+        let release = f
+            .hypothesis
+            .as_deref()
+            .and_then(nonleak_id)
+            .is_some_and(|n| n == "N-RELEASE");
+        if release || f.remover.is_some() {
+            let fix = format!(
+                "dla ledger add --sibling-of {} --origin hypothesis --hypothesis N-RELEASE --remover <file:line> --refute-if \"<result>\" --evidence <id>",
+                f.root_id()
+            );
+            if f.remover.is_some() && !release {
+                return Err(Refusal::new(
+                    codes::INVALID_VALUE,
+                    format!(
+                        "{id} names a remover but its hypothesis is not N-RELEASE: a remover is the release line an N-RELEASE sibling names"
+                    ),
+                    "--remover only with --hypothesis N-RELEASE",
+                    fix,
+                ));
+            }
+            match f.remover.as_deref() {
+                None => {
+                    return Err(Refusal::new(
+                        codes::INVALID_VALUE,
+                        format!(
+                            "{id} is an N-RELEASE sibling without a remover: the hypothesis names the line that releases the holder (the stop, close, dispose, unsubscribe or cancel the API requires), so that a run can show that line ran"
+                        ),
+                        "--remover <file:line>, the line that releases the holder",
+                        fix,
+                    ));
+                }
+                Some(r) => {
+                    if let Err(why) = check_site(r) {
+                        return Err(Refusal::new(
+                            codes::INVALID_VALUE,
+                            format!("remover of {id}: {why}"),
+                            "--remover <file:line>, the line that releases the holder",
+                            fix,
+                        ));
+                    }
+                }
+            }
         }
         if !f.siblings.is_empty() {
             return Err(Refusal::new(
@@ -2599,6 +2645,7 @@ impl Ledger {
         f.site = new.site;
         f.amplifiers = new.amplifiers;
         f.repair_class = new.repair_class;
+        f.remover = new.remover;
         f.explanation = new.explanation;
         self.append(Record::FindingAdded { finding: f })
     }

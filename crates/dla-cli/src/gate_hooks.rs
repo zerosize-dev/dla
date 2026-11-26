@@ -877,7 +877,7 @@ fn held_note(state: &RunState, worker: Option<&str>, held: &Missing) -> String {
     let end = if worker.is_some() {
         String::new()
     } else {
-        " To end the run on purpose, dla run abort --reason \"<why>\" (the report says the run is aborted, and why).".to_owned()
+        " Only a blocker the run cannot pass ends it: dla run abort --blocker <kind> --reason \"<what blocks the run>\".".to_owned()
     };
     if held.kind == "growth" {
         // The fix is the commands in order; the first is the one to run now, without its comment.
@@ -963,6 +963,16 @@ fn stop(project_arg: Option<&Path>, input: &Input, subagent: bool) -> Result<Hoo
     let Some(found) = find_run(project_arg, input)? else {
         return Ok(HookOut::allow());
     };
+    // An aborted run holds the stop of the main session while a confirmed finding has no
+    // verification record: an abort does not skip the verifier.
+    if !subagent
+        && found
+            .state
+            .as_ref()
+            .is_some_and(|s| s.status == RunStatus::Aborted)
+    {
+        return stop_aborted(&found);
+    }
     let Some(state) = found
         .state
         .as_ref()
@@ -983,6 +993,62 @@ fn stop(project_arg: Option<&Path>, input: &Input, subagent: bool) -> Result<Hoo
         return stop_worker(&found, &worker);
     }
     stop_core(&found)
+}
+
+/// The stop of an aborted run: held, within [`STOP_LIMIT`] attempts with the same findings
+/// unverified, while a confirmed finding has no verification record. The run keeps its status
+/// (an abort is not stamped incomplete); after the limit the stop is allowed with a note.
+fn stop_aborted(found: &Found) -> Result<HookOut, String> {
+    let view = RunView::load(&found.run_dir).map_err(|e| format!("cannot load the run: {e}"))?;
+    let ids = dla_core::abort_rule::unverified_confirmed(&view);
+    if ids.is_empty() {
+        return Ok(HookOut::allow());
+    }
+    if let Some(reason) = running_command(&found.run_dir, None) {
+        return Ok(HookOut::block(&reason));
+    }
+    let digest = format!(
+        "aborted-unverified:{}",
+        ids.iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let n = RunState::update(&found.run_dir, |s| {
+        let n = if s.stop_block_digest.as_deref() == Some(digest.as_str()) {
+            s.stop_blocks.saturating_add(1)
+        } else {
+            1
+        };
+        s.stop_blocks = n;
+        s.stop_block_digest = Some(digest.clone());
+        Ok(n)
+    })
+    .map_err(|e| format!("cannot update the run state: {e}"))?;
+    if n >= STOP_LIMIT {
+        return Ok(HookOut {
+            stdout: String::new(),
+            stderr: format!(
+                "dla gate: {STOP_LIMIT} stop attempts with {} confirmed finding(s) of the aborted run still unverified; the stop is allowed and the report says they were not verified",
+                ids.len()
+            ),
+            code: 0,
+        });
+    }
+    let first = &ids[0];
+    let list: Vec<String> = ids.iter().take(8).map(ToString::to_string).collect();
+    let more = ids.len().saturating_sub(8);
+    let reason = format!(
+        "dla: this run was aborted, and {} confirmed finding(s) have no verification record: {}{}. An abort does not skip the verifier. For each: `dla bundle F`, then one `dla:verifier` subagent given only the bundle directory, the run id, F and the sha, then `dla ledger verify F --site <file:line|none> --holder <h> --mechanism \"<text>\" --label <ID|UNCLASSIFIED> --bundle <sha>`. Start with `dla bundle {first}`. Stop attempt {n} of {STOP_LIMIT}.",
+        ids.len(),
+        list.join(", "),
+        if more > 0 {
+            format!(" and {more} more")
+        } else {
+            String::new()
+        }
+    );
+    Ok(HookOut::block(&clip(reason, MAX_REASON)))
 }
 
 /// The `dla` command of the run that is still running (registered, its process alive and the

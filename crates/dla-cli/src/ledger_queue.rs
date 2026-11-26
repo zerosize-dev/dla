@@ -118,6 +118,9 @@ pub fn list(ctx: &Ctx, a: ListArgs) -> Res<String> {
             "removers": ann.map_or(0, |a| a.removers.len()),
             "queue": qs,
         });
+        if let Some(r) = super::ledger_release::list_facts(&view, id) {
+            e["release"] = r;
+        }
         if !f.also_origins.is_empty() {
             e["also_origins"] = json!(
                 f.also_origins

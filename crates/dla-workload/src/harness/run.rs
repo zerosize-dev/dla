@@ -981,7 +981,12 @@ fn writer_lines(ctx: &ToolCtx, manifest: &HarnessManifest) -> Vec<lines::Wanted>
     };
     let mut ids: Vec<&dla_core::FindingId> = manifest.targets.iter().collect();
     ids.extend(manifest.probes.iter().filter_map(|p| p.finding.as_ref()));
-    let mut out: Vec<lines::Wanted> = Vec::new();
+    // The release lines an `N-RELEASE` sibling of a target names come first: whether they ran
+    // is what decides that sibling, and the list is cut at [`lines::MAX_LINES`].
+    let mut out: Vec<lines::Wanted> = release_sites(&ledger, ids.iter().copied())
+        .iter()
+        .filter_map(|r| dla_core::ledger::site_parts(r))
+        .collect();
     for id in ids {
         if let Some(a) = ledger.annotation(id) {
             for w in a.adding_writer_lines() {
@@ -995,6 +1000,29 @@ fn writer_lines(ctx: &ToolCtx, manifest: &HarnessManifest) -> Vec<lines::Wanted>
     out
 }
 
+/// The remover lines (`file:line`) of the `N-RELEASE` siblings of the roots of `ids`: the lines
+/// that release the holder, whose executions a run has to show before it decides the sibling.
+fn release_sites<'a>(
+    ledger: &dla_core::Ledger,
+    ids: impl Iterator<Item = &'a dla_core::FindingId>,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for id in ids {
+        let root = ledger.finding(id).map_or_else(
+            || id.parent().unwrap_or_else(|| id.clone()),
+            |f| f.root_id(),
+        );
+        for s in dla_core::release::release_siblings(ledger, &root) {
+            if let Some(r) = &s.remover
+                && !out.contains(r)
+            {
+                out.push(r.clone());
+            }
+        }
+    }
+    out
+}
+
 /// The most lines the agent is asked to count.
 const MAX_LINES: usize = 200;
 
@@ -1004,7 +1032,7 @@ fn target_lines(ctx: &ToolCtx, manifest: &HarnessManifest) -> Vec<String> {
     let Ok(ledger) = ctx.ledger() else {
         return Vec::new();
     };
-    let mut out: Vec<String> = Vec::new();
+    let mut out: Vec<String> = release_sites(&ledger, manifest.targets.iter());
     for id in &manifest.targets {
         let site = ledger.finding(id).and_then(|f| {
             f.site
