@@ -3667,3 +3667,4 @@ unattended run at a time and no builder beside it.
   (3) SKILL.md Stop-hook line reworded (18428 bytes), skill_text pin updated; recovery.md says
   it; VERIFY row extended. fmt + clippy clean. Commit message 39 drafted.
 - Full `cargo test --workspace` running (u141/ws-test.log). Then full dynamic bench alone.
+- Workspace tests on the L+mine tree: EXIT 0, 183 binaries ok. Freed disk (old /tmp bench dirs, JFR dir, old scratch u41/u67/u99/u104/u120/u7acc, bin/dla.prev). Full dynamic bench started on target/debug (u141/dyn-L.out), machine otherwise idle; monitor bor5420ua.
