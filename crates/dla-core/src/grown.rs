@@ -60,6 +60,28 @@ pub struct Grown {
     /// Set when the growth was measured over dumps (no trend exists for the series): see
     /// [`dump_grown`]. `harness` is then the harness the dumps came from, empty when unknown.
     pub dump: Option<DumpLead>,
+    /// The newest alloc-test bound to the family on a harness about the finding that is not made
+    /// for it (a test loop, the project's own workload, or about it only through a probe, a
+    /// column, cited evidence or a capture) and that did not decide the lead: it favored leak or
+    /// was inconclusive, and growth on that harness may be kept by another holder. See
+    /// [`decided_by_alloc_test`].
+    pub shared: Option<SharedAllocTest>,
+}
+
+/// An alloc-test that ran on a harness not made for the finding and so did not decide its growth.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedAllocTest {
+    /// Its discriminator evidence.
+    pub evidence: EvidenceId,
+    /// The harness it ran on.
+    pub harness: String,
+    /// The runtime of that harness (`jvm`, `node`, `python`, `go`, `rust`), for the command that
+    /// makes a driver for the finding.
+    pub runtime: String,
+    /// What it favored.
+    pub favors: crate::discriminator::Favors,
+    /// Why the harness is not made for the finding, in words.
+    pub why: String,
 }
 
 /// A growth a dump series measured, as a lead to decide.
@@ -128,15 +150,42 @@ impl Grown {
                     | FindingState::Unresolved
                     | FindingState::SuspectedStaticOnly
             ),
-            self.pytest_loop,
+            match (&self.shared, self.pytest_loop) {
+                (Some(s), _) => DriverRoute::Shared {
+                    runtime: &s.runtime,
+                    harness: &s.harness,
+                },
+                (None, true) => DriverRoute::PytestLoop,
+                (None, false) => DriverRoute::Own,
+            },
         )
     }
+}
+
+/// Where the alloc-test of a growth goes (see [`commands`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DriverRoute<'a> {
+    /// On the harness that measured the growth.
+    Own,
+    /// The harness is a pytest loop: a small driver of its own first.
+    PytestLoop,
+    /// An alloc-test already ran on `harness` (a test loop, the project's own workload, ...),
+    /// which is not made for the finding and did not decide it: a driver made for the finding
+    /// first. `runtime` is the `--lang` of the harness.
+    Shared {
+        /// The `--lang` value of the harness.
+        runtime: &'a str,
+        /// The harness the alloc-test ran on.
+        harness: &'a str,
+    },
 }
 
 /// The commands that decide the growth of `finding` measured by harness `harness`. When the
 /// series comes from a pytest loop (`pytest_loop`), the alloc-test is not run on that harness
 /// first: it re-runs the whole test suite per run (minutes), so a small driver of its own for
-/// the line comes first (seconds per run), and the alloc-test is on that harness.
+/// the line comes first (seconds per run), and the alloc-test is on that harness. When an
+/// alloc-test of a harness not made for the finding did not decide it ([`DriverRoute::Shared`]),
+/// the same goes for every runtime: a driver made for the finding, then its alloc-test.
 pub fn commands(
     finding: &FindingId,
     harness: &str,
@@ -144,7 +193,7 @@ pub fn commands(
     workload: Option<&str>,
     has_sibling: bool,
     can_test: bool,
-    pytest_loop: bool,
+    route: DriverRoute<'_>,
 ) -> Vec<String> {
     let mut out = Vec::new();
     if !has_sibling {
@@ -159,17 +208,33 @@ pub fn commands(
             workload.unwrap_or("<workload evidence of the harness>")
         ));
     }
-    if pytest_loop {
-        out.push(format!(
-            "dla harness gen --lang python --driver --probe {finding}   (a small driver of its own for the line: a unit that calls the function of that line; a run takes seconds, where an alloc-test on {harness} re-runs the whole test suite per run, minutes)"
-        ));
-        out.push("dla harness run <H>".to_owned());
-        out.push("dla trend <S>".to_owned());
-        out.push(format!(
-            "dla alloc-test <H> --finding {finding}   (on the harness just made, not on {harness})"
-        ));
-    } else {
-        out.push(format!("dla alloc-test {harness} --finding {finding}"));
+    match route {
+        DriverRoute::PytestLoop => {
+            out.push(format!(
+                "dla harness gen --lang python --driver --probe {finding}   (a small driver of its own for the line: a unit that calls the function of that line; a run takes seconds, where an alloc-test on {harness} re-runs the whole test suite per run, minutes)"
+            ));
+            out.push("dla harness run <H>".to_owned());
+            out.push("dla trend <S>".to_owned());
+            out.push(format!(
+                "dla alloc-test <H> --finding {finding}   (on the harness just made, not on {harness})"
+            ));
+        }
+        DriverRoute::Shared {
+            runtime,
+            harness: shared,
+        } => {
+            out.push(format!(
+                "dla harness gen --lang {runtime} --driver --probe {finding}   (a driver made for {finding}: its unit calls the code that adds to the holder, and nothing else of the program; on {shared} many objects are alive together, so growth there may be kept by another holder)"
+            ));
+            out.push("dla harness run <H'>".to_owned());
+            out.push("dla trend <S>".to_owned());
+            out.push(format!(
+                "dla alloc-test <H'> --finding {finding}   (on the harness just made, not on {shared})"
+            ));
+        }
+        DriverRoute::Own => {
+            out.push(format!("dla alloc-test {harness} --finding {finding}"));
+        }
     }
     out
 }
@@ -208,6 +273,104 @@ pub(crate) fn alloc_tested(view: &RunView, root: &FindingId) -> bool {
             && e.result.get("test").and_then(|t| t.as_str()) == Some("plateau+purge")
             && crate::discriminator::finding_of(e).is_some_and(|f| family.contains(&f))
     })
+}
+
+/// What the alloc-tests of a family say about the growth of its root, for [`grown_unmeasured`].
+enum AllocVerdict {
+    /// An alloc-test decided it: the lead is lifted.
+    Decided,
+    /// None did. `shared` is the newest alloc-test that ran on a harness about the finding but
+    /// not made for it, when that is the one that fell short.
+    Open(Option<SharedAllocTest>),
+}
+
+/// Whether an alloc-test decided the growth of the leak-side root `root`, for the lead of
+/// [`grown_unmeasured`] (a passed column of a harness series that points at it).
+///
+/// An alloc-test says something about a finding only on a harness about it ([`harness_about`]),
+/// and growth on a harness not made for it (a test loop, the project's own workload, or a harness
+/// about it only through a probe, a column, cited evidence or a capture) may be kept alive by
+/// another holder: many objects of the program are alive together there. So of the alloc-tests
+/// bound to the family ([`bound_alloc_tests`]) on a harness about the root, the newest decides
+/// (time is evidence order, as in [`route_to_confirm`]):
+///
+/// * it favors non-leak: decided, whatever the harness;
+/// * it ran on a hook driver made for the finding (`Target` or `EntryPath`): decided, whatever it
+///   favors. Favors leak: the confirm route ([`route_to_confirm`]) and the refusal of a close
+///   take over; inconclusive: the close is the model's to make;
+/// * it favors leak or is inconclusive on any other harness: not decided, the lead stays and
+///   carries that alloc-test ([`SharedAllocTest`]). A newer one on a driver made for the
+///   finding lifts it; a newer one on a shared harness replaces an older one made for it, so the
+///   lead is back.
+///
+/// * a driver made for the finding was asked for (`dla harness gen --lang <rt> --driver --probe`)
+///   and refused with `driver-unavailable` for the runtime of that harness: decided, as nothing
+///   better can be built (a Rust crate with only binaries).
+///
+/// With no alloc-test on a harness about the root the lead stays, and so it does for a view with no
+/// run directory (no manifests to read), where any alloc-test decides, as [`alloc_tested`] says.
+fn decided_by_alloc_test(view: &RunView, root: &FindingId) -> AllocVerdict {
+    use crate::discriminator::Favors;
+    let Some(dir) = view.run_dir.as_deref() else {
+        return if alloc_tested(view, root) {
+            AllocVerdict::Decided
+        } else {
+            AllocVerdict::Open(None)
+        };
+    };
+    let family: Vec<FindingId> = view
+        .ledger
+        .findings()
+        .filter(|f| &f.id == root || f.parent.as_ref() == Some(root))
+        .map(|f| f.id.clone())
+        .collect();
+    let records: Vec<&EvidenceRecord> = view.ledger.evidence().collect();
+    let newest = bound_alloc_tests(&records, &family)
+        .into_iter()
+        .rev()
+        .find_map(|(e, favors)| {
+            let harness = e.result.get("harness").and_then(|h| h.as_str())?;
+            let m = crate::harness::HarnessManifest::load(dir, harness).ok()?;
+            let about = harness_about(view, &m, root)?;
+            Some((e, favors, m, about))
+        });
+    let Some((e, favors, m, about)) = newest else {
+        return AllocVerdict::Open(None);
+    };
+    let made_for_it =
+        m.is_hook_driver() && matches!(about, HarnessAbout::Target | HarnessAbout::EntryPath);
+    if favors == Favors::NonLeak || made_for_it {
+        return AllocVerdict::Decided;
+    }
+    // No driver made for the finding can be built here (a Rust crate with only binaries): `dla
+    // harness gen --driver --probe` was refused with `driver-unavailable` and recorded, so the
+    // alloc-test of the harness there is the best measurement the project allows.
+    if crate::harness::HarnessAttempt::driver_unavailable(dir, m.runtime.as_str(), &family) {
+        return AllocVerdict::Decided;
+    }
+    AllocVerdict::Open(Some(SharedAllocTest {
+        evidence: e.evidence_id.clone(),
+        harness: m.id.clone(),
+        runtime: m.runtime.as_str().to_owned(),
+        favors,
+        why: not_made_for(&m, &about),
+    }))
+}
+
+/// Why harness `m`, about a finding as `about` says, is not made for it (a test loop, the
+/// project's own workload, or how it is about the finding when that is all it is).
+pub fn not_made_for(m: &crate::harness::HarnessManifest, about: &HarnessAbout) -> String {
+    match about {
+        HarnessAbout::OwnWorkload if m.is_test_loop() => "a test loop".to_owned(),
+        HarnessAbout::OwnWorkload => "the project's own workload".to_owned(),
+        HarnessAbout::Probe => "about it only through a holder probe".to_owned(),
+        HarnessAbout::Column(c) => format!("about it only through its column {c}"),
+        HarnessAbout::Evidence(e) => format!("about it only through the evidence {e} it cites"),
+        HarnessAbout::Capture(e) => format!("about it only through the capture summary {e}"),
+        HarnessAbout::Target | HarnessAbout::EntryPath => {
+            "a harness that is not a hook driver".to_owned()
+        }
+    }
 }
 
 /// True when the leak-side finding `f` is at `site` (`file:line`) for the tie of an
@@ -812,7 +975,7 @@ pub fn counts_as_growth(c: &crate::trend::ColumnTrend) -> bool {
 
 /// Findings a growth column of a harness series points at (a column whose gate passed, or a
 /// non-flat allocation-site column: [`counts_as_growth`]), or that a trend gave the
-/// verdict `grew`, that no alloc-test evidence is bound to, in the order of the trends. Only open findings and findings closed `unresolved` or
+/// verdict `grew`, that no alloc-test decided ([`decided_by_alloc_test`]), in the order of the trends. Only open findings and findings closed `unresolved` or
 /// `suspected_static_only` count: the others have been decided.
 pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
     let mut out: Vec<Grown> = Vec::new();
@@ -881,10 +1044,13 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
                         | FindingState::SuspectedStaticOnly
                 )
                 || out.iter().any(|g| g.finding == root)
-                || alloc_tested(view, &root)
             {
                 continue;
             }
+            let shared = match decided_by_alloc_test(view, &root) {
+                AllocVerdict::Decided => continue,
+                AllocVerdict::Open(shared) => shared,
+            };
             let want = match ckind {
                 crate::series::ColumnKind::Gauge => EvidenceKind::GrowthSeries,
                 crate::series::ColumnKind::Counter => EvidenceKind::UnitCountSeries,
@@ -920,6 +1086,7 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
                     .any(|s| s.parent.as_ref() == Some(&root) && s.polarity() == Polarity::NonLeak),
                 same_leak: same_leak_as(view, &root, harness),
                 dump: None,
+                shared,
             });
         }
     }
@@ -1206,7 +1373,7 @@ fn dump_grown(view: &RunView, out: &mut Vec<Grown>) {
                 workload.as_deref(),
                 has_sibling,
                 crate::machine::is_allowed(rf.state, FindingState::UnderTest),
-                false,
+                DriverRoute::Own,
             ),
         };
         let command = series
@@ -1231,6 +1398,7 @@ fn dump_grown(view: &RunView, out: &mut Vec<Grown>) {
                 command,
                 commands,
             }),
+            shared: None,
         });
     }
 }
@@ -1364,6 +1532,18 @@ pub fn items(view: &RunView, grown: &[Grown]) -> Vec<BlockingItem> {
                     g.finding,
                     g.state,
                     g.grew_text()
+                )
+            } else if let Some(sh) = &g.shared {
+                format!(
+                    "{} is closed {} but {}, and the alloc-test {} on {} ({}, not a driver made for {}) favored {}: growth there may be kept by another holder",
+                    g.finding,
+                    g.state,
+                    g.grew_text(),
+                    sh.evidence,
+                    sh.harness,
+                    sh.why,
+                    g.finding,
+                    sh.favors
                 )
             } else {
                 format!(
@@ -1607,9 +1787,25 @@ mod tests {
     #[test]
     fn a_pytest_loop_growth_is_decided_on_a_small_driver_of_its_own_first() {
         let f = FindingId::new(2);
-        let plain = commands(&f, "H1", Some("E8"), Some("E6"), true, true, false);
+        let plain = commands(
+            &f,
+            "H1",
+            Some("E8"),
+            Some("E6"),
+            true,
+            true,
+            DriverRoute::Own,
+        );
         assert_eq!(plain.last().unwrap(), "dla alloc-test H1 --finding F2");
-        let loop_cmds = commands(&f, "H1", Some("E8"), Some("E6"), true, true, true);
+        let loop_cmds = commands(
+            &f,
+            "H1",
+            Some("E8"),
+            Some("E6"),
+            true,
+            true,
+            DriverRoute::PytestLoop,
+        );
         assert_eq!(
             &loop_cmds[1..],
             [
@@ -2135,6 +2331,214 @@ mod tests {
         assert_eq!(
             cmds.last().unwrap(),
             &format!("dla ledger confirm F1 --evidence {on_h1}")
+        );
+    }
+
+    // ---- growth measured on a shared loop
+
+    /// A view over [`scene`] whose series S1 of harness H1 grew the column `probe:x` tied to F1;
+    /// H1 is built from `loop_extra`, and a hook driver H2 targets F1.
+    fn shared_loop(l: Ledger, loop_extra: serde_json::Value) -> (tempfile::TempDir, RunView) {
+        let dir = tempfile::tempdir().unwrap();
+        manifest("H1", loop_extra).save(dir.path()).unwrap();
+        manifest(
+            "H2",
+            serde_json::json!({"runtime": "jvm", "targets": ["F1"]}),
+        )
+        .save(dir.path())
+        .unwrap();
+        let mut view = view_with(l, serde_json::json!({"name": "probe:x", "finding": "F1"}));
+        view.run_dir = Some(dir.path().to_path_buf());
+        (dir, view)
+    }
+
+    fn junit_loop() -> serde_json::Value {
+        serde_json::json!({"runtime": "jvm", "tools": [crate::harness::JUNIT_TOOL]})
+    }
+
+    fn grown_f1(view: &RunView) -> Option<Grown> {
+        grown_unmeasured(view)
+            .into_iter()
+            .find(|g| g.finding == f1())
+    }
+
+    #[test]
+    fn a_loop_alloc_test_that_favors_leak_or_is_inconclusive_leaves_the_lead() {
+        for favors in ["leak", "inconclusive"] {
+            let (_d, mut l) = scene();
+            let e = alloc_test(&mut l, favors, "H1");
+            let (_r, view) = shared_loop(l, junit_loop());
+            let g = grown_f1(&view).unwrap_or_else(|| panic!("{favors}: no lead"));
+            let shared = g.shared.clone().unwrap();
+            assert_eq!(shared.evidence, e);
+            assert_eq!(shared.harness, "H1");
+            assert_eq!(shared.runtime, "jvm");
+            assert_eq!(shared.favors.to_string(), favors);
+            assert_eq!(shared.why, "a test loop");
+            let cmds = g.commands();
+            // The driver made for the finding comes first, then its alloc-test: not on the loop.
+            let gen_at = cmds
+                .iter()
+                .position(|c| {
+                    c.starts_with(
+                        "dla harness gen --lang jvm --driver --probe F1   (a driver made for F1",
+                    )
+                })
+                .unwrap_or_else(|| panic!("{cmds:?}"));
+            assert!(cmds[gen_at].contains("on H1 many objects are alive together"));
+            assert_eq!(cmds[gen_at + 1], "dla harness run <H'>");
+            assert_eq!(cmds[gen_at + 2], "dla trend <S>");
+            assert_eq!(
+                cmds[gen_at + 3],
+                "dla alloc-test <H'> --finding F1   (on the harness just made, not on H1)"
+            );
+            assert!(
+                !cmds.iter().any(|c| c.starts_with("dla alloc-test H1")),
+                "{cmds:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_loop_alloc_test_that_favors_non_leak_lifts_the_lead() {
+        let (_d, mut l) = scene();
+        alloc_test(&mut l, "non-leak", "H1");
+        let (_r, view) = shared_loop(l, junit_loop());
+        assert_eq!(grown_f1(&view), None);
+    }
+
+    #[test]
+    fn an_alloc_test_on_a_driver_made_for_the_finding_decides_whatever_it_favors() {
+        for (favors, route) in [("leak", true), ("inconclusive", false), ("non-leak", false)] {
+            let (_d, mut l) = scene();
+            growth(&mut l, "S2");
+            alloc_test(&mut l, "leak", "H1");
+            let e = alloc_test(&mut l, favors, "H2");
+            let (_r, view) = shared_loop(l, junit_loop());
+            assert_eq!(grown_f1(&view), None, "{favors}");
+            // Favoring leak it is the confirm route that holds the finding now.
+            let r = route_to_confirm(&view, &f1());
+            assert_eq!(r.is_some(), route, "{favors}");
+            if let Some(r) = r {
+                assert_eq!((r.discriminator, r.harness.as_str()), (e, "H2"));
+            }
+        }
+    }
+
+    #[test]
+    fn the_newest_alloc_test_decides_between_a_driver_made_for_it_and_the_loop() {
+        // Inconclusive on the driver made for it, then a newer leak on the loop: the lead is back.
+        let (_d, mut l) = scene();
+        alloc_test(&mut l, "inconclusive", "H2");
+        let loop_test = alloc_test(&mut l, "leak", "H1");
+        let (_r, view) = shared_loop(l, junit_loop());
+        let g = grown_f1(&view).expect("the newest alloc-test is the loop's");
+        assert_eq!(g.shared.unwrap().evidence, loop_test);
+        // The other order: the driver's result is the newest and decides.
+        let (_d, mut l) = scene();
+        alloc_test(&mut l, "leak", "H1");
+        alloc_test(&mut l, "inconclusive", "H2");
+        let (_r, view) = shared_loop(l, junit_loop());
+        assert_eq!(grown_f1(&view), None);
+        // A leak on the driver, then a leak on the loop: the loop's is the newest, so there is no
+        // route (`route_to_confirm` reads the same rule) and the lead is back.
+        let (_d, mut l) = scene();
+        alloc_test(&mut l, "leak", "H2");
+        alloc_test(&mut l, "leak", "H1");
+        let (_r, view) = shared_loop(l, junit_loop());
+        assert!(grown_f1(&view).is_some());
+        assert_eq!(route_to_confirm(&view, &f1()), None);
+    }
+
+    #[test]
+    fn a_driver_refused_as_unavailable_lets_the_loop_alloc_test_decide() {
+        let f = f1();
+        for (lang, finding, lifted) in [
+            // The refusal of the runtime of the loop, for the finding: nothing better can be built.
+            ("jvm", "F1", true),
+            // Another runtime, or another finding: the lead stays.
+            ("python", "F1", false),
+            ("jvm", "F2", false),
+        ] {
+            let (_d, mut l) = scene();
+            alloc_test(&mut l, "leak", "H1");
+            let (r, view) = shared_loop(l, junit_loop());
+            assert!(grown_f1(&view).is_some());
+            crate::harness::HarnessAttempt::save_driver_unavailable(
+                r.path(),
+                lang,
+                &[finding.parse().unwrap()],
+                "driver mode needs a crate with a library target",
+            )
+            .unwrap();
+            assert_eq!(grown_f1(&view).is_none(), lifted, "{lang} {finding} {f}");
+        }
+    }
+
+    #[test]
+    fn the_projects_own_workload_and_a_probe_only_harness_behave_like_the_test_loop() {
+        for (extra, why) in [
+            (
+                serde_json::json!({"mode": "command", "workload": "go:main:.:./cmd/x"}),
+                "the project's own workload",
+            ),
+            (
+                serde_json::json!({"probes": [{"id": "P1", "finding": "F1",
+                    "target": {"kind": "py-module", "module": "m"}}]}),
+                "about it only through a holder probe",
+            ),
+        ] {
+            let (_d, mut l) = scene();
+            alloc_test(&mut l, "leak", "H1");
+            let (_r, view) = shared_loop(l, extra.clone());
+            let g = grown_f1(&view).unwrap_or_else(|| panic!("{extra}"));
+            assert_eq!(g.shared.unwrap().why, why);
+        }
+    }
+
+    #[test]
+    fn an_alloc_test_on_a_harness_not_about_the_finding_decides_nothing() {
+        let (_d, mut l) = scene();
+        alloc_test(&mut l, "non-leak", "H9");
+        let (_r, view) = shared_loop(l, junit_loop());
+        // No manifest H9: the alloc-test is not about the finding on any harness we know.
+        let g = grown_f1(&view).unwrap();
+        assert_eq!(g.shared, None);
+    }
+
+    #[test]
+    fn without_a_run_directory_any_alloc_test_still_lifts_the_lead() {
+        let (_d, mut l) = scene();
+        alloc_test(&mut l, "leak", "H1");
+        let mut view = view_with(l, serde_json::json!({"name": "probe:x", "finding": "F1"}));
+        view.run_dir = None;
+        assert_eq!(grown_f1(&view), None);
+    }
+
+    #[test]
+    fn a_closed_finding_that_a_loop_alloc_test_did_not_decide_is_listed_in_its_words() {
+        let (_d, mut l) = scene();
+        let e = alloc_test(&mut l, "leak", "H1");
+        close_f1(&mut l);
+        let (_r, view) = shared_loop(l, junit_loop());
+        let grown = grown_unmeasured(&view);
+        let items = items(&view, &grown);
+        assert_eq!(items.len(), 1);
+        let d = &items[0].description;
+        assert!(d.contains("F1 is closed unresolved"), "{d}");
+        assert!(
+            d.contains(&format!(
+                "the alloc-test {e} on H1 (a test loop, not a driver made for F1) favored leak: growth there may be kept by another holder"
+            )),
+            "{d}"
+        );
+        assert!(!d.contains("no alloc-test decided it"), "{d}");
+        assert!(
+            items[0]
+                .fix
+                .contains("dla harness gen --lang jvm --driver --probe F1"),
+            "{}",
+            items[0].fix
         );
     }
 

@@ -2258,6 +2258,9 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     if let Some(hint) = &stacks_note {
         out.insert("stacks_hint".into(), json!(hint));
     }
+    if let Some(hint) = shared_hint(&tc, &manifest, bound.as_ref(), favors) {
+        out.insert("shared_hint".into(), json!(hint));
+    }
     if !partial.is_empty() {
         out.insert(
             "partial".into(),
@@ -2349,6 +2352,46 @@ pub(crate) fn stacks_commands(
         format!("dla harness run {harness} --mode {mode} --capture {capture}"),
         line,
     ]
+}
+
+/// The sentence of the `shared_hint` key: the result favors leak on a harness that is about the
+/// bound finding but not made for it (a test loop, the project's own workload, or about it only
+/// through a probe, a column, cited evidence or a capture). Growth there may be kept by another
+/// holder, since many objects of the program are alive together; a driver made for the finding
+/// decides it alone. `None` for any other result.
+fn shared_hint(
+    tc: &ToolCtx,
+    manifest: &HarnessManifest,
+    bound: Option<&Finding>,
+    favors: Favors,
+) -> Option<String> {
+    let root = bound?.root_id();
+    if favors != Favors::Leak {
+        return None;
+    }
+    let view = dla_core::RunView::load_for(&tc.run_dir, tc.worker.as_deref()).ok()?;
+    let about = dla_core::grown::harness_about(&view, manifest, &root)?;
+    shared_hint_text(manifest, &about, &root)
+}
+
+/// The text of [`shared_hint`] for a harness that is about `root` as `about` says; `None` when
+/// the harness is a hook driver made for it.
+fn shared_hint_text(
+    manifest: &HarnessManifest,
+    about: &dla_core::grown::HarnessAbout,
+    root: &FindingId,
+) -> Option<String> {
+    use dla_core::grown::HarnessAbout;
+    if manifest.is_hook_driver() && matches!(about, HarnessAbout::Target | HarnessAbout::EntryPath)
+    {
+        return None;
+    }
+    Some(format!(
+        "a confirm from {h} may count growth that another holder keeps ({why}: many objects of the program are alive together there); a driver made for {root} decides it alone: `dla harness gen --lang {rt} --driver --probe {root}`, then dla harness run <H'>, dla trend <S>, dla alloc-test <H'> --finding {root}",
+        h = manifest.id,
+        why = dla_core::grown::not_made_for(manifest, about),
+        rt = manifest.runtime.as_str()
+    ))
 }
 
 /// The sentence of the `stacks_hint` key (never cut by the output bound).
@@ -4829,6 +4872,34 @@ mod tests {
                 "target": {"kind": "jvm-static", "class": "org.acme.Cache", "field": "resolved"}}]
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn a_leak_on_a_harness_not_made_for_the_finding_says_so_and_a_driver_made_for_it_does_not() {
+        use dla_core::grown::HarnessAbout;
+        let f = FindingId::new(3);
+        let loop_m = test_loop_manifest("F3", json!(["junit-platform-launcher"]));
+        let hint = shared_hint_text(&loop_m, &HarnessAbout::OwnWorkload, &f).unwrap();
+        assert!(
+            hint.contains(
+                "a confirm from H1 may count growth that another holder keeps (a test loop"
+            ),
+            "{hint}"
+        );
+        assert!(
+            hint.contains("a driver made for F3 decides it alone: `dla harness gen --lang jvm --driver --probe F3`"),
+            "{hint}"
+        );
+        // About it only through a probe: a hook driver, but not made for it.
+        let hooks = test_loop_manifest("F3", json!([]));
+        let probe = shared_hint_text(&hooks, &HarnessAbout::Probe, &f).unwrap();
+        assert!(
+            probe.contains("about it only through a holder probe"),
+            "{probe}"
+        );
+        // Made for it: no hint.
+        assert_eq!(shared_hint_text(&hooks, &HarnessAbout::Target, &f), None);
+        assert_eq!(shared_hint_text(&hooks, &HarnessAbout::EntryPath, &f), None);
     }
 
     fn finding(n: u32) -> Finding {

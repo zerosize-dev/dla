@@ -835,15 +835,16 @@ pub fn prefetch_go_toolchain_with(go: &Path, cache: &Path, version: &str) -> Opt
     if dir.join("bin").is_dir() {
         return Some(dir);
     }
-    let fetched = Command::new(go)
-        .arg("version")
-        .current_dir(std::env::temp_dir())
-        .env("GOTOOLCHAIN", version)
-        .env("GOMODCACHE", cache)
-        .env_remove("GOFLAGS")
-        .stdin(Stdio::null())
-        .output()
-        .is_ok_and(|o| o.status.success());
+    let fetched = crate::spawn::output(
+        Command::new(go)
+            .arg("version")
+            .current_dir(std::env::temp_dir())
+            .env("GOTOOLCHAIN", version)
+            .env("GOMODCACHE", cache)
+            .env_remove("GOFLAGS")
+            .stdin(Stdio::null()),
+    )
+    .is_ok_and(|o| o.status.success());
     (fetched && dir.join("bin").is_dir()).then_some(dir)
 }
 

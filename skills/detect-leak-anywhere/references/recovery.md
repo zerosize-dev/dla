@@ -96,7 +96,10 @@ INCOMPLETE with the reason "stop hook let the stop through after 3 stop attempts
 and the missing ids, and the report says so. While budget is over the floor and a `queue` is open (and no
 command was refused for time with nothing smaller that fits), no stop attempt is counted and none is let
 through: the block names the queue's next command and `dla run abort --reason "<why>"`, the deliberate way
-to end the run. While a `dla` command of the run (census, sweep, harness run,
+to end the run. With no queue open, growth that was measured and not decided holds the stop the same way,
+whether its finding is closed (a `growth` item) or still open (a `finding` item): the block names the first
+command of its route, often `dla harness gen --lang <rt> --driver --probe <F>` when an alloc-test of a test
+loop or of the project's own workload did not decide it. While a `dla` command of the run (census, sweep, harness run,
 trend, alloc-test, report, gap, intervene) is still running, a stop attempt is blocked with the command named
 and is not counted (a command running longer than 30 minutes is taken for hung). A stamp does not close the
 measurement queue: the time left decides, `dla run status` shows the queue and a `stop_stamp` field, and the next

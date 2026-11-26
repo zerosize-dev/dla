@@ -1151,6 +1151,22 @@ fn follow_growth_route(fx: &mut Fx, fix: &str) -> String {
     said.join("; ")
 }
 
+/// [`follow_growth_route`] for the finding `target`, then, as a model does when `dla harness gen
+/// --driver --probe` was refused with `driver-unavailable` (the run records it, and the growth
+/// measured on a harness not made for the finding is then decided by that harness's alloc-test),
+/// the close of `target` once more.
+fn follow_growth_route_then_close(fx: &mut Fx, target: &str, fix: &str) -> String {
+    let mut said = follow_growth_route(fx, fix);
+    if said.contains("refused driver-unavailable") {
+        let o = resolve_unresolved_once(fx, target, None);
+        said.push_str(&format!(
+            "; no driver can be made, resolve {target} unresolved again: {}",
+            if o.ok { "ok".to_owned() } else { refusal(&o) }
+        ));
+    }
+    said
+}
+
 /// Whether `o` is the refusal of closing a finding whose growth was measured and not decided.
 fn growth_not_measured(o: &Out) -> Option<String> {
     (o.code() == "growth-not-measured")
@@ -1205,7 +1221,10 @@ fn fix_item(fx: &mut Fx, item: &Item, tried: &mut BTreeSet<String>) -> Option<St
                 if o.ok { "ok".to_owned() } else { refusal(&o) }
             );
             if let Some(route) = growth_not_measured(&o) {
-                said.push_str(&format!("; route: {}", follow_growth_route(fx, &route)));
+                said.push_str(&format!(
+                    "; route: {}",
+                    follow_growth_route_then_close(fx, &item.id, &route)
+                ));
             }
             Some(said)
         }
@@ -1218,7 +1237,7 @@ fn fix_item(fx: &mut Fx, item: &Item, tried: &mut BTreeSet<String>) -> Option<St
             Some(format!(
                 "growth {}: {}",
                 item.id,
-                follow_growth_route(fx, &item.fix)
+                follow_growth_route_then_close(fx, &item.id, &item.fix)
             ))
         }
         "residual_capture" => take_capture(fx, &item.fix, tried),
@@ -1283,7 +1302,10 @@ fn fix_item(fx: &mut Fx, item: &Item, tried: &mut BTreeSet<String>) -> Option<St
                     if r.ok { "ok".to_owned() } else { refusal(&r) }
                 ));
                 if let Some(route) = growth_not_measured(&r) {
-                    said.push_str(&format!("; route: {}", follow_growth_route(fx, &route)));
+                    said.push_str(&format!(
+                        "; route: {}",
+                        follow_growth_route_then_close(fx, new, &route)
+                    ));
                 }
             }
             Some(said)

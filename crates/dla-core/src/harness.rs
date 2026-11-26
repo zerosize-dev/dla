@@ -489,6 +489,10 @@ pub struct HarnessAttempt {
 /// test loop: the loop was tried, so the queue goes on with the driver batches.
 pub const PYTEST_ATTEMPT_FILE: &str = "pytest-loop-attempt.json";
 
+/// `harness/driver-unavailable.json`: the findings a driver made for them was refused for
+/// (`driver-unavailable`), with the runtime; see [`HarnessAttempt::save_driver_unavailable`].
+pub const DRIVER_UNAVAILABLE_FILE: &str = "driver-unavailable.json";
+
 impl HarnessAttempt {
     /// `<run_dir>/harness/pytest-loop-attempt.json`.
     pub fn pytest_loop_path(run_dir: &Path) -> PathBuf {
@@ -520,6 +524,56 @@ impl HarnessAttempt {
     /// True when a pytest-loop generation was refused in this run.
     pub fn pytest_loop_refused(run_dir: &Path) -> bool {
         Self::pytest_loop_path(run_dir).is_file()
+    }
+
+    /// `<run_dir>/harness/driver-unavailable.json`.
+    pub fn driver_unavailable_path(run_dir: &Path) -> PathBuf {
+        run_dir.join(HARNESS_DIR).join(DRIVER_UNAVAILABLE_FILE)
+    }
+
+    /// Records that `dla harness gen --lang <lang> --driver --probe <findings>` was refused with
+    /// `driver-unavailable`: no driver made for these findings can be built in this project.
+    pub fn save_driver_unavailable(
+        run_dir: &Path,
+        lang: &str,
+        findings: &[crate::ids::FindingId],
+        message: &str,
+    ) -> Result<(), Error> {
+        let path = Self::driver_unavailable_path(run_dir);
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir).map_err(|e| Error::io(dir, e))?;
+        }
+        let mut all: Vec<Value> = fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        for f in findings {
+            all.push(serde_json::json!({
+                "lang": lang, "finding": f.to_string(), "message": message,
+            }));
+        }
+        write_atomic(&path, to_pretty_json(&all).as_bytes())
+    }
+
+    /// True when a driver made for one of `family` was refused with `driver-unavailable` for
+    /// runtime `lang` in this run ([`Self::save_driver_unavailable`]).
+    pub fn driver_unavailable(
+        run_dir: &Path,
+        lang: &str,
+        family: &[crate::ids::FindingId],
+    ) -> bool {
+        let Some(all) = fs::read_to_string(Self::driver_unavailable_path(run_dir))
+            .ok()
+            .and_then(|t| serde_json::from_str::<Vec<Value>>(&t).ok())
+        else {
+            return false;
+        };
+        all.iter().any(|r| {
+            r["lang"].as_str() == Some(lang)
+                && r["finding"]
+                    .as_str()
+                    .is_some_and(|f| family.iter().any(|m| m.to_string() == f))
+        })
     }
 
     /// The current time as the timestamps of this record are written.

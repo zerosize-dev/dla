@@ -373,13 +373,23 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
             .as_deref()
             .and_then(|rt| queues.iter().find(|q| q.runtime == rt));
         // A candidate whose column grew is a lead to decide, not one to close: a passed
-        // column points at it and no alloc-test is bound to it. The commands are printed in
+        // column points at it and no alloc-test decided it. The commands are printed in
         // order and each one is accepted as printed.
         if let Some(g) = grown.iter().find(|g| g.finding == f.id) {
             let why = if g.dump.is_some() {
                 format!(
                     "{} and nothing decided it: {}",
                     g.grew_text(),
+                    g.commands().join("   then   ")
+                )
+            } else if let Some(sh) = &g.shared {
+                format!(
+                    "its column grew, and the alloc-test {} on {} ({}, not a driver made for {}) favored {}: growth there may be kept by another holder: {}",
+                    sh.evidence,
+                    sh.harness,
+                    sh.why,
+                    f.id,
+                    sh.favors,
                     g.commands().join("   then   ")
                 )
             } else {

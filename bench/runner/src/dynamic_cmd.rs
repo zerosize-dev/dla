@@ -568,7 +568,7 @@ fn run_limited(cmd: &mut Command, limit: Duration) -> Ended {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
-    let mut child = match cmd.spawn() {
+    let mut child = match crate::spawn::spawn(cmd) {
         Ok(c) => c,
         Err(e) => return Ended::Spawn(e.to_string()),
     };

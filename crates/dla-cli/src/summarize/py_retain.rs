@@ -829,7 +829,7 @@ fn route_command(
         None,
         has_sibling,
         can_test,
-        false,
+        dla_core::grown::DriverRoute::Own,
     );
     cmds.into_iter().next().unwrap_or_default()
 }

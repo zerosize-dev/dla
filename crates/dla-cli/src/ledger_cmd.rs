@@ -1310,8 +1310,9 @@ fn resolve_checklist(ctx: &Ctx, ledger: &mut Ledger, item: String, a: ResolveArg
 }
 
 /// Refuses to close `id` (`unresolved` or `suspected_static_only`) while a passed growth
-/// column points at it and no alloc-test evidence is bound to it: the fix is the commands that
-/// decide it. An aborted run is not held to it.
+/// column points at it and no alloc-test decided it (one that favors non-leak, or one on a driver
+/// made for the finding; a leak or inconclusive result on a test loop or the project's own
+/// workload does not): the fix is the commands that decide it. An aborted run is not held to it.
 fn refuse_grown_unmeasured(ctx: &Ctx, id: &FindingId, loaded: Option<&Loaded<'_>>) -> Res<()> {
     let own;
     let own_grown;
@@ -1337,6 +1338,20 @@ fn refuse_grown_unmeasured(ctx: &Ctx, id: &FindingId, loaded: Option<&Loaded<'_>
             ),
             format!(
                 "{id} decided by the result of that dump series: its non-leak sibling refuted and the finding confirmed (growth measured is decided, not closed)"
+            ),
+        )
+    } else if let Some(sh) = &g.shared {
+        (
+            format!(
+                "{id} cannot be closed: {}, and the alloc-test {} on {} ({}, not a driver made for {id}) favored {}: growth there may be kept by another holder",
+                g.grew_text(),
+                sh.evidence,
+                sh.harness,
+                sh.why,
+                sh.favors
+            ),
+            format!(
+                "an alloc-test of {id} on a driver made for it (growth measured is decided, not closed)"
             ),
         )
     } else if g.pytest_loop {

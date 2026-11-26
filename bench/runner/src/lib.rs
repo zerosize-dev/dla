@@ -17,6 +17,7 @@ pub mod metrics_ext;
 pub mod model;
 pub mod run;
 pub mod schema_cmd;
+pub mod spawn;
 pub mod static_cmd;
 pub mod table;
 pub mod validate;

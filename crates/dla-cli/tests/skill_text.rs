@@ -160,7 +160,7 @@ fn nothing_fits_and_before_you_stop_say_what_they_must() {
         "dla gate check --final",
         "reason and a next step",
         "INCOMPLETE",
-        "a `queue` open it lets none through",
+        "a `queue` or undecided growth open, none pass",
         "dla run abort --reason \"<why>\"",
         "integrity seals",
     ] {
