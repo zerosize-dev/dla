@@ -3701,3 +3701,4 @@ unattended run at a time and no builder beside it.
   (M had "every"); new test a_set_of_which_a_summary_read_one_dump_is_read, mutation caught;
   VERIFY row updated. fmt + clippy clean. Workspace tests running (u141/ws-test-M.log).
   Commit message 40 drafted.
+- M tree workspace tests: 184 ok, 0 failed. Deleted target build dirs (disk 1.5G). Next: L rerun green -> commit 0f80f18 (msg 39) -> push -> THEN push M snapshot with CI (a CI push now would cancel L's rerun).
