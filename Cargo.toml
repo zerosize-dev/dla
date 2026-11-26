@@ -5,21 +5,21 @@ exclude = ["bench/fixtures"]
 
 [workspace.package]
 edition = "2024"
-version = "0.9.0-preview.10"
+version = "0.9.0-preview.11"
 rust-version = "1.89"
 repository = "https://github.com/zerosize-dev/dla"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-dla-core = { path = "crates/dla-core", version = "0.9.0-preview.10" }
-dla-report = { path = "crates/dla-report", version = "0.9.0-preview.10" }
-dla-probe = { path = "crates/dla-probe", version = "0.9.0-preview.10" }
-dla-backends = { path = "crates/dla-backends", version = "0.9.0-preview.10" }
-dla-census = { path = "crates/dla-census", version = "0.9.0-preview.10" }
-dla-workload = { path = "crates/dla-workload", version = "0.9.0-preview.10" }
-dla-stats = { path = "crates/dla-stats", version = "0.9.0-preview.10" }
-dla-sample = { path = "crates/dla-sample", version = "0.9.0-preview.10" }
-dla-parsers = { path = "crates/dla-parsers", version = "0.9.0-preview.10" }
+dla-core = { path = "crates/dla-core", version = "0.9.0-preview.11" }
+dla-report = { path = "crates/dla-report", version = "0.9.0-preview.11" }
+dla-probe = { path = "crates/dla-probe", version = "0.9.0-preview.11" }
+dla-backends = { path = "crates/dla-backends", version = "0.9.0-preview.11" }
+dla-census = { path = "crates/dla-census", version = "0.9.0-preview.11" }
+dla-workload = { path = "crates/dla-workload", version = "0.9.0-preview.11" }
+dla-stats = { path = "crates/dla-stats", version = "0.9.0-preview.11" }
+dla-sample = { path = "crates/dla-sample", version = "0.9.0-preview.11" }
+dla-parsers = { path = "crates/dla-parsers", version = "0.9.0-preview.11" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = { version = "1", features = ["chrono04"] }

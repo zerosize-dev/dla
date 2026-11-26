@@ -3733,3 +3733,7 @@ unattended run at a time and no builder beside it.
   only. I reviewed the code; full local dynamic on N's tree running (u145/dyn-N.out, monitor
   bwp0p9318) to catch GC-sawtooth false leaks on JVM/Node/Python twins. Commit message 41 drafted.
 - M's CI 9b24572 (run 45768242859): all green but dynamic still running at 07:20.
+- 08:05 UTC: M's CI green -> main ad1e3cb (msg 40); version 18a69c6 "Version 0.9.0-preview.11"
+  (L + M); pushed main + dev; release.yml publish=true dispatched. N's round goes to preview.12.
+  After release: refresh rig (bin + plugin from 18a69c6), then reruns (interceptors, logstash,
+  otel-go, otel-python) one at a time, when the local N dynamic run is done.
