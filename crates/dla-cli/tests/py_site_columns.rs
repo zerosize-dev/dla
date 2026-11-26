@@ -1582,6 +1582,42 @@ fn resolve_unmeasured(r: &Run, f: &str, reason: &str) -> Out {
     )
 }
 
+/// A hook driver H9 made for finding `f` (it targets it) and an alloc-test of `f` on it that
+/// came out inconclusive, written directly (a real one needs the built harness): what decides a
+/// growth the loop that measured it could not.
+fn decided_on_a_driver_made_for(r: &Run, f: &str) {
+    use dla_core::{Authority, EvidenceKind, HarnessManifest, Ledger, NewEvidence, Source, Tool};
+    serde_json::from_value::<HarnessManifest>(serde_json::json!({
+        "id": "H9", "runtime": "python", "mode": "driver",
+        "scratch": "x", "run": {"argv": ["x"], "cwd": "."},
+        "warmup": 1, "iterations": 8, "step": 1, "key_modes": ["fresh"],
+        "targets": [f], "agent": "driver-python", "timeout_secs": 60,
+    }))
+    .unwrap()
+    .save(&r.run_dir)
+    .unwrap();
+    let mut l = Ledger::load(&r.run_dir).unwrap();
+    l.add_evidence(NewEvidence {
+        source: Source::Repo {
+            commit: "c".into(),
+            path: None,
+        },
+        tool: Tool {
+            name: "t".into(),
+            version: "1".into(),
+        },
+        authority: Authority::Test,
+        kind: EvidenceKind::Discriminator,
+        result: serde_json::json!({"test": "plateau+purge", "favors": "inconclusive",
+            "supports": [], "finding": f, "harness": "H9"}),
+        raw: None,
+        coverage: dla_core::evidence::EvidenceCoverage::default(),
+        limitations: vec![],
+        unknowns: vec![],
+    })
+    .unwrap();
+}
+
 /// A line that grew in a run with one flat step (a cut run counted as a unit) has a column that
 /// the counter gate fails and whose shape is `steady`. A finding at that line is grown all the
 /// same: it cannot be closed unmeasured, `close-rest` leaves it, and the gate's fix is the route
@@ -1679,6 +1715,31 @@ fn a_finding_at_a_steady_line_whose_gate_failed_is_grown_and_cannot_be_closed_as
     ok(&r.project, &["ledger", "test", &f, "--evidence", &workload]);
     let a = ok(&r.project, &["alloc-test", "H1", "--finding", &f]);
     assert_eq!(a["decided_by"], COLUMN, "{a}");
+    // H1 is about the finding only through its column: its alloc-test does not decide the growth
+    // (another holder may keep what grew there), and says so.
+    assert!(
+        a["shared_hint"].is_string() == (a["favors"] == "leak"),
+        "{a}"
+    );
+    if a["favors"] == "leak" {
+        let refused = resolve_unmeasured(&r, &f, "inconclusive");
+        assert_ne!(refused.code, 0, "{}", refused.text);
+        assert_eq!(
+            refused.json["error"]["code"], "growth-not-measured",
+            "{}",
+            refused.text
+        );
+        assert!(
+            refused.json["error"]["fix"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("--driver --probe {f}")),
+            "{}",
+            refused.text
+        );
+    }
+    // On a driver made for it, the existing rules decide, and it closes as before.
+    decided_on_a_driver_made_for(&r, &f);
     let closed = resolve_unmeasured(&r, &f, "inconclusive");
     assert_eq!(closed.code, 0, "{}", closed.text);
 }
@@ -2251,8 +2312,9 @@ fn close_rest_names_the_route_for_a_candidate_a_trend_gave_the_verdict_grew() {
 }
 
 /// An alloc-test on the loop the line came from (H1 targets nothing) favors leak: the growth is
-/// the whole workload's, not isolated, so the finding can still be closed unresolved, `close-rest`
-/// leaves no route behind, and the gate's fix is not the route.
+/// the whole workload's, not isolated, so it is no route to confirm (`close-rest` leaves no route
+/// behind, and the gate's fix is not the route), and it does not let the growth be closed either:
+/// a driver made for the finding decides it.
 #[test]
 fn an_alloc_test_of_a_loop_that_targets_nothing_does_not_hold_the_close() {
     if !have_python() {
@@ -2273,6 +2335,33 @@ fn an_alloc_test_of_a_loop_that_targets_nothing_does_not_hold_the_close() {
     }
     let out = ok(&r.project, &["ledger", "close-rest"]);
     assert!(!out.to_string().contains("leak-favored"), "{out}");
+    // It is no route to confirm, and it does not let the growth be closed either: the loop
+    // measured it with many objects alive together, so another holder may keep what grew. The
+    // refusal names the alloc-test and the driver that decides it.
+    let refused = resolve_unmeasured(&r, &f, "inconclusive");
+    assert_ne!(refused.code, 0, "{}", refused.text);
+    assert_eq!(
+        refused.json["error"]["code"], "growth-not-measured",
+        "{}",
+        refused.text
+    );
+    let message = refused.json["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains(&format!("the alloc-test {d} on H1")) && message.contains("favored leak"),
+        "{message}"
+    );
+    assert!(
+        refused.json["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains(&format!(
+                "dla harness gen --lang python --driver --probe {f}"
+            )),
+        "{}",
+        refused.text
+    );
+    assert!(a["shared_hint"].is_string(), "{a}");
+    decided_on_a_driver_made_for(&r, &f);
     let closed = resolve_unmeasured(&r, &f, "inconclusive");
     assert_eq!(closed.code, 0, "{}", closed.text);
 }

@@ -3608,3 +3608,29 @@ unattended run at a time and no builder beside it.
 - Set A on preview.9: interceptors PARTLY, fastrace NOT, otel-python FOUND, otel-go NOT (early
   stop), logstash NOT (premature inconclusive) + a second real leak found.
 - Kept /root/dla-real/r3-logstash-keep; run dir deleted.
+
+## 01:00 UTC 2026-11-26: same-capture tree in CI; builder L on the shared-loop close
+
+- Snapshot d00a405 (G+H+I+J+K + rank + same-capture rule) pushed WITH CI; waiter u115/ci-wip-43
+  (task bxh90ihlk). When green: commit-snapshot-tree.sh d00a4055e5f067ef885f07d5c1a0a60a51e3a08a
+  commit-message-38.txt; push main + dev; 0.9.0-preview.10; release; refresh rig; reruns.
+- Local full dynamic bench on COPIED binaries $sp/bin-d00a405/{dla,dla-bench} (task b3bgi6zm6,
+  out g-replay/dyn-all.out) so builders can rebuild target/.
+- logstash F109 mechanism (r3-logstash-keep ledger seq 322-398): model ran alloc-test on H4 (JUnit
+  loop) for 13 grown findings; all favored leak; its own script refuted siblings then SKIPPED
+  confirm ("shared loop") and resolved all 13 inconclusive; accepted because alloc_tested() lifts
+  on ANY bound alloc-test, and route_to_confirm needs a made-for-it driver. Builder L (sonnet,
+  brief wip-notes/shared-loop-brief.md, scratch u140): lift only by non-leak or a made-for-it
+  driver; refusal/gate/close-rest name `harness gen --driver --probe F`; alloc-test hint; stop
+  hook holds on open growth too. Task #121.
+- CI d00a405 (run 45731648014): all green except clippy+test ubuntu: dla-bench
+  ops::a_holder_the_alloc_test_evidence_names_is_used_last. CAUSE: ETXTBSY race (a fork in another
+  test thread holds the write fd of a just-written fake script; exec fails; the first fake call
+  never ran). Stress (--test-threads 32) reproduced 6/30 in fixture_toolchain tests too. FIX (mine,
+  working tree, NOT in d00a405): bench/runner/src/spawn.rs (spawn/output retry on os error 26, 50 x
+  20 ms), used by dynamic_cmd::run_limited, fixture_toolchain run_tool/java/capture, run.rs go
+  prefetch; 2 tests; mutation TRIES=0 caught; stress 0/30. Re-ran failed jobs of 45731648014
+  (waiter u115/ci-wip-43b). Fix goes with builder L's round.
+- Local full dynamic on d00a405 binaries: 62/64 pass, 1 xfail, go-buffer-pool FAIL (alloc-test
+  killed at 900 s; machine loaded by builder builds + stress loops; CI dynamic passed). Rerun alone.
+- go-buffer-pool alone on d00a405 binaries: pass (load avg was ~19 during the full run). So d00a405 locally: 63/64 + 1 xfail. spawn.rs clippy fixed (needless borrow); dla-bench clippy clean.

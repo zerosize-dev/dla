@@ -823,13 +823,15 @@ fn budget_note(state: &RunState, worker: Option<&str>, run_dir: &Path) -> String
     }
 }
 
-/// The open `queue` item that holds a stop: the budget is over its floor, no command was
-/// refused for time with nothing smaller that fits, and the final gate lists an open queue.
+/// The open item that holds a stop: the budget is over its floor, no command was refused for
+/// time with nothing smaller that fits, and the final gate lists an open `queue` or, with no
+/// queue, a `growth` item (growth that was measured and not decided: a closed finding, or a
+/// detector lead, whose fix is the commands that decide it). A queue wins when both are listed.
 /// A stop attempt then is not counted toward [`STOP_LIMIT`]: the run has time and ranked
-/// candidates it never measured, so giving up three times is no reason to let it end.
-/// Findings and open items alone (no queue) never hold a stop, and neither does a queue
-/// that closed (`intake.workload` resolved unresolved), because then none is listed.
-fn held_queue<'a>(
+/// candidates or measured growth it never decided, so giving up three times is no reason to
+/// let it end. Findings and open items alone never hold a stop, and neither does a queue that
+/// closed (`intake.workload` resolved unresolved), because then none is listed.
+fn held_item<'a>(
     state: Option<&RunState>,
     worker: Option<&str>,
     run_dir: &Path,
@@ -840,24 +842,44 @@ fn held_queue<'a>(
     if dla_core::toolctx::nothing_fits_since(run_dir, worker, state.budget.started_at) {
         return None;
     }
-    missing.iter().find(|m| m.kind == "queue")
+    missing
+        .iter()
+        .find(|m| m.kind == "queue")
+        .or_else(|| missing.iter().find(|m| m.kind == "growth"))
 }
 
 /// The line that says a stop was not counted, and what to do instead.
-fn held_note(state: &RunState, worker: Option<&str>, queue: &Missing) -> String {
+fn held_note(state: &RunState, worker: Option<&str>, held: &Missing) -> String {
     let (left, total) = gate::budget_over_floor(state, worker).unwrap_or((0, 0));
-    // The fix lists the whole round (generate, fill, run, trend); the next batch is its first command.
-    let fix = queue.fix.split(", ").next().unwrap_or(&queue.fix);
-    let fix = clip(fix.to_owned(), 240);
     // A worker runs its slice: ending the whole run is not its call, so it is not offered one.
     let end = if worker.is_some() {
         String::new()
     } else {
         " To end the run on purpose, dla run abort --reason \"<why>\" (the report says the run is aborted, and why).".to_owned()
     };
+    if held.kind == "growth" {
+        // The fix is the commands in order; the first is the one to run now, without its comment.
+        let first = held.fix.split("   then   ").next().unwrap_or(&held.fix);
+        let first = clip(
+            first
+                .split("   (")
+                .next()
+                .unwrap_or(first)
+                .trim()
+                .to_owned(),
+            240,
+        );
+        return format!(
+            "This stop is not counted: {left} of {total} budget minutes remain and growth that was measured is not decided ({}). Run {first}.{end}",
+            held.id
+        );
+    }
+    // The fix lists the whole round (generate, fill, run, trend); the next batch is its first command.
+    let fix = held.fix.split(", ").next().unwrap_or(&held.fix);
+    let fix = clip(fix.to_owned(), 240);
     format!(
         "This stop is not counted: {left} of {total} budget minutes remain and the {} queue is open. Run its next batch ({fix}).{end}",
-        queue.id
+        held.id
     )
 }
 
@@ -888,7 +910,7 @@ fn block_reason(
     if let Some(st) = state {
         s.push('\n');
         s.push_str(&budget_note(st, worker, run_dir));
-        if let Some(q) = held_queue(state, worker, run_dir, missing_all) {
+        if let Some(q) = held_item(state, worker, run_dir, missing_all) {
             s.push('\n');
             s.push_str(&held_note(st, worker, q));
         }
@@ -980,7 +1002,7 @@ fn stop_core(found: &Found) -> Result<HookOut, String> {
         return Ok(HookOut::block(&reason));
     }
     // Budget left and a queue open: the stop is blocked, not counted, and never stamped.
-    if held_queue(found.state.as_ref(), None, &found.run_dir, &missing).is_some() {
+    if held_item(found.state.as_ref(), None, &found.run_dir, &missing).is_some() {
         return Ok(HookOut::block(&block_reason(
             &missing,
             None,
@@ -1035,7 +1057,7 @@ fn stop_worker(found: &Found, worker: &str) -> Result<HookOut, String> {
     if let Some(reason) = running_command(&found.run_dir, Some(worker)) {
         return Ok(HookOut::block(&reason));
     }
-    if held_queue(found.state.as_ref(), Some(worker), &found.run_dir, &missing).is_some() {
+    if held_item(found.state.as_ref(), Some(worker), &found.run_dir, &missing).is_some() {
         return Ok(HookOut::block(&block_reason(
             &missing,
             Some(worker),

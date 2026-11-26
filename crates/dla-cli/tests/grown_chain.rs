@@ -738,11 +738,15 @@ fn the_chain_from_a_passed_column_to_an_alloc_test_cannot_be_walked_around() {
             .any(|m| m["id"] == "F2" && m["fix"].as_str().unwrap().contains(&steps[2])),
         "still listed"
     );
-    // The alloc-test evidence (written directly: a real alloc-test needs a built harness).
+    // The alloc-test evidence (written directly: a real alloc-test needs a built harness). It
+    // ran on a driver made for F2 (H2 targets it): one on H1, where the growth was measured and
+    // which is not about F2 by a target, would not decide it (`a_loop_alloc_test_...` below).
+    save_harness(&r, "H2", json!({"targets": ["F2"]}));
     let mut l = Ledger::load(&r.run_dir).unwrap();
     l.add_evidence(evidence(
         EvidenceKind::Discriminator,
-        json!({"test": "plateau+purge", "favors": "leak", "supports": ["leak"], "finding": "F2"}),
+        json!({"test": "plateau+purge", "favors": "inconclusive", "supports": [], "finding": "F2",
+            "harness": "H2"}),
     ))
     .unwrap();
     drop(l);
@@ -764,6 +768,209 @@ fn the_chain_from_a_passed_column_to_an_alloc_test_cannot_be_walked_around() {
         "--remedy",
         "x",
     ]);
+}
+
+/// Saves harness `id` of the run, a Python hook driver with the fields of `extra` set.
+fn save_harness(r: &R, id: &str, extra: Value) {
+    let mut v = json!({
+        "id": id, "runtime": "python", "mode": "driver",
+        "scratch": "x", "run": {"argv": ["x"], "cwd": "."},
+        "warmup": 1, "iterations": 8, "step": 1, "key_modes": ["fresh"],
+        "agent": "driver-python", "timeout_secs": 60,
+    });
+    for (k, x) in extra.as_object().unwrap() {
+        v[k] = x.clone();
+    }
+    serde_json::from_value::<HarnessManifest>(v)
+        .unwrap()
+        .save(&r.run_dir)
+        .unwrap();
+}
+
+/// An alloc-test of F2 on harness `harness` that `favors` (written directly, as above);
+/// returns its evidence id.
+fn alloc_test_of_f2(r: &R, harness: &str, favors: &str) -> String {
+    let mut l = Ledger::load(&r.run_dir).unwrap();
+    l.add_evidence(evidence(
+        EvidenceKind::Discriminator,
+        json!({"test": "plateau+purge", "favors": favors, "supports": [], "finding": "F2",
+            "harness": harness}),
+    ))
+    .unwrap();
+    l.evidence().last().unwrap().evidence_id.to_string()
+}
+
+/// The run of [`run_with_a_passed_column`] whose harness H1 (the one that measured the growth of
+/// F2) is the project's own pytest loop, and an alloc-test of F2 on it that `favors`.
+fn a_loop_measured_it(budget: &str, favors: &str) -> (R, String) {
+    let (r, _, _) = run_with_a_passed_column(budget);
+    save_harness(
+        &r,
+        "H1",
+        json!({"tools": [dla_core::harness::PYTEST_TOOL], "targets": []}),
+    );
+    let e = alloc_test_of_f2(&r, "H1", favors);
+    (r, e)
+}
+
+fn resolve_f2(r: &R, reason: &str) -> (i32, Value) {
+    r.run(&[
+        "ledger",
+        "resolve",
+        "F2",
+        "--as",
+        "unresolved",
+        "--reason",
+        reason,
+        "--remedy",
+        "x",
+    ])
+}
+
+#[test]
+fn a_loop_alloc_test_that_favored_leak_or_said_nothing_does_not_let_the_growth_be_closed() {
+    for favors in ["leak", "inconclusive"] {
+        let (r, e) = a_loop_measured_it("3h", favors);
+        let (code, v) = resolve_f2(&r, "inconclusive");
+        assert_ne!(code, 0, "{favors}: {v}");
+        assert_eq!(v["error"]["code"], "growth-not-measured", "{v}");
+        let message = v["error"]["message"].as_str().unwrap();
+        assert!(
+            message.contains(&format!(
+                "the alloc-test {e} on H1 (a test loop, not a driver made for F2) favored {favors}: growth there may be kept by another holder"
+            )),
+            "{message}"
+        );
+        assert!(
+            v["error"]["missing"]
+                .as_str()
+                .unwrap()
+                .contains("an alloc-test of F2 on a driver made for it"),
+            "{v}"
+        );
+        let fix = v["error"]["fix"].as_str().unwrap();
+        assert!(
+            fix.contains("dla harness gen --lang python --driver --probe F2"),
+            "{fix}"
+        );
+        assert!(
+            fix.contains(
+                "dla alloc-test <H'> --finding F2   (on the harness just made, not on H1)"
+            ),
+            "{fix}"
+        );
+        assert!(!fix.contains("dla alloc-test H1"), "{fix}");
+        // The gate lists it with the same way out.
+        let missing = r.final_gate();
+        let item = missing
+            .iter()
+            .find(|m| m["id"] == "F2" && m["fix"].as_str().unwrap().contains("--driver --probe F2"))
+            .unwrap_or_else(|| panic!("{missing:?}"));
+        assert_eq!(item["kind"], "finding", "{item}");
+    }
+}
+
+#[test]
+fn a_loop_alloc_test_that_favored_non_leak_lets_the_growth_be_closed() {
+    let (r, _) = a_loop_measured_it("3h", "non-leak");
+    r.ok(&[
+        "ledger",
+        "resolve",
+        "F2",
+        "--as",
+        "unresolved",
+        "--reason",
+        "inconclusive",
+        "--remedy",
+        "x",
+    ]);
+}
+
+#[test]
+fn an_alloc_test_on_a_driver_made_for_the_finding_lets_the_close_be_accepted() {
+    let (r, _) = a_loop_measured_it("3h", "leak");
+    assert_ne!(resolve_f2(&r, "inconclusive").0, 0);
+    save_harness(&r, "H2", json!({"targets": ["F2"]}));
+    alloc_test_of_f2(&r, "H2", "inconclusive");
+    r.ok(&[
+        "ledger",
+        "resolve",
+        "F2",
+        "--as",
+        "unresolved",
+        "--reason",
+        "inconclusive",
+        "--remedy",
+        "x",
+    ]);
+}
+
+#[test]
+fn close_rest_leaves_the_finding_a_loop_alloc_test_did_not_decide() {
+    let (r, e) = a_loop_measured_it("3h", "leak");
+    let out = r.ok(&["ledger", "close-rest"]);
+    let f2 = out["left"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["id"] == "F2")
+        .unwrap_or_else(|| panic!("F2 not left: {out}"));
+    let why = f2["why"].as_str().unwrap();
+    assert!(
+        why.contains(&format!(
+            "the alloc-test {e} on H1 (a test loop, not a driver made for F2) favored leak"
+        )),
+        "{why}"
+    );
+    assert!(why.contains("--driver --probe F2"), "{why}");
+    assert!(!why.contains("no alloc-test"), "{why}");
+    let v = r.ok(&["run", "status"]);
+    assert!(v.to_string().contains("F2"), "{v}");
+    let ledger = Ledger::load(&r.run_dir).unwrap();
+    let f = ledger.finding(&dla_core::FindingId::new(2)).unwrap();
+    assert_eq!(f.state, dla_core::FindingState::Candidate);
+}
+
+#[test]
+fn the_floor_rule_still_lets_the_time_budget_close_it_and_the_gate_keeps_the_item() {
+    let (r, e) = a_loop_measured_it("90s", "leak");
+    r.ok(&[
+        "ledger",
+        "resolve",
+        "F2",
+        "--as",
+        "unresolved",
+        "--reason",
+        "time_budget",
+        "--remedy",
+        "x",
+    ]);
+    let missing = r.final_gate();
+    let item = missing
+        .iter()
+        .find(|m| m["id"] == "F2" && m["kind"] == "growth")
+        .unwrap_or_else(|| panic!("{missing:?}"));
+    let d = item["description"].as_str().unwrap();
+    assert!(
+        d.contains(
+            "F2 is closed unresolved but its column probe:Registry._by_key@shop/reg.py:5 of S1 grew"
+        ),
+        "{d}"
+    );
+    assert!(
+        d.contains(&format!(
+            "the alloc-test {e} on H1 (a test loop, not a driver made for F2) favored leak: growth there may be kept by another holder"
+        )),
+        "{d}"
+    );
+    assert!(!d.contains("no alloc-test decided it"), "{d}");
+    assert!(
+        item["fix"]
+            .as_str()
+            .unwrap()
+            .contains("dla harness gen --lang python --driver --probe F2"),
+        "{item}"
+    );
 }
 
 #[test]

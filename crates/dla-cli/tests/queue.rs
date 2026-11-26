@@ -617,9 +617,10 @@ fn verdicts_settle_candidates_and_close_rest_closes_the_rest() {
     );
 
     // The one that grew is decided by an alloc-test, not closed: closing it is refused with
-    // the commands that decide it. With an alloc-test evidence bound to it (written directly
-    // here: a real alloc-test needs the built harness) the existing rules decide, and then
-    // nothing of the queue is left and the final gate asks for no finding.
+    // the commands that decide it. With an alloc-test evidence bound to it that ran on a driver
+    // made for it (H1 targets it; written directly here: a real alloc-test needs the built
+    // harness) the existing rules decide, and then nothing of the queue is left and the final
+    // gate asks for no finding. One on a loop or workload harness would not decide it.
     let args = [
         "ledger",
         "resolve",
@@ -647,7 +648,7 @@ fn verdicts_settle_candidates_and_close_rest_closes_the_rest() {
             },
             authority: Authority::Test,
             kind: EvidenceKind::Discriminator,
-            result: serde_json::json!({"test": "plateau+purge", "favors": "leak", "supports": ["leak"], "finding": cached}),
+            result: serde_json::json!({"test": "plateau+purge", "favors": "inconclusive", "supports": [], "finding": cached, "harness": "H1"}),
             raw: None,
             coverage: dla_core::evidence::EvidenceCoverage::default(),
             limitations: vec![],

@@ -385,9 +385,7 @@ pub fn node_platform(os: &str, arch: &str) -> Res<String> {
 }
 
 fn run_tool(cmd: &mut Command, what: &str) -> Res<std::process::Output> {
-    let out = cmd
-        .stdin(Stdio::null())
-        .output()
+    let out = crate::spawn::output(cmd.stdin(Stdio::null()))
         .map_err(|e| format!("{what}: cannot start: {e}"))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
@@ -608,10 +606,7 @@ fn jdk_version(home: &Path) -> Option<String> {
     {
         return Some(v);
     }
-    let out = Command::new(home.join("bin/java"))
-        .arg("-version")
-        .output()
-        .ok()?;
+    let out = crate::spawn::output(Command::new(home.join("bin/java")).arg("-version")).ok()?;
     parse_java_version(&String::from_utf8_lossy(&out.stderr))
 }
 
@@ -650,16 +645,17 @@ pub fn find_on_path(path: &str, name: &str) -> Option<PathBuf> {
 }
 
 fn capture(program: &Path, args: &[&str], env: &[(String, String)], cwd: &Path) -> Option<String> {
-    let mut child = Command::new(program)
-        .args(args)
-        .current_dir(cwd)
-        .env_clear()
-        .envs(env.iter().map(|(k, v)| (k, v)))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
+    let mut child = crate::spawn::spawn(
+        Command::new(program)
+            .args(args)
+            .current_dir(cwd)
+            .env_clear()
+            .envs(env.iter().map(|(k, v)| (k, v)))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .ok()?;
     let start = Instant::now();
     let status = loop {
         match child.try_wait().ok()? {

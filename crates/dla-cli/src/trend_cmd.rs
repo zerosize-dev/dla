@@ -689,7 +689,11 @@ fn detector_entry(
                 harness_evidence(ledger, series).as_deref(),
                 has_sibling,
                 can_test,
-                m.is_pytest_loop(),
+                if m.is_pytest_loop() {
+                    dla_core::grown::DriverRoute::PytestLoop
+                } else {
+                    dla_core::grown::DriverRoute::Own
+                },
             );
             format!(
                 "{head}: {f} holds it and its column {} passed in this series: {}",
