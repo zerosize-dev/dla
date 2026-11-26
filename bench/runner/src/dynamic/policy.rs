@@ -1111,9 +1111,27 @@ fn follow_growth_route(fx: &mut Fx, fix: &str) -> String {
                 rest.trim_end_matches(')').to_owned()
             });
     }
+    let mut measured = false;
     for cmd in own.split("   then   ").map(|c| fix_command(c).to_owned()) {
         if !cmd.starts_with("dla ") || cmd.contains('<') {
-            said.push(format!("{cmd}: not run (it carries a placeholder)"));
+            // A command that needs an annotation the policy cannot fill (`--site <file:line>`,
+            // `--holder <holder>`, a record to cite): the mechanical stand-in for a model that
+            // would annotate or measure is the alloc-test of the finding on the harness that
+            // measured it, followed by the commands that alloc-test prints. Once per route, and
+            // not when the route already ran one.
+            if !measured
+                && cmd.starts_with("dla ledger ")
+                && let Some(finding) = finding_of_command(&cmd)
+                && let Some(harness) = harness_of_route(fx, &own)
+            {
+                let alloc = format!("dla alloc-test {harness} --finding {finding}");
+                said.push(format!(
+                    "{cmd}: not run (it carries a placeholder); instead"
+                ));
+                run_alloc_test(fx, &alloc, &mut said);
+            } else {
+                said.push(format!("{cmd}: not run (it carries a placeholder)"));
+            }
             break;
         }
         let o = run_dla_line(fx, &cmd);
@@ -1125,30 +1143,81 @@ fn follow_growth_route(fx: &mut Fx, fix: &str) -> String {
             break;
         }
         if cmd.starts_with("dla alloc-test ") {
-            // The step the alloc-test prints.
-            let next: Vec<String> = o.json["next"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|n| n.as_str())
-                .map(|n| fix_command(n).to_owned())
-                .collect();
-            for n in next {
-                if !n.starts_with("dla ledger ") || n.contains('<') {
-                    continue;
-                }
-                let r = run_dla_line(fx, &n);
-                said.push(format!(
-                    "{n}: {}",
-                    if r.ok { "ok".to_owned() } else { refusal(&r) }
-                ));
-                if !r.ok {
-                    break;
-                }
-            }
+            measured = true;
+            follow_alloc_test_next(fx, &o, &mut said);
         }
     }
     said.join("; ")
+}
+
+/// The commands an alloc-test printed as `next` (the ledger ones without a placeholder), run in
+/// order until one is refused.
+fn follow_alloc_test_next(fx: &mut Fx, alloc_test: &Out, said: &mut Vec<String>) {
+    let next: Vec<String> = alloc_test.json["next"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|n| n.as_str())
+        .map(|n| fix_command(n).to_owned())
+        .collect();
+    for n in next {
+        if !n.starts_with("dla ledger ") || n.contains('<') {
+            continue;
+        }
+        let r = run_dla_line(fx, &n);
+        said.push(format!(
+            "{n}: {}",
+            if r.ok { "ok".to_owned() } else { refusal(&r) }
+        ));
+        if !r.ok {
+            break;
+        }
+    }
+}
+
+/// Runs the alloc-test `cmd` and follows what it prints.
+fn run_alloc_test(fx: &mut Fx, cmd: &str, said: &mut Vec<String>) {
+    let o = run_dla_line(fx, cmd);
+    said.push(format!(
+        "{cmd}: {}",
+        if o.ok { "ok".to_owned() } else { refusal(&o) }
+    ));
+    if o.ok {
+        follow_alloc_test_next(fx, &o, said);
+    }
+}
+
+/// The finding a `dla ledger <verb> <F> ...` command names (the root of a sibling's id).
+fn finding_of_command(cmd: &str) -> Option<String> {
+    let words = ops::split_command(cmd);
+    if words.get(1).map(String::as_str) != Some("ledger") {
+        return None;
+    }
+    let id = words.get(3)?;
+    let root = id.split(".n").next().unwrap_or(id);
+    let digits = root.strip_prefix('F')?;
+    (!digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())).then(|| root.to_owned())
+}
+
+/// The harness the measurement of a route ran on: the one its own `dla alloc-test H` names, else
+/// the harness of the newest workload evidence of the ledger.
+fn harness_of_route(fx: &mut Fx, route: &str) -> Option<String> {
+    let named = route
+        .split("   then   ")
+        .map(fix_command)
+        .find_map(|c| c.strip_prefix("dla alloc-test "))
+        .and_then(|rest| rest.split_whitespace().next())
+        .filter(|h| !h.contains('<'))
+        .map(str::to_owned);
+    named.or_else(|| {
+        let view = fx.view();
+        view.order.iter().rev().find_map(|id| {
+            let e = view.evidence.get(id)?;
+            (e.kind == "workload")
+                .then(|| e.result["harness"].as_str().map(str::to_owned))
+                .flatten()
+        })
+    })
 }
 
 /// [`follow_growth_route`] for the finding `target`, then, as a model does when `dla harness gen
@@ -1500,6 +1569,9 @@ case "$1 $2" in
   fi
   if [ "$FAKE_GROWTH" = alloc ] && [ "$3" = F12 ]; then
     echo '{"ok":false,"error":{"code":"growth-not-measured","message":"m","fix":"dla ledger add --sibling-of F12 --origin hypothesis --hypothesis N-WARM --refute-if \"growth continues\" --evidence E6   then   dla alloc-test H1 --finding F12"}}'; exit 2
+  fi
+  if [ "$FAKE_GROWTH" = placeholder ] && [ "$3" = F12 ]; then
+    echo '{"ok":false,"error":{"code":"growth-not-measured","message":"m","fix":"dla ledger add --sibling-of F12 --origin hypothesis --hypothesis N-WARM --refute-if \"growth continues\" --evidence E6   then   dla ledger test F12 --evidence E5   then   dla ledger annotate F12 --site <file:line>   then   dla ledger confirm F12 --evidence E6"}}'; exit 2
   fi
   if [ -n "$FAKE_NOTHING_MEASURED" ]; then
     case "$*" in *"--reason inconclusive"*)
@@ -2120,6 +2192,41 @@ cause = "{cause}"
         assert!(c("alloc-test H1 --finding F12"), "{calls}");
         assert!(c("ledger confirm F12 --evidence E30"), "{calls}");
         assert!(!c("ledger refute <F>"), "{calls}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_route_that_reaches_a_placeholder_runs_the_alloc_test_of_the_finding_instead() {
+        // The route of a dump lead that needs a site nobody can give: the policy stops at the
+        // placeholder and decides the finding by the alloc-test of the harness that measured it
+        // (the newest workload evidence names it), then follows what the alloc-test prints.
+        let (_, calls) = drive_fake(
+            &expected("L-COLLECT", "container-field"),
+            false,
+            &[("FAKE_GAPS", "1"), ("FAKE_GROWTH", "placeholder")],
+        );
+        let c = |s: &str| calls.lines().any(|l| l.starts_with(s));
+        assert!(c("ledger add --sibling-of F12"), "{calls}");
+        assert!(c("ledger test F12 --evidence E5"), "{calls}");
+        assert!(!c("ledger annotate F12"), "{calls}");
+        assert!(c("alloc-test H1 --finding F12"), "{calls}");
+        assert!(c("ledger confirm F12 --evidence E30"), "{calls}");
+        // The route's own confirm (after the placeholder) is not run: the alloc-test's is.
+        assert!(!c("ledger confirm F12 --evidence E6"), "{calls}");
+    }
+
+    #[test]
+    fn the_finding_of_a_ledger_command_is_the_root_of_its_first_id() {
+        assert_eq!(
+            finding_of_command("dla ledger annotate F9 --site <file:line>").as_deref(),
+            Some("F9")
+        );
+        assert_eq!(
+            finding_of_command("dla ledger confirm F9.n2 --evidence <E>").as_deref(),
+            Some("F9")
+        );
+        assert_eq!(finding_of_command("dla trend <S>"), None);
+        assert_eq!(finding_of_command("dla ledger resolve O1 --as x"), None);
     }
 
     #[cfg(unix)]

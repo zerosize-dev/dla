@@ -1370,14 +1370,76 @@ fn confirm_leak(ctx: &TransitionContext<'_>, artifact: bool) -> Result<(), Refus
     Ok(())
 }
 
+/// True for a non-leak sibling that says the growth is the project's own doing and no leak: the
+/// measurement itself (`N-OBSERVER`: the driver, the agent, the profiler) or retention the code
+/// asks for (`N-INTENT`). Such a sibling can be confirmed on the dump that shows its holder
+/// ([`confirm_on_holder_record`]).
+pub fn is_explanation_of_holder(f: &Finding) -> bool {
+    f.polarity() == Polarity::NonLeak
+        && matches!(
+            f.hypothesis.as_deref().and_then(crate::finding::nonleak_id),
+            Some("N-OBSERVER" | "N-INTENT")
+        )
+}
+
+/// True when `e` is a retention-path record read from a dump (authority `dump`) that names the
+/// holder of `root`: it shows the holder and what keeps it.
+pub fn shows_holder_of(e: &EvidenceRecord, root: &Finding) -> bool {
+    e.kind == EvidenceKind::RetentionPath && e.authority == Authority::Dump && names_holder(e, root)
+}
+
+/// The confirm of an `N-OBSERVER` or `N-INTENT` sibling whose leak-side root is not refuted: the
+/// growth is no leak of the project because of what keeps the holder, so the evidence has to show
+/// the holder and what keeps it, a retention-path record of authority `dump` that names it. Any
+/// other record, a discriminator included, is refused. The root is then closed unresolved (the
+/// dump lead is lifted); it is not refuted by the sibling ([`refute`]).
+fn confirm_on_holder_record(
+    ctx: &TransitionContext<'_>,
+    root: Option<&Finding>,
+) -> Result<(), Refusal> {
+    let id = &ctx.finding.id;
+    let root_id = ctx.finding.root_id();
+    let cited_shows = root.is_some_and(|r| {
+        ctx.evidence
+            .iter()
+            .filter_map(|e| ctx.lookup.evidence(e))
+            .any(|e| shows_holder_of(e, r))
+    });
+    if cited_shows {
+        return Ok(());
+    }
+    let existing = root.and_then(|r| {
+        ctx.lookup.evidence_ids().into_iter().rev().find(|e| {
+            ctx.lookup
+                .evidence(e)
+                .is_some_and(|e| shows_holder_of(e, r))
+        })
+    });
+    let fix = match existing {
+        Some(e) => format!("dla ledger confirm {id} --evidence {e}"),
+        None => format!(
+            "dla summarize heap-graph <the dumps of the growth> --finding {root_id}   then   dla ledger confirm {id} --evidence <the retention-path record it wrote for the holder of {root_id}>"
+        ),
+    };
+    Err(Refusal::new(
+        codes::LEAK_REFUTATION_REQUIRED,
+        format!(
+            "{id} cannot be confirmed on this evidence: {root_id} is not refuted, and a non-leak explanation of a holder is confirmed on a retention-path record of that holder (authority dump), which shows what keeps it"
+        ),
+        format!("a retention-path record of the holder of {root_id} read from a dump"),
+        fix,
+    ))
+}
+
 fn confirm_nonleak(ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
     let id = &ctx.finding.id;
     let root_id = ctx.finding.root_id();
+    let root = ctx.findings.finding(&root_id);
+    let root_refuted = root.is_some_and(|r| r.state == FindingState::Refuted);
+    if !root_refuted && is_explanation_of_holder(ctx.finding) {
+        return confirm_on_holder_record(ctx, root);
+    }
     check_direction(ctx, judged(ctx), Favors::NonLeak, "confirm")?;
-    let root_refuted = ctx
-        .findings
-        .finding(&root_id)
-        .is_some_and(|r| r.state == FindingState::Refuted);
     if !root_refuted {
         return Err(Refusal::new(
             codes::LEAK_REFUTATION_REQUIRED,
@@ -1392,6 +1454,11 @@ fn confirm_nonleak(ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
 }
 
 fn refute(ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
+    // A confirmed non-leak explanation of a holder (`N-OBSERVER`, `N-INTENT`, confirmed on the
+    // retention record that shows what keeps the holder) lifts the dump lead of its root, which can
+    // then be closed unresolved with the explanation as its remedy. It does not refute the root: a
+    // retention record shows what keeps a holder, not that the growth stops, and a refute still
+    // needs a discriminator that favors non-leak.
     let want = match ctx.finding.polarity() {
         Polarity::Leak => Favors::NonLeak,
         Polarity::NonLeak => Favors::Leak,

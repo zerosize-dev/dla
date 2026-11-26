@@ -60,6 +60,9 @@ pub struct RunView {
     /// What the Python retention records say about whose each holder is; read on first use (see
     /// [`RunView::measured_holders`]).
     measured: std::cell::OnceCell<crate::measured_holders::Scan>,
+    /// The driver and agent classes and modules of the run's harnesses (see
+    /// [`RunView::measurement`]).
+    own: std::cell::OnceCell<crate::measurement::Measurement>,
 }
 
 impl RunView {
@@ -67,6 +70,17 @@ impl RunView {
     pub fn measured_holders(&self) -> &crate::measured_holders::Scan {
         self.measured
             .get_or_init(|| crate::measured_holders::scan(self))
+    }
+
+    /// What belongs to the measurement and not to the project (the driver and agent sources of the
+    /// run's harnesses, the JVM agent and the profiler), read once per view.
+    pub fn measurement(&self) -> &crate::measurement::Measurement {
+        self.own.get_or_init(|| {
+            self.run_dir
+                .as_deref()
+                .map(crate::measurement::Measurement::of_run)
+                .unwrap_or_default()
+        })
     }
 
     /// Assembles a view; the checklist is derived from the ledger.
@@ -89,6 +103,7 @@ impl RunView {
             report_modified: false,
             unsealed_run: false,
             measured: std::cell::OnceCell::new(),
+            own: std::cell::OnceCell::new(),
         }
     }
 

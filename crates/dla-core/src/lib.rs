@@ -46,6 +46,7 @@ pub mod ledger;
 pub mod m6;
 pub mod machine;
 pub mod measured_holders;
+pub mod measurement;
 pub mod merge;
 pub mod paths;
 pub mod probe;

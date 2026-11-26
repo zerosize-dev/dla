@@ -1572,6 +1572,11 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
             continue;
         }
         for c in site_columns_largest_first(t.columns.iter().filter(|c| non_flat(c)).collect()) {
+            // A holder of the measurement (the driver's statics, the agent, the profiler) is no
+            // growth of the project: it makes no item and no finding.
+            if view.measurement().is_own_column(&c.name) {
+                continue;
+            }
             if is_whole_process(&c.name) {
                 // Never tied to a finding. The classify stage leaves it to the final gate,
                 // which takes the residual accounting, an open item, or, for the total of

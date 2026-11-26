@@ -832,8 +832,18 @@ fn series_part(
     let per_point: Option<Vec<f64>> = dumps.iter().map(|d| d.x).collect();
     // ---- holders tracked: the largest by peak retained bytes
     let mut peak: Vec<(String, u64)> = Vec::new();
+    // A holder of the measurement (the driver's or the agent's own module) is no growth of the
+    // project: it gets no column, no finding and no lead.
+    let own = dla_core::measurement::Measurement::of_run(&tc.run_dir);
+    let mut left_out: Vec<String> = Vec::new();
     for d in dumps {
         for v in &d.views {
+            if own.is_own(&v.key) {
+                if !left_out.contains(&v.owner) {
+                    left_out.push(v.owner.clone());
+                }
+                continue;
+            }
             match peak.iter_mut().find(|(k, _)| *k == v.key) {
                 Some((_, p)) => *p = (*p).max(v.retained),
                 None => peak.push((v.key.clone(), v.retained)),
@@ -1226,6 +1236,9 @@ fn series_part(
         recorded.push(rec);
     }
 
+    if let Some(line) = emit::left_out_line(&left_out) {
+        out.insert("left_out".into(), json!(line));
+    }
     out.insert("series".into(), json!(id));
     if let Some(xs) = &per_point {
         out.insert("series_kind".into(), json!("per-point"));
