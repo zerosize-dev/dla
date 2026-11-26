@@ -421,14 +421,15 @@ pub enum HarnessAbout {
 /// True when evidence `e` (an allocation-stack or retention-path summary) was made from a
 /// capture file of harness `harness`: the raw file of the summary lists, in its `captures` array,
 /// the sha256 of each input it read, and `harness/<H>/captures.json` lists the capture files the
-/// harness last wrote, whose digests are compared. A capture that a later run replaced no longer
+/// harness last wrote, whose digests are compared (the digest stored in the list, see
+/// [`crate::harness::CaptureFile::digest`]; a file deleted to keep the run under its size limit
+/// keeps its entry and digest, so the link holds). A capture that a later run replaced no longer
 /// matches, so this link says nothing for it.
 fn made_from_capture_of(
     run_dir: &std::path::Path,
     e: &crate::evidence::EvidenceRecord,
     harness: &str,
 ) -> bool {
-    use sha2::{Digest, Sha256};
     let Some(raw) = e.raw.as_deref().filter(|r| {
         !std::path::Path::new(r)
             .components()
@@ -460,11 +461,11 @@ fn made_from_capture_of(
     else {
         return false;
     };
-    files.iter().any(|f| {
-        read(&run_dir.join(&f.path))
-            .map(|b| hex::encode(Sha256::digest(&b)))
-            .is_some_and(|d| used.contains(&d))
-    })
+    // The digest stored when the file was listed; the file is hashed only for a list an older
+    // version wrote. A deleted (`pruned`) file keeps its digest, so the link holds after it.
+    files
+        .iter()
+        .any(|f| f.digest(run_dir).is_some_and(|d| used.contains(&d)))
 }
 
 /// The leak-side root of `id` (a sibling counts through its parent).
@@ -2111,6 +2112,53 @@ mod tests {
         ));
         // The summary names F3 only.
         assert_eq!(about(&view, &m, 2), None);
+    }
+
+    /// Rewrites the list of `harness` so its one file carries `sha256` and `pruned`.
+    fn list_with_digest(dir: &std::path::Path, harness: &str, sha256: &str, pruned: bool) {
+        std::fs::write(
+            dir.join(format!("harness/{harness}/captures.json")),
+            serde_json::json!({"files": [{
+                "kind": "alloc", "path": format!("harness/{harness}/out/heap.txt"),
+                "label": "p1", "seq": 1, "bytes": 7, "captured_at": "2026-01-01T00:00:00Z",
+                "sha256": sha256, "pruned": pruned}]})
+            .to_string(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_deleted_capture_still_links_its_summary_through_the_stored_digest() {
+        use sha2::{Digest, Sha256};
+        let (d, view) = with_capture_summary("H1", "capture");
+        let digest = hex::encode(Sha256::digest(b"capture"));
+        list_with_digest(d.path(), "H1", &digest, true);
+        std::fs::remove_file(d.path().join("harness/H1/out/heap.txt")).unwrap();
+        let m = manifest("H1", serde_json::json!({"targets": ["F1"]}));
+        assert!(matches!(
+            about(&view, &m, 3),
+            Some(HarnessAbout::Capture(_))
+        ));
+    }
+
+    #[test]
+    fn the_stored_digest_is_used_and_the_file_is_not_hashed_when_it_is_there() {
+        use sha2::{Digest, Sha256};
+        let (d, view) = with_capture_summary("H1", "capture");
+        let m = manifest("H1", serde_json::json!({"targets": ["F1"]}));
+        // The file now holds other bytes, but the list says what it held when it was listed:
+        // the link follows the list.
+        std::fs::write(d.path().join("harness/H1/out/heap.txt"), "changed").unwrap();
+        let digest = hex::encode(Sha256::digest(b"capture"));
+        list_with_digest(d.path(), "H1", &digest, false);
+        assert!(matches!(
+            about(&view, &m, 3),
+            Some(HarnessAbout::Capture(_))
+        ));
+        // A stored digest the summary does not list says no, whatever the file holds now.
+        std::fs::write(d.path().join("harness/H1/out/heap.txt"), "capture").unwrap();
+        list_with_digest(d.path(), "H1", &"0".repeat(64), false);
+        assert_eq!(about(&view, &m, 3), None);
     }
 
     #[test]

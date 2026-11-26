@@ -181,6 +181,26 @@ pub struct CaptureFile {
     pub ms: Option<u64>,
     /// When the file was written (UTC, RFC 3339).
     pub captured_at: String,
+    /// SHA-256 of the file's bytes (lowercase hex), taken when the file was listed. A summary
+    /// record lists the digest of each input it read, so this ties a summary to the capture
+    /// without reading the file again, and still does after the file was deleted
+    /// ([`CaptureFile::pruned`]). Absent in a `captures.json` an older version wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    /// The tool deleted the file to keep the large captures of the run under
+    /// `DLA_CAPTURE_KEEP_MB` (see [`crate::capture_keep`]). The entry stays, with its digest.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pruned: bool,
+}
+
+impl CaptureFile {
+    /// The file's SHA-256: the stored digest, else (a list an older version wrote) the digest
+    /// of the file on disk under `run_dir`, `None` when the file cannot be read.
+    pub fn digest(&self, run_dir: &Path) -> Option<String> {
+        self.sha256
+            .clone()
+            .or_else(|| crate::capture_keep::sha256_file(&run_dir.join(&self.path)))
+    }
 }
 
 /// A command to run in the scratch copy.

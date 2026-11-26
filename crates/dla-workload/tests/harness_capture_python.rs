@@ -181,6 +181,8 @@ fn file_names_classify_and_each_format_gets_its_own_command() {
         bytes: 10,
         ms: None,
         captured_at: String::new(),
+        sha256: None,
+        pruned: false,
     };
     let mut files = Vec::new();
     for k in 1..=3u32 {
@@ -244,6 +246,8 @@ fn the_holder_chains_file_is_a_heap_capture_with_a_heap_graph_command_of_its_own
         bytes: 10,
         ms: None,
         captured_at: String::new(),
+        sha256: None,
+        pruned: false,
     };
     let files = vec![
         file(CaptureKind::Alloc, "p1-fresh", 1, 100.0, "alloc"),

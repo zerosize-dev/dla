@@ -20,6 +20,7 @@ mod macros;
 
 pub mod archetypes;
 pub mod attribution;
+pub mod capture_keep;
 pub mod census;
 pub mod checklist;
 pub mod consent;

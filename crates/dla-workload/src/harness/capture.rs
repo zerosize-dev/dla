@@ -21,6 +21,10 @@ use dla_core::{
 
 /// Directory (inside `out/<label>/`) the JVM agent writes to.
 pub const DIR: &str = "capture";
+/// SHA-256 of a capture file (lowercase hex); `None` when it cannot be read.
+pub fn sha256_file(path: &Path) -> Option<String> {
+    dla_core::capture_keep::sha256_file(path)
+}
 /// Heap dumps a driver takes by default.
 pub const DEFAULT_DUMPS: u32 = 4;
 /// Points a tool run (valgrind, heaptrack) measures in command mode.
@@ -534,6 +538,8 @@ pub fn gather(
                 bytes: md.len(),
                 ms: note.and_then(|(_, c)| c.ms),
                 captured_at: rfc3339(md.modified().unwrap_or(std::time::UNIX_EPOCH)),
+                sha256: sha256_file(&e.path()),
+                pruned: false,
             });
         }
     }
@@ -899,6 +905,8 @@ mod tests {
             bytes: 10,
             ms: None,
             captured_at: "2026-01-01T00:00:00Z".to_owned(),
+            sha256: None,
+            pruned: false,
         }
     }
 

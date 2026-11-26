@@ -71,6 +71,8 @@ mod tests {
             bytes: 1,
             ms: None,
             captured_at: String::new(),
+            sha256: None,
+            pruned: false,
         }
     }
 

@@ -262,6 +262,8 @@ fn file_entry(
         bytes: md.len(),
         ms: slot.ms,
         captured_at: capture::rfc3339(md.modified().unwrap_or(std::time::UNIX_EPOCH)),
+        sha256: capture::sha256_file(path),
+        pruned: false,
     })
 }
 

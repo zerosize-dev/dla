@@ -115,6 +115,68 @@ fn locate(tc: &ToolCtx, given: &Path) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// The refusal for a path that `harness/<H>/captures.json` lists as deleted (`pruned`): the tool
+/// deleted the file to keep the large captures of the run under `DLA_CAPTURE_KEEP_MB`, after a
+/// summary had read it. The fix is the capture again, with the options of the set.
+fn pruned_refusal(tc: &ToolCtx, given: &Path, shown: &str) -> Option<Failure> {
+    use dla_core::harness::{CaptureKind, HARNESS_DIR};
+    let pointer = tc.pointer("");
+    let mut rel = shown.to_owned();
+    if let Ok(r) = given.strip_prefix(&tc.run_dir) {
+        rel = to_slash(r);
+    }
+    let rel = rel
+        .strip_prefix(pointer.as_str())
+        .unwrap_or(&rel)
+        .to_owned();
+    for e in fs::read_dir(tc.run_dir.join(HARNESS_DIR)).ok()?.flatten() {
+        let Ok(text) = fs::read_to_string(e.path().join("captures.json")) else {
+            continue;
+        };
+        let Some(files) = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v.get("files").cloned())
+            .and_then(|f| serde_json::from_value::<Vec<dla_core::harness::CaptureFile>>(f).ok())
+        else {
+            continue;
+        };
+        let Some(hit) = files.iter().find(|f| f.pruned && f.path == rel) else {
+            continue;
+        };
+        let harness = e.file_name().to_string_lossy().into_owned();
+        let kind = match hit.kind {
+            CaptureKind::Jfr => "jfr",
+            _ => "heap",
+        };
+        let mut fix = format!("dla harness run {harness}");
+        if let Some(mode) = ["fresh", "repeated"]
+            .iter()
+            .find(|m| hit.label.ends_with(&format!("-{m}")))
+        {
+            fix.push_str(&format!(" --mode {mode}"));
+        }
+        fix.push_str(&format!(" --capture {kind}"));
+        if !hit.label.ends_with("-native") {
+            let dumps = files
+                .iter()
+                .filter(|f| f.label == hit.label && f.kind == hit.kind && f.pruned)
+                .count();
+            if dumps > 1 {
+                fix.push_str(&format!(" --dumps {dumps}"));
+            }
+        }
+        return Some(Failure::refuse(
+            "artifact-not-found",
+            format!(
+                "{shown} was deleted: the run keeps its large captures under DLA_CAPTURE_KEEP_MB, and a summary had read this one (captures.json of {harness} lists it as pruned, with its digest)"
+            ),
+            "the capture file, which the run deleted",
+            fix,
+        ));
+    }
+    None
+}
+
 /// Resolves every input of `op`: each must be a file, inside the run's scope (files under
 /// `.dla/` and outside the project are always readable), and given once. Nothing is
 /// written.
@@ -124,6 +186,9 @@ pub fn resolve_all(tc: &ToolCtx, files: &[PathBuf], op: Op) -> Res<Vec<Input>> {
     for given in files {
         let shown = to_slash(given);
         let Some(abs) = locate(tc, given) else {
+            if let Some(pruned) = pruned_refusal(tc, given, &shown) {
+                return Err(pruned);
+            }
             return Err(Failure::refuse(
                 "artifact-not-found",
                 format!("{shown} is not a file"),

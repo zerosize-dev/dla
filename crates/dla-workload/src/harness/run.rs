@@ -72,7 +72,7 @@ use super::{
     capture::{self, AgentNotes, CaptureSet, NativeTool},
     cover::{self, CoverageOutcome},
     dumps::{self, DumpFile, Rec},
-    harness_dir, limit, lines,
+    harness_dir, keep, limit, lines,
     pace::{self, Pace},
     pymemray, scratch,
     symbolize::{Sites, symbolize},
@@ -90,6 +90,8 @@ const DEFAULT_REPEAT: u64 = 64;
 pub const BUILD_MARKER: &str = ".built";
 /// Detector hits kept.
 const MAX_DETECTORS: usize = 50;
+/// Deleted capture sets the run's summary lists (the rest is counted).
+const PRUNED_LISTED: usize = 3;
 
 /// Options of one harness execution.
 #[derive(Debug, Clone)]
@@ -229,6 +231,9 @@ pub struct RunOutput {
     pub units: u64,
     /// Files `--capture` or `--tool` left in the harness `out/` directory.
     pub captures: Vec<CaptureFile>,
+    /// Capture sets of other harnesses deleted by this run to stay under the size limit
+    /// (before the run to make room, after it to keep the total under `DLA_CAPTURE_KEEP_MB`).
+    pub pruned_captures: Vec<keep::Pruned>,
     /// The tool the points ran under, when `--tool` was given.
     pub tool: Option<NativeTool>,
     /// Native allocation sites in the JNI exports of the project (JVM harness with a
@@ -2996,6 +3001,9 @@ pub fn run_points(
         ..opts.clone()
     };
     let (asked, opts) = (opts.capture, &masked);
+    // A capture that would leave too little free disk is refused before anything is created or
+    // started (the build step too); the sets this deletes are listed in the run's output.
+    let pruned_captures = keep::preflight(ctx, manifest, opts)?;
     let mut paths = Paths::new(ctx, manifest)?;
     if manifest.runtime == dla_core::runtime::Runtime::Python {
         paths.lines.extend(opts.lines.iter().cloned());
@@ -3010,6 +3018,7 @@ pub fn run_points(
         left_stopped,
         capture_run: capture_active(manifest, opts) && opts.tool.is_none(),
         earlier_full_series: earlier_full_series(ctx, manifest),
+        pruned_captures,
         gaps: manifest.gaps.clone(),
         env_reused: reuse.iter().map(|(k, _)| k.clone()).collect(),
         dependency_env,
@@ -3817,6 +3826,16 @@ fn run_loaded(
             .join("captures.json");
         let text = serde_json::to_string_pretty(&list).unwrap_or_default() + "\n";
         fs::write(&path, text).map_err(|e| io_refusal(&path, e))?;
+        // The large captures of the run stay under the size limit: whole sets of other
+        // harnesses that a summary read go, oldest first. This run's own sets stay.
+        if opts.tool.is_none() {
+            let limit = dla_core::capture_keep::megabytes_from_env(
+                dla_core::capture_keep::KEEP_ENV,
+                dla_core::capture_keep::DEFAULT_KEEP_MB,
+            );
+            let outcome = keep::enforce(ctx, &manifest.id, limit, 0);
+            out.pruned_captures.extend(outcome.pruned);
+        }
     }
 
     out.capture_commands = commands
@@ -3842,6 +3861,7 @@ fn run_loaded(
         "logs": out.logs,
         "tool": out.tool.map(NativeTool::as_str),
         "captures": out.captures,
+        "pruned_captures": out.pruned_captures.iter().map(keep::Pruned::to_json).collect::<Vec<_>>(),
         "ffi_sites": out.ffi_sites.iter().map(ffi_site_json).collect::<Vec<_>>(),
         "driver_digest": dla_core::harness::driver_digest(&ctx.run_dir, &manifest.id),
         "setup_digest": dla_core::harness::setup_digest(&ctx.run_dir, &manifest.id),
@@ -4020,6 +4040,18 @@ fn run_loaded(
     if captured {
         artifacts.push(ctx.pointer(&format!("harness/{}/captures.json", manifest.id)));
         summary["capture"] = capture_cost(&out);
+        if !out.pruned_captures.is_empty() {
+            summary["pruned_captures"] = json!(
+                out.pruned_captures
+                    .iter()
+                    .take(PRUNED_LISTED)
+                    .map(keep::Pruned::to_json)
+                    .collect::<Vec<_>>()
+            );
+            if out.pruned_captures.len() > PRUNED_LISTED {
+                summary["pruned_more"] = json!(out.pruned_captures.len() - PRUNED_LISTED);
+            }
+        }
         if let Some(t) = out.tool {
             summary["tool"] = json!(t.as_str());
         }
@@ -4065,6 +4097,14 @@ fn run_loaded(
         &ledger,
         &hdir_of_run.join(format!("executed-{first}.json")),
     );
+    let mut attention = attention;
+    attention.extend(keep::attention(
+        &out.pruned_captures,
+        dla_core::capture_keep::megabytes_from_env(
+            dla_core::capture_keep::KEEP_ENV,
+            dla_core::capture_keep::DEFAULT_KEEP_MB,
+        ),
+    ));
     if !attention.is_empty() {
         // `dla` prints it as the first key of the output.
         summary["_attention"] = json!(attention);
