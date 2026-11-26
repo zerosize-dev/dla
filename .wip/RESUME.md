@@ -3644,3 +3644,12 @@ unattended run at a time and no builder beside it.
 - After release: verify tag v0.9.0-preview.10 on db877a5, assets; refresh rig like preview.9
   (bin/dla.prev, plugin.prev, git archive db877a5 .claude-plugin agents bin data hooks skills,
   marketplace.json removed). Reruns wait for builder L to finish (no builder beside a run).
+- 03:10 UTC: preview.10 PUBLISHED: release run 45746227972 green; tag v0.9.0-preview.10 on db877a5
+  (commit), pre-release, 11 assets. Rig refreshed: /root/dla-real/bin/dla = released musl binary
+  (sha256 of tarball checked vs .sha256; binary sha 1816ec1ce2d1, `dla 0.9.0-preview.10`), old at
+  bin/dla.prev; /root/dla-real/plugin = git archive db877a5 (marketplace.json removed), old at
+  plugin.prev. gh release download is blocked (GraphQL): use gh api releases/assets/<id> with
+  Accept: application/octet-stream.
+- NEXT: when builder L is done and checked, push L's tree with CI, then start the reruns on the
+  preview.10 rig one at a time (interceptors, fastrace, otel-go, logstash, otel-python), keys in
+  wip-notes/start-run.sh, waiter u107/wait-run.sh <name> 7000.
