@@ -160,7 +160,8 @@ fn nothing_fits_and_before_you_stop_say_what_they_must() {
         "dla gate check --final",
         "reason and a next step",
         "INCOMPLETE",
-        "Do not rely on it",
+        "a `queue` open it lets none through",
+        "dla run abort --reason \"<why>\"",
         "integrity seals",
     ] {
         assert!(stop.contains(want), "Before you stop lacks {want:?}");

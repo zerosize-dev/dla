@@ -1261,7 +1261,7 @@ function startScriptWatch() {
       scriptUrls.set(String(p.scriptId), { url: p.url, map });
     });
     post('Debugger.enable');
-    captureNotes.push('--capture heap enables the inspector Debugger domain for the run to record script ids; scripts.json is informational (no dla adapter reads it, snapshots name their scripts), and the Debugger adds some overhead');
+    captureNotes.push('--capture heap enables the inspector Debugger domain for the run to record script ids; dla summarize heap-graph reads scripts.json to map the script ids of the function locations in a snapshot to files, and the Debugger adds some overhead');
   } catch (err) {
     captureNotes.push(`script ids could not be recorded: ${err && err.message}`);
   }
@@ -1649,6 +1649,8 @@ function build(phase, x, last) {
     gc_forced: false,
   };
   let preGc = null;
+  let captures = [];
+  let captured = false;
   if (!tick) {
     const mem = memValues();
     preGc = {
@@ -1658,10 +1660,32 @@ function build(phase, x, last) {
       'node.array_buffers': mem['node.array_buffers'],
       'os.rss': mem['os.rss'],
     };
+    // The captures due at this record are taken right after the forced collection and before the
+    // first WeakRef read of this job (sweepListenerRefs, countListeners): a WeakRef deref() that
+    // returns its target adds it to the job's kept list, and V8 writes that list into a heap
+    // snapshot as an edge from the strong roots (weak_refs_keep_during_job) to every tracked
+    // emitter that is alive. Nothing is kept alive by it that was not alive anyway, but it is the
+    // shortest path to every such emitter, and the agent must not put it there. The driver yields
+    // (setImmediate) before dla.checkpoint(), so at this point the list is empty. Command mode
+    // (the 'exit' phase) has no yield: the process 'exit' event runs inside whatever job was
+    // running, whose own derefs the agent cannot undo; the order is the same there.
+    const takeCaptures = () => {
+      if (captured) return;
+      captured = true;
+      if (!CAPTURE_ON) return;
+      try {
+        captures = captureNow(phase, x, last, memValues()['node.heap_used'], limitations);
+      } catch (err) {
+        limitations.push(`captures failed: ${err && err.message}`);
+      }
+    };
     if (gcFn !== null) {
       try {
         gcFn();
         gcFn();
+        takeCaptures();
+        // what the captures built (the profile, its JSON) is garbage the values must not count
+        if (captures.length > 0) gcFn();
         // the weak references of dead emitters are garbage the agent itself leaves behind
         if (sweepListenerRefs() > 0) gcFn();
         rec.gc_forced = true;
@@ -1671,6 +1695,7 @@ function build(phase, x, last) {
     } else {
       limitations.push('gc() unavailable: values are not after a collection');
     }
+    takeCaptures();
   }
   const values = { ...osValues(), ...memValues() };
   heapStats(values);
@@ -1693,10 +1718,7 @@ function build(phase, x, last) {
   }
   for (const note of probeLimitations) limitations.push(note);
   for (const note of captureNotes) limitations.push(note);
-  if (!tick && CAPTURE_ON) {
-    const captures = captureNow(phase, x, last, values['node.heap_used'], limitations);
-    if (captures.length > 0) rec.captures = captures;
-  }
+  if (captures.length > 0) rec.captures = captures;
   limitations.push('timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted');
   if (builtSites.size > 0) rec.built_sites = Object.fromEntries(builtSites);
   rec.limitations = limitations;

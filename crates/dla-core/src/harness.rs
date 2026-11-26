@@ -1029,12 +1029,7 @@ fn driver_code(run_dir: &Path, id: &str) -> Option<String> {
         };
         for line in text.lines() {
             let l = line.trim();
-            // The generated slot lines of a second-look skeleton are the same in every
-            // harness: they are no part of what makes two units different.
-            if l.is_empty()
-                || ["#", "//", "/*", "*"].iter().any(|c| l.starts_with(c))
-                || l.contains("(every slot variable must be used by the unit)")
-            {
+            if !is_code_line(l) {
                 continue;
             }
             out.extend(l.chars().filter(|c| !c.is_whitespace()));
@@ -1042,6 +1037,70 @@ fn driver_code(run_dir: &Path, id: &str) -> Option<String> {
         out.push('|');
     }
     Some(out)
+}
+
+/// A trimmed driver line that is code: not blank, not a comment, not a generated slot line.
+fn is_code_line(l: &str) -> bool {
+    // The generated slot lines of a second-look skeleton are the same in every harness: they
+    // are no part of what makes two units different.
+    !(l.is_empty()
+        || ["#", "//", "/*", "*"].iter().any(|c| l.starts_with(c))
+        || l.contains("(every slot variable must be used by the unit)"))
+}
+
+/// The code of the set-up of harness `id`: the lines after the `DLA-HOOK setup` marker up to the
+/// next `DLA-HOOK` marker (or the generated choice block), comments and whitespace removed like
+/// [`driver_code`]. The generated lines around the hook are the same in every driver of a
+/// runtime, so two set-ups differ exactly when the model wrote different code. `None` when no
+/// driver file has the marker.
+pub fn setup_code(run_dir: &Path, id: &str) -> Option<String> {
+    let dir = HarnessManifest::dir_in(run_dir, id).join("driver");
+    let mut files: Vec<PathBuf> = fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .map(|e| e.path())
+        .collect();
+    files.sort();
+    let mut out: Option<String> = None;
+    for f in files {
+        let Ok(text) = fs::read_to_string(&f) else {
+            continue;
+        };
+        let mut inside = false;
+        for line in text.lines() {
+            let l = line.trim();
+            if l.contains("DLA-HOOK setup") {
+                inside = true;
+                out.get_or_insert_with(String::new);
+                continue;
+            }
+            if !inside {
+                continue;
+            }
+            if l.contains("DLA-HOOK ") || l.contains("DLA-CHOICE-BEGIN") {
+                inside = false;
+                continue;
+            }
+            if is_code_line(l)
+                && let Some(o) = out.as_mut()
+            {
+                o.extend(l.chars().filter(|c| !c.is_whitespace()));
+            }
+        }
+        if let Some(o) = out.as_mut() {
+            o.push('|');
+        }
+    }
+    out
+}
+
+/// A digest of [`setup_code`]: two runs whose digests differ ran a different set-up. `None` when
+/// the driver has no `DLA-HOOK setup` marker.
+pub fn setup_digest(run_dir: &Path, id: &str) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let code = setup_code(run_dir, id)?;
+    Some(hex::encode(Sha256::digest(code.as_bytes()))[..16].to_owned())
 }
 
 /// The earlier harness of the same runtime that declares one of the targets of harness `id`
@@ -1108,6 +1167,9 @@ pub struct RunRecord {
     pub first: String,
     /// The digest of the driver directory when the run started.
     pub driver_digest: Option<String>,
+    /// The digest of the `DLA-HOOK setup` body when the run started (`None` in an older record
+    /// or a driver without the marker).
+    pub setup_digest: Option<String>,
     /// What a caller varies per unit, from the `VARIES.txt` of an entry-path harness when
     /// the run started.
     pub varies: Option<String>,
@@ -1143,6 +1205,10 @@ pub fn run_record_of(run_dir: &Path, id: &str, series: &str) -> Option<RunRecord
                 first: first.to_owned(),
                 driver_digest: doc
                     .get("driver_digest")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                setup_digest: doc
+                    .get("setup_digest")
                     .and_then(Value::as_str)
                     .map(str::to_owned),
                 varies: doc.get("varies").and_then(Value::as_str).map(str::to_owned),
@@ -1602,6 +1668,57 @@ impl HarnessDump {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The set-up body of every runtime's driver template is what the model writes after the
+    /// marker: a different unit does not change it, a different body does.
+    #[test]
+    fn the_setup_code_of_each_runtimes_driver_is_the_body_after_its_marker() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../harness");
+        let templates = [
+            ("python", "dla_harness.py"),
+            ("node", "dla-harness.cjs"),
+            ("rust", "dla_harness.rs"),
+            ("go", "zz_dla_driver_test.go.tmpl"),
+            ("jvm", "DlaHarness.java"),
+        ];
+        let filled = |text: &str, setup: &str, unit: &str| -> String {
+            text.lines()
+                .map(|l| {
+                    if l.contains("DLA-HOOK setup has not been filled in") {
+                        format!("{setup};")
+                    } else if l.contains("DLA-HOOK unit has not been filled in") {
+                        format!("{unit};")
+                    } else {
+                        l.to_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        for (rt, file) in templates {
+            let text = fs::read_to_string(root.join(rt).join(file)).unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let d = dir.path().join("harness").join("H1").join("driver");
+            fs::create_dir_all(&d).unwrap();
+            let code = |setup: &str, unit: &str| {
+                fs::write(d.join(file), filled(&text, setup, unit)).unwrap();
+                (
+                    setup_code(dir.path(), "H1").unwrap(),
+                    setup_digest(dir.path(), "H1").unwrap(),
+                )
+            };
+            let (a, da) = code("setupA(1)", "unitA(1)");
+            assert!(a.contains("setupA(1);"), "{rt}: {a}");
+            assert!(!a.contains("unitA"), "{rt}: {a}");
+            let (b, db) = code("setupA(1)", "unitB(2)");
+            assert_eq!((&a, &da), (&b, &db), "{rt}: the unit is not the set-up");
+            let (_, dc) = code("setupC(1)", "unitA(1)");
+            assert_ne!(da, dc, "{rt}: another body, another digest");
+            // The template as generated has a body too (the same in every driver).
+            fs::write(d.join(file), &text).unwrap();
+            assert!(setup_code(dir.path(), "H1").is_some(), "{rt}");
+        }
+    }
 
     #[test]
     fn the_line_runs_of_a_series_are_read_over_the_points_after_the_warm_up() {

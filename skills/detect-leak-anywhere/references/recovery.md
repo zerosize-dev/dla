@@ -93,7 +93,10 @@ slice, `state.json`, `coverage.json`, `report.md`) whose length or hash differs 
 The Stop hook blocks the end of the turn while `dla gate check --final` fails. It blocks the first two
 stop attempts; at the third attempt with no change in the ledger it lets the stop through, stamps the run
 INCOMPLETE with the reason "stop hook let the stop through after 3 stop attempts with no ledger change"
-and the missing ids, and the report says so. While a `dla` command of the run (census, sweep, harness run,
+and the missing ids, and the report says so. While budget is over the floor and a `queue` is open (and no
+command was refused for time with nothing smaller that fits), no stop attempt is counted and none is let
+through: the block names the queue's next command and `dla run abort --reason "<why>"`, the deliberate way
+to end the run. While a `dla` command of the run (census, sweep, harness run,
 trend, alloc-test, report, gap, intervene) is still running, a stop attempt is blocked with the command named
 and is not counted (a command running longer than 30 minutes is taken for hung). A stamp does not close the
 measurement queue: the time left decides, `dla run status` shows the queue and a `stop_stamp` field, and the next

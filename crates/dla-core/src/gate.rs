@@ -126,6 +126,16 @@ fn open_items_named(fix: &str) -> Vec<String> {
         .collect()
 }
 
+/// True when `fix` runs a confirm with its evidence (`dla ledger confirm <F> --evidence <E>`):
+/// the route of a finding a measurement decided for leak. The generic hint of a finding under
+/// test (`dla ledger confirm F2 or dla ledger refute F2`) names no evidence and is not one.
+fn confirms_with_evidence(fix: &str) -> bool {
+    fix.match_indices("dla ledger confirm ").any(|(i, m)| {
+        let mut words = fix[i + m.len()..].split_whitespace();
+        words.next().is_some() && words.next() == Some("--evidence")
+    })
+}
+
 /// Groups `all` into actions. A whole-process column or residual row whose fix names an open
 /// item that is itself listed waits on that open item; a finding whose fix is the batch
 /// command of a listed queue item waits on the queue; the rest with the same kind and fix are
@@ -174,7 +184,9 @@ pub fn actions(all: &[Missing]) -> Actions {
         HOLDER_KIND | CAPTURE_KIND | RESIDUAL_CAPTURE_KIND => 0,
         "queue" => 1,
         "growth" => 2,
-        "finding" if m.fix.contains("alloc-test") => 2,
+        // A finding a measurement decided for leak, or whose growth a dump measured, waits only
+        // on its alloc-test or on its confirm: its route is the fix.
+        "finding" if m.fix.contains("alloc-test") || confirms_with_evidence(&m.fix) => 2,
         "trigger" => 3,
         "open_item" => 4,
         // Findings still to close come before the checklist and the other bookkeeping.
@@ -935,6 +947,54 @@ fn superseded(view: &RunView, t: &TrendReport, c: &ColumnTrend) -> bool {
     })
 }
 
+/// Where the item of a growing column goes among the trends of one harness.
+#[derive(Debug, PartialEq)]
+enum SiteItem {
+    /// One item for this trend (a column with no site, a type count, a series with no harness).
+    Own,
+    /// A newer trend of the harness carries the item: this trend has none.
+    Newer,
+    /// This is the newest trend of the harness in which the column is non-flat; the older ones
+    /// (in order, possibly none) are named in its item.
+    Newest(Vec<String>),
+}
+
+/// A growing column with a site (`node.listeners@src/x.ts:12`, an allocation-site count) is
+/// one obligation per harness: a finding at its site ties it in every trend. Its item belongs
+/// to the newest trend of the series of the harness in which a column of that name is
+/// non-flat, and the older trends are named in it.
+fn site_item(view: &RunView, t: &TrendReport, c: &ColumnTrend) -> SiteItem {
+    let Some(harness) = view.series_harness.get(&t.series) else {
+        return SiteItem::Own;
+    };
+    let (Some(_), false, Some(mine)) = (
+        crate::grown::column_site(c),
+        is_type_count(&c.name),
+        trend_number(&t.id),
+    ) else {
+        return SiteItem::Own;
+    };
+    let mut others: Vec<(u64, &str)> = Vec::new();
+    for u in &view.trends {
+        if u.id == t.id
+            || view.gap_series.contains(&u.series)
+            || view.series_harness.get(&u.series) != Some(harness)
+            || !u.columns.iter().any(|d| d.name == c.name && non_flat(d))
+        {
+            continue;
+        }
+        let Some(n) = trend_number(&u.id) else {
+            continue;
+        };
+        if n > mine {
+            return SiteItem::Newer;
+        }
+        others.push((n, u.id.as_str()));
+    }
+    others.sort();
+    SiteItem::Newest(others.into_iter().map(|(_, id)| id.to_owned()).collect())
+}
+
 /// The residual rows that account for column `c` of `series`: the rows of the column's own
 /// region (all of the series' rows for a column of no region), or all of the series' rows
 /// when none is of that region. A row that does not record its series covers nothing.
@@ -1624,6 +1684,13 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
             }
             // A line a holder keeps alive, tied to the finding at that holder: the finding's own
             // item names its route, so this one names the finding and never an add command.
+            // A per-site column grows in every trend of a harness alike: one item, on the
+            // newest trend.
+            let site_others = match site_item(view, t, c) {
+                SiteItem::Newer => continue,
+                SiteItem::Newest(others) => others,
+                SiteItem::Own => Vec::new(),
+            };
             let by_holder: Vec<String> = held_column_findings(view, c)
                 .iter()
                 .filter(|f| !f.state.is_dispositioned())
@@ -1660,10 +1727,15 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
                 "trend_column",
                 format!("{}:{}", t.id, c.name),
                 format!(
-                    "column {} of {} ({}) is not flat and {why}",
+                    "column {} of {} ({}) is not flat and {why}{}",
                     readable_column(&c.name),
                     t.id,
-                    c.shape_name()
+                    c.shape_name(),
+                    if site_others.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" (also not flat in {})", site_others.join(", "))
+                    }
                 ),
                 fix,
             );
@@ -3813,5 +3885,273 @@ mod measured_holder_tests {
         let all = missing(&v, GateTarget::Final, None);
         assert!(all.iter().all(|m| m.kind != CAPTURE_KIND), "{all:?}");
         assert_eq!(column_ids(&all).len(), 3, "{all:?}");
+    }
+}
+
+#[cfg(test)]
+mod site_column_item_tests {
+    use super::*;
+    use crate::{
+        EvidenceId, FindingState, Ledger, NewFinding, Origin,
+        evidence::{Authority, EvidenceCoverage, NewEvidence, Source, Tool},
+    };
+
+    const LISTENER: &str = "node.listeners@src/x.ts:12";
+    const PYLINE: &str = "py.blocks@src/x.py:12";
+
+    fn col(name: &str) -> ColumnTrend {
+        serde_json::from_value(serde_json::json!({
+            "name": name, "unit": "count", "kind": "counter", "region": "heap",
+            "n": 8, "noise": 0.0, "rise": 100.0, "shape": "steady", "gate": "pass",
+            "gate_failed": [],
+        }))
+        .unwrap()
+    }
+
+    fn trend(id: &str, series: &str, names: &[&str]) -> TrendReport {
+        TrendReport {
+            schema_version: 1,
+            id: id.into(),
+            series: series.into(),
+            thresholds: dla_stats::GateThresholds::default(),
+            columns: names.iter().map(|n| col(n)).collect(),
+            targets: vec![],
+        }
+    }
+
+    /// A run (its directory kept alive by the caller) with the trends `(trend, series,
+    /// harness, columns)`.
+    fn scene(trends: &[(&str, &str, &str, &[&str])]) -> (tempfile::TempDir, RunView) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut l = Ledger::create(dir.path()).unwrap();
+        l.add_evidence(NewEvidence {
+            source: Source::Repo {
+                commit: "c".into(),
+                path: None,
+            },
+            tool: Tool {
+                name: "t".into(),
+                version: "1".into(),
+            },
+            authority: Authority::Static,
+            kind: EvidenceKind::StaticHit,
+            result: serde_json::json!({}),
+            raw: None,
+            coverage: EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        })
+        .unwrap();
+        let state =
+            crate::state::RunState::init("/p", None, 3600, None, crate::state::now_utc()).unwrap();
+        let mut view = RunView::new(state, l, None);
+        for (id, series, harness, cols) in trends {
+            view.trends.push(trend(id, series, cols));
+            view.series_harness
+                .insert((*series).into(), (*harness).into());
+        }
+        (dir, view)
+    }
+
+    fn column_items(view: &RunView) -> Vec<Missing> {
+        missing(view, GateTarget::Final, None)
+            .into_iter()
+            .filter(|m| m.kind == "trend_column")
+            .collect()
+    }
+
+    fn ids(items: &[Missing]) -> Vec<&str> {
+        items.iter().map(|m| m.id.as_str()).collect()
+    }
+
+    #[test]
+    fn a_per_site_column_of_three_series_of_one_harness_is_one_item_on_the_newest_trend() {
+        let (_d, v) = scene(&[
+            ("T2", "S2", "H1", &[LISTENER]),
+            ("T3", "S3", "H1", &[LISTENER]),
+            ("T5", "S5", "H1", &[LISTENER]),
+        ]);
+        let items = column_items(&v);
+        assert_eq!(ids(&items), [format!("T5:{LISTENER}")], "{items:?}");
+        assert!(
+            items[0].description.ends_with("(also not flat in T2, T3)"),
+            "{}",
+            items[0].description
+        );
+    }
+
+    #[test]
+    fn the_trend_order_is_the_trend_number_not_the_text() {
+        let (_d, v) = scene(&[
+            ("T10", "S10", "H1", &[LISTENER]),
+            ("T9", "S9", "H1", &[LISTENER]),
+            ("T2", "S2", "H1", &[LISTENER]),
+        ]);
+        let items = column_items(&v);
+        assert_eq!(ids(&items), [format!("T10:{LISTENER}")], "{items:?}");
+        assert!(items[0].description.ends_with("(also not flat in T2, T9)"));
+    }
+
+    #[test]
+    fn a_trend_where_the_column_is_flat_is_neither_named_nor_the_holder_of_the_item() {
+        let (_d, v) = scene(&[
+            ("T2", "S2", "H1", &[LISTENER]),
+            ("T3", "S3", "H1", &["node.listeners@src/y.ts:1"]),
+        ]);
+        let items = column_items(&v);
+        assert_eq!(items.len(), 2, "{items:?}");
+        assert!(items.iter().all(|m| !m.description.contains("also not")));
+    }
+
+    #[test]
+    fn the_same_column_in_another_harness_is_its_own_item() {
+        let (_d, v) = scene(&[
+            ("T2", "S2", "H1", &[LISTENER]),
+            ("T3", "S3", "H1", &[LISTENER]),
+            ("T4", "S4", "H2", &[LISTENER]),
+        ]);
+        let items = column_items(&v);
+        assert_eq!(
+            ids(&items),
+            [format!("T3:{LISTENER}"), format!("T4:{LISTENER}")],
+            "{items:?}"
+        );
+        assert!(items[0].description.ends_with("(also not flat in T2)"));
+        assert!(!items[1].description.contains("also not"));
+    }
+
+    #[test]
+    fn a_series_with_no_harness_keeps_its_item_per_trend() {
+        let (_d, mut v) = scene(&[
+            ("T2", "S2", "H1", &[LISTENER]),
+            ("T3", "S3", "H1", &[LISTENER]),
+        ]);
+        v.series_harness.remove("S2");
+        let items = column_items(&v);
+        assert_eq!(items.len(), 2, "{items:?}");
+    }
+
+    #[test]
+    fn a_finding_at_the_site_that_is_closed_leaves_no_item_in_any_trend() {
+        let (_d, mut v) = scene(&[
+            ("T2", "S2", "H1", &[PYLINE]),
+            ("T3", "S3", "H1", &[PYLINE]),
+            ("T5", "S5", "H1", &[PYLINE]),
+        ]);
+        let mut nf = NewFinding::new(Origin::parse("census").unwrap(), vec![EvidenceId::new(1)]);
+        nf.site = Some("src/x.py:12".into());
+        v.ledger.add_finding(nf).unwrap();
+        // Open finding: the column is tied, but to a finding with no disposition.
+        let open = column_items(&v);
+        assert_eq!(open.len(), 1, "{open:?}");
+        assert!(open[0].description.contains("only to findings"), "{open:?}");
+        v.ledger
+            .transition(
+                &"F1".parse().unwrap(),
+                FindingState::Unresolved,
+                Some(crate::finding::UnresolvedReason::NotExercised),
+                Some("run it".into()),
+                vec![EvidenceId::new(1)],
+                "t",
+            )
+            .unwrap();
+        let items = column_items(&v);
+        assert!(items.is_empty(), "{items:?}");
+    }
+
+    #[test]
+    fn a_whole_process_column_keeps_one_item_per_trend() {
+        let (_d, v) = scene(&[
+            ("T2", "S2", "H1", &["node.heap_used"]),
+            ("T3", "S3", "H1", &["node.heap_used"]),
+            ("T5", "S5", "H1", &["node.heap_used"]),
+        ]);
+        let items = column_items(&v);
+        assert_eq!(
+            ids(&items),
+            [
+                "T2:node.heap_used",
+                "T3:node.heap_used",
+                "T5:node.heap_used"
+            ],
+            "{items:?}"
+        );
+        assert!(items.iter().all(|m| !m.description.contains("also not")));
+    }
+
+    #[test]
+    fn the_stop_hook_count_and_the_digest_follow_the_single_item() {
+        let (_d, v) = scene(&[
+            ("T2", "S2", "H1", &[LISTENER]),
+            ("T3", "S3", "H1", &[LISTENER]),
+            ("T5", "S5", "H1", &[LISTENER]),
+        ]);
+        let all = missing(&v, GateTarget::Final, None);
+        let n = all.iter().filter(|m| m.kind == "trend_column").count();
+        assert_eq!(n, 1);
+        let list = actions(&all).list;
+        assert_eq!(
+            list.iter().filter(|a| a.kind == "trend_column").count(),
+            1,
+            "{list:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod action_rank_tests {
+    use super::*;
+
+    fn item(kind: &str, id: &str, fix: &str) -> Missing {
+        Missing {
+            kind: kind.to_owned(),
+            id: id.to_owned(),
+            description: format!("{id} item"),
+            fix: fix.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_finding_whose_route_is_its_confirm_ranks_with_the_measured_growth() {
+        let all = vec![
+            item(
+                "finding",
+                "F9",
+                "dla ledger resolve F9 --as unresolved --reason inconclusive --remedy \"<text>\"",
+            ),
+            item("open_item", "O1", "dla ledger resolve O1 --as unresolved"),
+            item(
+                "finding",
+                "F2",
+                "dla ledger add --sibling-of F2 --origin hypothesis --hypothesis N-WARM --refute-if \"growth continues over the extra cycles\" --evidence E7   then   dla ledger refute F2.n1 --evidence E7   then   dla ledger confirm F2 --evidence E6",
+            ),
+            item(
+                "queue",
+                "node",
+                "dla harness gen --lang node --driver --next",
+            ),
+            // The generic hint of a finding under test is no confirm route.
+            item(
+                "finding",
+                "F8",
+                "dla ledger confirm F8 or dla ledger refute F8 (with --evidence)",
+            ),
+            item(
+                "growth",
+                "F3",
+                "dla ledger test F3 --evidence E5   then   dla alloc-test H1 --finding F3",
+            ),
+        ];
+        let ids: Vec<String> = actions(&all).list.into_iter().map(|m| m.id).collect();
+        // The queue first; then the two measured ones (in either order); then the open item and
+        // the plain finding.
+        assert_eq!(ids[0], "node", "{ids:?}");
+        let mut measured = ids[1..3].to_vec();
+        measured.sort();
+        assert_eq!(measured, ["F2", "F3"], "{ids:?}");
+        assert_eq!(ids[3], "O1", "{ids:?}");
+        let mut plain = ids[4..].to_vec();
+        plain.sort();
+        assert_eq!(plain, ["F8", "F9"], "{ids:?}");
     }
 }

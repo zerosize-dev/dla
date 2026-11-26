@@ -184,13 +184,17 @@ pub fn list(ctx: &Ctx, a: ListArgs) -> Res<String> {
                 m.verdict.as_str(),
                 m.detail
             ));
-            e["focus"] = json!(format!(
-                "pending: {} gives it a harness of its own",
-                queues.iter().find(|q| q.pending.contains(id)).map_or_else(
-                    || "dla harness gen --driver --next".to_owned(),
-                    |q| q.missed_command(id)
-                )
-            ));
+            let command = queues.iter().find(|q| q.pending.contains(id)).map_or_else(
+                || "dla harness gen --driver --next".to_owned(),
+                |q| q.missed_command(id),
+            );
+            e["focus"] = match ix.setup_hold(id) {
+                Some(h) => json!(format!(
+                    "pending: {}; {command} gives it a harness of its own",
+                    queue::setup_hold_sentence(id, &h, None)
+                )),
+                None => json!(format!("pending: {command} gives it a harness of its own")),
+            };
         }
         lines.push((f.state.as_str().to_owned(), e));
     }
@@ -372,10 +376,16 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
         // column points at it and no alloc-test is bound to it. The commands are printed in
         // order and each one is accepted as printed.
         if let Some(g) = grown.iter().find(|g| g.finding == f.id) {
-            left.push((
-                f.id.to_string(),
-                format!("its column grew: {}", g.commands().join("   then   ")),
-            ));
+            let why = if g.dump.is_some() {
+                format!(
+                    "{} and nothing decided it: {}",
+                    g.grew_text(),
+                    g.commands().join("   then   ")
+                )
+            } else {
+                format!("its column grew: {}", g.commands().join("   then   "))
+            };
+            left.push((f.id.to_string(), why));
             continue;
         }
         // An alloc-test that favors leak decided it: it is confirmed (or refuted by a newer
@@ -398,10 +408,14 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
                     format!("{}. Then: ", dla_core::features::lead(&gaps, &command))
                 })
                 .unwrap_or_default();
+            let held = ix
+                .setup_hold(&f.id)
+                .map(|h| format!("{}. Then: ", queue::setup_hold_sentence(&f.id, &h, None)))
+                .unwrap_or_default();
             left.push((
                 f.id.to_string(),
                 format!(
-                    "pending in the {} queue: {gated}{cmd}",
+                    "pending in the {} queue: {gated}{held}{cmd}",
                     runtime.unwrap_or_default()
                 ),
             ));

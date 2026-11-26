@@ -17,6 +17,14 @@
 //! is preferred over a plain `static:` holder of the same owner. Holders inside `node:` modules
 //! are not tracked, but when only they grow the result says so.
 //!
+//! The printed output has `kept_by` and `root` for the holders that pass (three at most, see
+//! [`node_path`]): the retention path from the root to the holder, and what the root is. When a
+//! native handle keeps a bound function or a closure of a script, `root` gives the project line
+//! of that function from the snapshot's `locations`, the `scripts.json` sidecar beside the
+//! snapshots and the source map of a bundle, or says the line is not known; `needed` then starts
+//! with the mechanism. They are in the printed output only (the evidence result has its own
+//! bound; the summary files carry the whole path with the `site` of each function).
+//!
 //! A column is tied by the tie rule's rule 1 only: the holder's owner (`src.scheduler.shared`,
 //! module path plus name, the form the census uses) equals the finding's owner. The module
 //! comes from the snapshot itself: the `script` of the closures that use a context, or of
@@ -63,6 +71,7 @@ use super::{
     Adapter, AdapterOut, CandidateRow, Ctx, Op, Opts, Recorded, emit, growth,
     histogram::{self, Capture, Origin as HistOrigin},
     input::Input,
+    node_path::{self, Kept, Sidecar},
     rule::{self, Observed},
     tie,
 };
@@ -84,6 +93,11 @@ const MAX_NEW_CANDIDATES: usize = 3;
 const DOMINATOR_TIME: Duration = Duration::from_secs(300);
 /// Longest a name is shown.
 const CLIP: usize = 100;
+/// Holders whose retention path the output shows.
+const KEPT_HOLDERS: usize = 3;
+/// The printed output stays below this many bytes (the bound is `MAX_OUTPUT_BYTES`; the rest
+/// is room for a coverage gap).
+const PRINT_BUDGET: usize = dla_core::MAX_OUTPUT_BYTES - 128;
 
 const FORMATS: &str =
     "V8 heap snapshot (.heapsnapshot, from v8.writeHeapSnapshot or the inspector)";
@@ -142,7 +156,7 @@ fn module_path(rel: &str) -> String {
 
 /// The part of a script path below the harness work copy, `src/board.js` of
 /// `/p/.dla/r1/harness/H1/work/src/board.js`, or `None` for any other path.
-fn harness_work_relative(path: &str) -> Option<&str> {
+pub(super) fn harness_work_relative(path: &str) -> Option<&str> {
     let parts: Vec<&str> = path.split('/').collect();
     let at = parts.windows(5).position(|w| {
         w[0] == ".dla"
@@ -244,6 +258,8 @@ struct View {
     /// True for Node's own modules (`node:internal/...`).
     internal: bool,
     generic: bool,
+    /// How the root keeps it, for the output.
+    kept: Kept,
 }
 
 /// A name from the heap shown without data in it: a property or variable name stays when
@@ -290,7 +306,7 @@ fn sanitize(h: &mut dla_parsers::node::Holder, red: &super::redact::Redactor) {
     }
 }
 
-fn view_of(h: &dla_parsers::node::Holder, project: &Path) -> View {
+fn view_of(h: &dla_parsers::node::Holder, project: &Path, side: &mut Sidecar) -> View {
     let (module, in_project) = h
         .script
         .as_deref()
@@ -361,6 +377,7 @@ fn view_of(h: &dla_parsers::node::Holder, project: &Path) -> View {
         project: in_project,
         internal: module.starts_with("node:"),
         generic: generic_class(&h.owner),
+        kept: node_path::describe(h, in_project, side, project),
     }
 }
 
@@ -627,10 +644,12 @@ fn heap_graph(ctx: &Ctx<'_>, inputs: &[Input], a: &Opts) -> Res<AdapterOut> {
             ids: snap.sorted_ids(),
         });
         drop((dom, bfs, snap));
+        // The script ids of the process: `scripts.json` next to the snapshots.
+        let mut side = Sidecar::beside(&i.abs);
         let (internal, views): (Vec<View>, Vec<View>) = summary
             .holders
             .iter()
-            .map(|h| view_of(h, &tc.project))
+            .map(|h| view_of(h, &tc.project, &mut side))
             .partition(|v| v.internal);
         // The stored summary names the module, never the path of the machine.
         for h in &mut summary.holders {
@@ -1283,8 +1302,108 @@ fn series_part(
     } else {
         "no passing holder is tied in the evidence: dla census --lang node gives each module variable and field an owner, which a holder then ties to".to_owned()
     };
+    // The holder a reader looks at first: when a native handle keeps its objects, say so
+    // before the next step, and give the line that hands them to it when it is known.
+    let top_kept = shown
+        .first()
+        .and_then(|&i| latest(&passed[i].0))
+        .map(|v| &v.kept)
+        .filter(|k| gate_pass && k.native);
+    let needed_text = match top_kept {
+        Some(k) => format!(
+            "native code keeps the objects (a handle that is not released); the line that hands them to it is {}; then {needed_text}",
+            k.line.as_deref().unwrap_or("not known from the snapshots")
+        ),
+        None => needed_text,
+    };
     out.insert("needed".into(), json!(needed_text));
+    // The line a native handle's callback is defined at, in one sentence the bounded output
+    // never cuts (`native_hint` is kept whole by `out::emit`): the `needed` and `root` texts
+    // are cut to fit, and a cut line names no line.
+    if let Some(line) = top_kept.and_then(|k| k.line.as_deref()) {
+        let finding = shown
+            .first()
+            .and_then(|&i| tie_for(&passed[i].0))
+            .map_or_else(|| "<finding>".to_owned(), |t| t.finding.to_string());
+        out.insert(
+            "native_hint".into(),
+            json!(format!(
+                "native code keeps these objects: it holds a callback whose function is defined at {line} and that is bound to them or closes over them; name as the site the line that hands that callback to native code (where it is stored or bound), or this one: dla ledger annotate {finding} --site {line}"
+            )),
+        );
+    }
+    // The retention path of the shown holders, in the printed output only: the evidence
+    // result is held to its own bound, and the summary files carry the full path.
+    let paths: Vec<(String, Kept)> = shown
+        .iter()
+        .take(KEPT_HOLDERS)
+        .filter_map(|&i| latest(&passed[i].0).map(|v| (clip(&passed[i].0, 60), v.kept.clone())))
+        .collect();
+    // What the command prints around the body of the adapter.
+    let around = json!({
+        "ok": true,
+        "command": "summarize heap-graph",
+        "backend": "node-heapsnapshot",
+        "evidence": recorded.iter().map(|r| r.id.to_string()).collect::<Vec<_>>(),
+        "raw": series_raw.to_json(),
+    });
+    fit_kept(out, paths, to_string(&around).len());
     Ok(series_raw)
+}
+
+/// Adds `kept_by` and `root` (a map from the holder to its text each) for as many of `paths`
+/// as keep the printed output within [`PRINT_BUDGET`], the first holder at least: for it the
+/// later discriminators give way (the ledger has them all), then its texts are cut.
+fn fit_kept(out: &mut Map<String, Value>, mut paths: Vec<(String, Kept)>, around: usize) {
+    let room =
+        |out: &Map<String, Value>| PRINT_BUDGET.saturating_sub(around + to_string(out).len());
+    let cost = |(key, k): &(String, Kept)| {
+        2 * (to_string(key).len() + 2) + to_string(&k.kept_by).len() + to_string(&k.root).len() + 2
+    };
+    // The two keys and the `more` count.
+    const FRAME: usize = 40;
+    while paths.first().is_some_and(|p| cost(p) + FRAME > room(out)) {
+        let more = out
+            .get("discriminators_more")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let Some(Value::Array(list)) = out.get_mut("discriminators") else {
+            break;
+        };
+        if list.len() <= 1 {
+            break;
+        }
+        list.pop();
+        out.insert("discriminators_more".into(), json!(more + 1));
+    }
+    if let Some(p) = paths.first_mut()
+        && cost(p) + FRAME > room(out)
+    {
+        p.1.kept_by = clip(&p.1.kept_by, 100);
+        p.1.root = clip(&p.1.root, 140);
+    }
+    let mut spent = FRAME;
+    let (mut kept_by, mut root) = (Map::new(), Map::new());
+    for (n, p) in paths.iter().enumerate() {
+        if n > 0 && spent + cost(p) > room(out) {
+            break;
+        }
+        spent += cost(p);
+        kept_by.insert(p.0.clone(), json!(p.1.kept_by));
+        root.insert(p.0.clone(), json!(p.1.root));
+    }
+    if kept_by.is_empty() {
+        return;
+    }
+    if kept_by.len() < paths.len() {
+        root.insert("more".into(), json!(paths.len() - kept_by.len()));
+    }
+    out.insert("kept_by".into(), Value::Object(kept_by));
+    out.insert("root".into(), Value::Object(root));
+}
+
+fn to_string<T: Serialize + ?Sized>(v: &T) -> String {
+    serde_json::to_string(v).unwrap_or_default()
 }
 
 /// The next step for a tied finding, given the holder the snapshots show and the one the
@@ -1491,10 +1610,12 @@ mod tests {
                 Hop {
                     node: "Object".into(),
                     edge: ".alice_0b".into(),
+                    site: None,
                 },
                 Hop {
                     node: "Cache".into(),
                     edge: ".items".into(),
+                    site: None,
                 },
             ],
             accumulation: None,
@@ -1543,6 +1664,7 @@ mod tests {
             project: true,
             internal: false,
             generic: false,
+            kept: Kept::default(),
         }
     }
 
@@ -1649,5 +1771,80 @@ mod tests {
         assert!(!plain_ident("user-12345"));
         assert!(!plain_ident("9f8e7d6c5b4a"));
         assert!(!plain_ident(""));
+    }
+
+    fn kept(n: usize) -> (String, Kept) {
+        (
+            format!("field:src.conn.Conn{n}.request"),
+            Kept {
+                kept_by: "(Global handles) > HTTPParser[1] > bound function (this) > Conn.request"
+                    .into(),
+                root: "a native handle keeps an HTTPParser, which keeps a bound function of a function defined at src/conn.js:119 whose this is the Conn".into(),
+                native: true,
+                line: Some("src/conn.js:119".into()),
+            },
+        )
+    }
+
+    fn body(discriminators: usize) -> Map<String, Value> {
+        let Value::Object(m) = json!({
+            "needed": "x".repeat(300),
+            "discriminators": (0..discriminators).map(|i| json!({"holder": "h".repeat(60), "i": i})).collect::<Vec<_>>(),
+        }) else {
+            unreachable!()
+        };
+        m
+    }
+
+    #[test]
+    fn the_paths_that_fit_are_printed_and_the_rest_is_counted() {
+        // Room for everything.
+        let mut out = body(1);
+        fit_kept(&mut out, (0..3).map(kept).collect(), 100);
+        assert_eq!(out["kept_by"].as_object().unwrap().len(), 3);
+        assert!(out["root"].get("more").is_none());
+        // Room for the first only: the other two are counted, never half-shown.
+        let mut out = body(1);
+        let used = serde_json::to_string(&out).unwrap().len();
+        fit_kept(
+            &mut out,
+            (0..3).map(kept).collect(),
+            PRINT_BUDGET - used - 330,
+        );
+        assert_eq!(out["kept_by"].as_object().unwrap().len(), 1, "{out:?}");
+        assert_eq!(out["root"]["more"], 2);
+        let total = 100 + serde_json::to_string(&out).unwrap().len();
+        assert!(total <= PRINT_BUDGET, "{total}");
+    }
+
+    #[test]
+    fn the_first_path_makes_room_by_dropping_later_discriminators_then_by_cutting_its_text() {
+        let mut out = body(3);
+        out.insert("discriminators_more".into(), json!(0));
+        let used = serde_json::to_string(&out).unwrap().len();
+        // Not enough room for the first path as it is: discriminators go, down to one.
+        fit_kept(&mut out, vec![kept(0)], PRINT_BUDGET - used - 150);
+        assert!(out.get("kept_by").is_some());
+        assert_eq!(
+            out["discriminators"].as_array().unwrap().len(),
+            1,
+            "{out:?}"
+        );
+        assert_eq!(out["discriminators_more"], 2);
+        // Still not enough: the texts are cut, the holder stays.
+        let mut out = body(1);
+        let used = serde_json::to_string(&out).unwrap().len();
+        let mut long = kept(0);
+        long.1.root = "word ".repeat(60);
+        fit_kept(&mut out, vec![long], PRINT_BUDGET - used - 60);
+        let root = out["root"]
+            .as_object()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .as_str()
+            .unwrap();
+        assert!(root.ends_with("..."), "{root}");
     }
 }

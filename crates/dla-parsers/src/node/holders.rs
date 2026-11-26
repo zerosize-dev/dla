@@ -82,6 +82,16 @@ pub struct Accumulation {
     pub bytes: u64,
 }
 
+/// Where a function was created, as the snapshot's `locations` table has it: the script id
+/// V8 gave the script (the key of the `scripts.json` sidecar of the agent) and a zero-based
+/// line and column of the generated script.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Site {
+    pub script_id: u32,
+    pub line: u32,
+    pub column: u32,
+}
+
 /// One step of a retention path: a node and the edge leaving it.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Hop {
@@ -89,6 +99,11 @@ pub struct Hop {
     pub node: String,
     /// `.name` for a named edge, `[n]` for an element or hidden edge, `...` for a gap.
     pub edge: String,
+    /// For a function (closure) node, where it was created; for a bound function, where its
+    /// target function (edge `bound_function`) was created. `None` when the snapshot has no
+    /// location for it, and for every node that is not a function.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<Site>,
 }
 
 /// One holder in one snapshot.
@@ -344,13 +359,31 @@ impl Snapshot {
         }
     }
 
-    fn path_hops(&self, bfs: &Bfs, u: usize, e: usize) -> Vec<Hop> {
+    /// The creation site of the function `n`: its own row of the `locations` table, or for a
+    /// bound function (the one whose edge `bound_function` names its target) the target's.
+    /// `None` for a node that is not a function, and for one without a row.
+    fn function_site(&self, sites: &HashMap<usize, Site>, n: usize) -> Option<Site> {
+        if sites.is_empty() || !self.is_closure(n) {
+            return None;
+        }
+        let target = self
+            .edges_of(n)
+            .find(|&e| self.edge_name(e) == Some("bound_function"))
+            .map(|e| self.edge_target(e));
+        target
+            .and_then(|t| sites.get(&t))
+            .or_else(|| sites.get(&n))
+            .copied()
+    }
+
+    fn path_hops(&self, sites: &HashMap<usize, Site>, bfs: &Bfs, u: usize, e: usize) -> Vec<Hop> {
         let hop = |from: usize, edge: usize| Hop {
             node: clip(self.node_name(from)),
             edge: self.edge_name(edge).map_or_else(
                 || format!("[{}]", self.edge_index(edge)),
                 |s| format!(".{}", clip(s)),
             ),
+            site: self.function_site(sites, from),
         };
         let mut hops: Vec<Hop> = bfs
             .path_to(u)
@@ -364,6 +397,7 @@ impl Snapshot {
             hops.push(Hop {
                 node: String::new(),
                 edge: "...".to_owned(),
+                site: None,
             });
             hops.extend(tail);
         }
@@ -575,6 +609,19 @@ impl Snapshot {
                 }
             }
         }
+        let sites: HashMap<usize, Site> = self
+            .locations()
+            .map(|(n, script_id, line, column)| {
+                (
+                    n,
+                    Site {
+                        script_id,
+                        line,
+                        column,
+                    },
+                )
+            })
+            .collect();
         let mut ranked: Vec<(Key, Acc)> = agg.into_iter().collect();
         ranked.sort_by(|a, b| b.1.retained.cmp(&a.1.retained).then_with(|| a.0.cmp(&b.0)));
         ranked.truncate(opts.max_holders);
@@ -583,7 +630,7 @@ impl Snapshot {
         for (i, ((kind, registry, script, owner, name), a)) in ranked.into_iter().enumerate() {
             let (path, accumulation, root_kind) = match a.best {
                 Some((_, u, e, v)) => (
-                    self.path_hops(bfs, u, e),
+                    self.path_hops(&sites, bfs, u, e),
                     (i < opts.accumulate)
                         .then(|| self.accumulation(v, &first, &kids))
                         .flatten(),
@@ -806,6 +853,7 @@ impl Snapshot {
                         let mut path = vec![Hop {
                             node: clip(self.node_name(from)),
                             edge: format!(".{}", clip(var)),
+                            site: None,
                         }];
                         path.extend(below.iter().cloned());
                         if !found.iter().any(|(s, v, _)| *s == script && v == var) {
@@ -826,6 +874,7 @@ impl Snapshot {
                                 || format!("[{}]", self.edge_index(e)),
                                 |s| format!(".{}", clip(s)),
                             ),
+                            site: None,
                         }];
                         path.extend(below.iter().cloned());
                         next.push((from, path));
@@ -1339,6 +1388,10 @@ mod tests {
             ("object", "Payload", 30, vec![]),
         ]);
         assert_eq!(s.job_keep_only(), 2);
+        // The targets of the edge, by node index and class.
+        let targets = s.job_keep_targets();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(s.class_name(targets[0]), "Orphan");
         let h = holders_of(&s);
         assert_eq!(h.reachable, 3, "{h:?}");
         assert!(h.holders.is_empty(), "{:?}", h.holders);
@@ -1472,5 +1525,109 @@ mod tests {
         assert!(is_agent_script("C:\\p\\.dla\\r\\harness\\H2\\agent\\x.cjs"));
         assert!(!is_agent_script("/p/src/agent/index.js"));
         assert!(!is_agent_script("/p/.dla/r/harness/H1/work/src/a.js"));
+    }
+
+    /// Nodes: roots, `(Global handles)` keeping a parser that keeps a bound function (target at
+    /// node 5, a closure) whose `this` is a `Conn` that holds `request`.
+    fn bound_scene(locations: &str) -> Snapshot {
+        let t = build(&[
+            ("synthetic", "", 0, vec![("element", "0", 1)]),
+            (
+                "synthetic",
+                "(GC roots)",
+                0,
+                vec![("element", "0", 2), ("element", "1", 5)],
+            ),
+            (
+                "synthetic",
+                "(Global handles)",
+                0,
+                vec![("element", "2", 3)],
+            ),
+            ("native", "NativeParser", 64, vec![("element", "1", 4)]),
+            (
+                "closure",
+                "native_bind",
+                32,
+                vec![
+                    ("internal", "bound_this", 6),
+                    ("internal", "bound_function", 5),
+                ],
+            ),
+            ("closure", "onData", 24, vec![]),
+            ("object", "Conn", 32, vec![("property", "request", 7)]),
+            ("object", "Request", 2000, vec![]),
+        ]);
+        let t = t.replace("\"locations\":[]", &format!("\"locations\":[{locations}]"));
+        Snapshot::read(t.as_bytes(), t.len() as u64).unwrap()
+    }
+
+    #[test]
+    fn a_bound_function_on_the_path_has_the_site_of_its_target() {
+        // `object_index` is an offset into the node array of seven fields: node 5.
+        let s = bound_scene("35,12,118,4");
+        let h = holders_of(&s);
+        let req = h.holders.iter().find(|x| x.name == "request").unwrap();
+        let names: Vec<(&str, &str)> = req
+            .path
+            .iter()
+            .map(|p| (p.node.as_str(), p.edge.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("", "[0]"),
+                ("(GC roots)", "[0]"),
+                ("(Global handles)", "[2]"),
+                ("NativeParser", "[1]"),
+                ("native_bind", ".bound_this"),
+                ("Conn", ".request"),
+            ]
+        );
+        let sites: Vec<Option<Site>> = req.path.iter().map(|p| p.site).collect();
+        let at = Site {
+            script_id: 12,
+            line: 118,
+            column: 4,
+        };
+        assert_eq!(sites, [None, None, None, None, Some(at), None]);
+        // The site is kept in the summary file's form.
+        let json = serde_json::to_string(&req.path[4]).unwrap();
+        assert!(json.contains("\"script_id\":12"), "{json}");
+        let back: Hop = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.site, Some(at));
+        // A hop without a site has no key (the summary files of before still load).
+        assert!(
+            !serde_json::to_string(&req.path[3])
+                .unwrap()
+                .contains("site")
+        );
+    }
+
+    #[test]
+    fn a_function_without_a_location_row_and_a_node_that_is_no_function_have_no_site() {
+        // No row for the target: nothing is guessed.
+        let s = bound_scene("");
+        let h = holders_of(&s);
+        let req = h.holders.iter().find(|x| x.name == "request").unwrap();
+        assert!(req.path.iter().all(|p| p.site.is_none()), "{:?}", req.path);
+        // A row for a plain object (V8 gives instances the location of their class): not a
+        // function, no site.
+        let s = bound_scene("42,12,3,0");
+        let h = holders_of(&s);
+        let req = h.holders.iter().find(|x| x.name == "request").unwrap();
+        assert!(req.path.iter().all(|p| p.site.is_none()), "{:?}", req.path);
+        // A closure's own row is its site when it has no bound target.
+        let s = bound_scene("28,9,40,2");
+        let h = holders_of(&s);
+        let req = h.holders.iter().find(|x| x.name == "request").unwrap();
+        assert_eq!(
+            req.path[4].site,
+            Some(Site {
+                script_id: 9,
+                line: 40,
+                column: 2
+            })
+        );
     }
 }

@@ -1585,3 +1585,234 @@ fn a_long_command_registers_itself_while_it_runs_and_marks_itself_stopped() {
         p.state()
     );
 }
+
+// ----------------------------------------------------- budget left and a queue open
+
+/// A project with a small Python library (a cached function and a class-level dict with a
+/// writer and no remover), swept, counted and given its workloads: its ranked candidates
+/// make the `python` queue open. Intake is answered; the budget is the run's default, far
+/// over its floor.
+fn queue_project() -> P {
+    let p = project("repository");
+    let put = |rel: &str, text: &str| {
+        let f = p.path().join(rel);
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        fs::write(f, text).unwrap();
+    };
+    put("shop/__init__.py", "");
+    put(
+        "shop/cache.py",
+        "import functools\n\n\n@functools.lru_cache(None)\ndef price_for(handler, key):\n    return (handler, key)\n",
+    );
+    put(
+        "shop/reg.py",
+        "class Registry:\n    _by_key = {}\n\n    def put(self, key, value):\n        Registry._by_key[key] = value\n",
+    );
+    for args in [
+        &["sweep", "--lang", "python"][..],
+        &["census", "--lang", "python"][..],
+        &["workload", "discover", "--lang", "python"][..],
+    ] {
+        let out = p
+            .dla()
+            .env("DLA_CONSENT_TIERS", "1,2,3")
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0), "{args:?}: {out:?}");
+    }
+    p
+}
+
+/// The missing items of the final gate that are `kind`.
+fn missing_kinds(p: &P) -> Vec<String> {
+    let out = p.dla().args(["gate", "check", "--final"]).output().unwrap();
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
+    v["missing"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|m| m["kind"].as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Moves the run's deadline to `minutes` from now.
+fn set_deadline(p: &P, minutes: i64) {
+    let mut st = p.state();
+    st["budget"]["deadline"] = json!(
+        (chrono::Utc::now() + chrono::Duration::minutes(minutes))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    );
+    fs::write(p.run_dir().join("state.json"), st.to_string()).unwrap();
+}
+
+#[test]
+fn the_fixture_has_an_open_queue_in_the_final_gate() {
+    let p = queue_project();
+    let kinds = missing_kinds(&p);
+    assert!(kinds.iter().any(|k| k == "queue"), "{kinds:?}");
+}
+
+#[test]
+fn an_open_queue_with_budget_over_the_floor_is_not_given_up_by_four_stop_attempts() {
+    let p = queue_project();
+    for out in stop_attempts(&p, 4) {
+        let v = out.json();
+        assert_eq!(v["decision"], "block", "{out:?}");
+        let reason = v["reason"].as_str().unwrap();
+        assert!(reason.len() <= 1000, "{} bytes", reason.len());
+        assert!(reason.contains("This stop is not counted: "), "{reason}");
+        assert!(reason.contains(" budget minutes remain and the python queue is open. Run its next batch (dla harness gen --lang python --driver --next)"), "{reason}");
+        assert!(
+            reason.contains(
+                "dla run abort --reason \"<why>\" (the report says the run is aborted, and why)"
+            ),
+            "{reason}"
+        );
+        // After the budget line, before the items.
+        let budget = reason
+            .find("measure what is open instead of stopping")
+            .unwrap();
+        assert!(
+            budget < reason.find("This stop is not counted").unwrap(),
+            "{reason}"
+        );
+    }
+    let st = p.state();
+    assert_eq!(st["status"], "active", "{st}");
+    assert!(
+        st["stop_blocks"].is_null() || st["stop_blocks"] == 0,
+        "{st}"
+    );
+    assert!(st["incomplete_reason"].is_null(), "{st}");
+}
+
+#[test]
+fn an_open_queue_under_the_floor_lets_the_third_stop_attempt_through() {
+    let p = queue_project();
+    set_deadline(&p, 4);
+    let outs = stop_attempts(&p, 3);
+    for out in &outs[..2] {
+        let reason = out.json()["reason"].as_str().unwrap().to_owned();
+        assert!(!reason.contains("not counted"), "{reason}");
+    }
+    assert!(outs[2].allowed(), "{:?}", outs[2]);
+    assert!(outs[2].stderr.contains("INCOMPLETE"), "{:?}", outs[2]);
+    assert_eq!(p.state()["status"], "incomplete");
+}
+
+#[test]
+fn budget_left_and_no_open_queue_lets_the_third_stop_attempt_through() {
+    // Findings and open items alone (the symptom run has no queue) never hold a stop.
+    let p = project("symptom");
+    assert!(!missing_kinds(&p).iter().any(|k| k == "queue"));
+    let outs = stop_attempts(&p, 3);
+    for out in &outs[..2] {
+        let reason = out.json()["reason"].as_str().unwrap().to_owned();
+        assert!(!reason.contains("not counted"), "{reason}");
+    }
+    assert!(outs[2].allowed(), "{:?}", outs[2]);
+    assert_eq!(p.state()["status"], "incomplete");
+}
+
+#[test]
+fn a_queue_closed_for_a_blocker_does_not_hold_the_stop() {
+    let p = queue_project();
+    p.ok(&[
+        "ledger",
+        "resolve",
+        "intake.workload",
+        "--status",
+        "unresolved",
+        "--reason",
+        "env_unavailable",
+        "--remedy",
+        "no interpreter for the driver",
+        "--runtime",
+        "python",
+    ]);
+    assert!(!missing_kinds(&p).iter().any(|k| k == "queue"));
+    let outs = stop_attempts(&p, 3);
+    assert!(outs[2].allowed(), "{:?}", outs[2]);
+    assert_eq!(p.state()["status"], "incomplete");
+}
+
+#[test]
+fn an_open_queue_after_a_refusal_with_nothing_smaller_that_fits_is_counted_as_today() {
+    let p = queue_project();
+    let line = format!(
+        "{}\n",
+        json!({"ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+               "worker": null, "none_fits": true})
+    );
+    fs::write(p.run_dir().join("time_refusals.jsonl"), line).unwrap();
+    let outs = stop_attempts(&p, 3);
+    for out in &outs[..2] {
+        let reason = out.json()["reason"].as_str().unwrap().to_owned();
+        assert!(!reason.contains("not counted"), "{reason}");
+        assert!(reason.contains("nothing smaller that fits"), "{reason}");
+    }
+    assert!(outs[2].allowed(), "{:?}", outs[2]);
+    assert_eq!(p.state()["status"], "incomplete");
+}
+
+#[test]
+fn a_worker_slice_with_an_open_queue_is_held_and_not_counted() {
+    let p = queue_project();
+    p.ok(&["run", "dispatch", "--workers", "python"]);
+    let t = tempfile::tempdir().unwrap();
+    let tr = transcript(
+        t.path(),
+        &["dla --worker python ledger add --origin census"],
+    );
+    for _ in 0..4 {
+        let out = p.hook(&["stop-hook", "--subagent"], &subagent_json(p.path(), &tr));
+        let v = out.json();
+        assert_eq!(v["decision"], "block", "{out:?}");
+        let reason = v["reason"].as_str().unwrap();
+        assert!(reason.contains("This stop is not counted: "), "{reason}");
+        assert!(reason.contains("the python queue is open"), "{reason}");
+        // A worker is not offered the end of the whole run.
+        assert!(!reason.contains("dla run abort"), "{reason}");
+    }
+    let st = p.state();
+    let stalled = st["workers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|w| w["stalled"] == true);
+    assert!(!stalled, "{st}");
+    // Under the worker's own floor the third attempt stalls it, as today.
+    let mut st = p.state();
+    let soon = (chrono::Utc::now() + chrono::Duration::minutes(4))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    for w in st["workers"].as_array_mut().unwrap() {
+        w["deadline"] = json!(soon);
+    }
+    fs::write(p.run_dir().join("state.json"), st.to_string()).unwrap();
+    let outs: Vec<Out> = (0..3)
+        .map(|_| p.hook(&["stop-hook", "--subagent"], &subagent_json(p.path(), &tr)))
+        .collect();
+    assert!(outs[2].allowed(), "{:?}", outs[2]);
+    assert!(outs[2].stderr.contains("stalled"), "{:?}", outs[2]);
+}
+
+#[test]
+fn run_abort_with_a_reason_ends_a_held_run_and_the_stop_is_allowed() {
+    let p = queue_project();
+    let held = p.hook(&["stop-hook"], &stop_json(p.path()));
+    assert_eq!(held.json()["decision"], "block", "{held:?}");
+    p.ok(&["run", "abort", "--reason", "the owner asked to end it"]);
+    let out = p.hook(&["stop-hook"], &stop_json(p.path()));
+    assert!(out.allowed(), "{out:?}");
+    assert_eq!(p.state()["status"], "aborted");
+    let report = p.dla().arg("report").output().unwrap();
+    let md = String::from_utf8(report.stdout).unwrap();
+    assert!(
+        md.contains("run is aborted: the owner asked to end it"),
+        "{md}"
+    );
+    assert!(md.contains("the owner asked to end it"), "{md}");
+}

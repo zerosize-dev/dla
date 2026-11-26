@@ -63,14 +63,17 @@ const PROTECTED: [&str; 9] = [
 /// alloc-test's sentence about capturing the stacks that lead to a growing allocation line;
 /// `holders_hint` is the trend's sentence about capturing who holds the objects of such a line;
 /// `regenerate` is the `dla harness gen` command that builds a Rust harness again with the
-/// features its targets need (a cut command does not run).
-const KEPT_WHOLE: [&str; 6] = [
+/// features its targets need (a cut command does not run). `native_hint` is the Node heap
+/// graph's sentence naming the line of the callback a native handle keeps (a cut line names
+/// no line).
+const KEPT_WHOLE: [&str; 7] = [
     "junit_hint",
     "pytest_hint",
     "queue_next",
     "stacks_hint",
     "holders_hint",
     "regenerate",
+    "native_hint",
 ];
 
 /// Longest string kept whole in a protected value.
@@ -320,6 +323,24 @@ mod tests {
         assert!(serde_json::to_string(&b).unwrap().len() < MAX_OUTPUT_BYTES);
         assert_eq!(b["truncated"], true);
         assert_eq!(b["holders_hint"], hint);
+    }
+
+    #[test]
+    fn the_native_hint_of_a_heap_graph_is_never_cut() {
+        let hint = format!(
+            "native code keeps these objects: it holds a callback whose function is defined at src/{}conn.ts:124 and that is bound to them or closes over them; name as the site the line that hands that callback to native code (where it is stored or bound), or this one: dla ledger annotate F1 --site src/conn.ts:124",
+            "deep/".repeat(30)
+        );
+        assert!(hint.len() > PROTECTED_STR, "{}", hint.len());
+        let v = json!({
+            "ok": true,
+            "native_hint": hint,
+            "root": vec!["a long text ".repeat(20); 40],
+        });
+        let b = bound(v);
+        assert!(serde_json::to_string(&b).unwrap().len() < MAX_OUTPUT_BYTES);
+        assert_eq!(b["truncated"], true);
+        assert_eq!(b["native_hint"], hint);
     }
 
     #[test]

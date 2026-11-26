@@ -3065,7 +3065,11 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             .iter()
             .filter_map(|t| ix.writer_miss(&t.id).map(|m| (t.id.clone(), m)))
             .collect();
-        targets::add_writer_gaps(&ctx.project, &mut described, &misses);
+        let holds: std::collections::BTreeMap<FindingId, Vec<String>> = described
+            .iter()
+            .filter_map(|t| ix.setup_hold(&t.id).map(|h| (t.id.clone(), h)))
+            .collect();
+        targets::add_writer_gaps(&ctx.project, &mut described, &misses, &holds);
     }
     if manifest.is_entry_path() {
         targets::add_entry_facts(&ctx.project, rt, &mut described);

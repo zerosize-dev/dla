@@ -3844,6 +3844,7 @@ fn run_loaded(
         "captures": out.captures,
         "ffi_sites": out.ffi_sites.iter().map(ffi_site_json).collect::<Vec<_>>(),
         "driver_digest": dla_core::harness::driver_digest(&ctx.run_dir, &manifest.id),
+        "setup_digest": dla_core::harness::setup_digest(&ctx.run_dir, &manifest.id),
         "purpose": manifest.purpose.map(|p| p.as_str()),
         "varies": varies,
         dla_core::harness::RUN_DEPENDENCY_ENV: out.dependency_env,

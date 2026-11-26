@@ -50,6 +50,7 @@ pub mod loader_tie;
 pub mod lsan;
 pub mod node_heapprofile;
 pub mod node_heapsnapshot;
+pub mod node_path;
 pub mod node_resources;
 pub mod non_heap;
 pub mod nonheap_json;

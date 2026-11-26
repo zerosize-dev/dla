@@ -439,3 +439,90 @@ fn a_heap_summary_names_the_module_array_and_no_path_goes_through_the_weak_ref_j
         }
     }
 }
+
+/// Every heap snapshot a run of `registry_project` wrote, read with the snapshot reader. The
+/// unit adds an emitter with a listener to a module-level array once per unit, so many live
+/// emitters are tracked by the agent when each snapshot is taken.
+fn registry_snapshots() -> Vec<(PathBuf, dla_parsers::node::Snapshot)> {
+    let dir = tempfile::tempdir().unwrap();
+    let project = registry_project(dir.path());
+    let init = ok(&project, &["run", "init", "--session-id", "t"]);
+    let run_dir = project.join(".dla").join(init["run_id"].as_str().unwrap());
+    ok(&project, &["consent", "--tiers", "1-2"]);
+    ok(&project, &["census", "--lang", "node"]);
+    ok(&project, &["workload", "discover", "--lang", "node"]);
+    let g = ok(&project, &["harness", "gen", "--lang", "node", "--driver"]);
+    let edit = project.join(g["summary"]["edit"].as_str().unwrap());
+    let text = fs::read_to_string(&edit)
+        .unwrap()
+        .replace(
+            "  throw new Error('DLA-HOOK setup has not been filled in');",
+            "  state.registry = projectRequire('src/registry.js');",
+        )
+        .replace(
+            "  throw new Error('DLA-HOOK unit has not been filled in');",
+            "  state.registry.register(key);",
+        );
+    assert!(!text.contains("has not been filled in"));
+    fs::write(&edit, text).unwrap();
+    ok(
+        &project,
+        &[
+            "harness",
+            "run",
+            "H1",
+            "--mode",
+            "fresh",
+            "--capture",
+            "heap",
+        ],
+    );
+    let m = manifest(&run_dir, "H1");
+    let files = listed(&m, &run_dir, "heap");
+    assert!(files.len() >= 2, "{files:?}");
+    files
+        .into_iter()
+        .map(|f| {
+            let snap =
+                dla_parsers::node::Snapshot::read_file(&f, &dla_parsers::node::Options::default())
+                    .unwrap();
+            (f, snap)
+        })
+        .collect()
+}
+
+#[test]
+fn the_agent_takes_its_heap_snapshot_before_it_reads_any_weak_ref_of_the_job() {
+    if !have_node() {
+        return;
+    }
+    for (file, snap) in registry_snapshots() {
+        // The agent reads a WeakRef to every tracked emitter (the sweep, the listener count) in
+        // the same job; a snapshot taken after those reads has an edge from the strong roots,
+        // named `weak_refs_keep_during_job`, to V8's list of the objects read, whose elements
+        // are every one of them that is alive.
+        let kept: Vec<usize> = snap
+            .job_keep_targets()
+            .into_iter()
+            .flat_map(|list| {
+                std::iter::once(list).chain(snap.edges_of(list).map(|e| snap.edge_target(e)))
+            })
+            .filter(|&n| snap.class_name(n) == "EventEmitter")
+            .collect();
+        assert!(
+            kept.is_empty(),
+            "{}: {} EventEmitter objects are kept by the job's WeakRef list: the snapshot was taken after a deref()",
+            file.display(),
+            kept.len()
+        );
+        // The snapshot is of the live emitters: they are there, and the module array holds them.
+        let live = (0..snap.node_count())
+            .filter(|&n| snap.class_name(n) == "EventEmitter")
+            .count();
+        assert!(
+            live > 100,
+            "{}: only {live} emitters in the snapshot",
+            file.display()
+        );
+    }
+}
