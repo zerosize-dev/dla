@@ -903,11 +903,14 @@ fn two_findings_in_the_function_of_a_stack_are_both_named_and_no_single_command_
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let sum = r.ok(&args);
     assert_eq!(sum["gate"], "pass", "{sum}");
-    // The `Vec` of the boxes of `KEPT_A` is one block that is resized, allocated at the line of
-    // the push (a recorded writer of `KEPT_A`): it ties to that finding alone. The stack of the
-    // box (the other line of the function) ties to none, and is the one both findings are named
-    // for.
-    assert_eq!(sum["tied"], serde_json::json!([a]), "{sum}");
+    // The `Vec` of a static is one block that is resized, allocated at the line of its push (a
+    // recorded writer of that static): it ties to that finding alone, whichever of the two
+    // buffers shows a rise at every point in the run (glibc moves or extends a large block
+    // either way). The stack of the box (the other line of the function) ties to none, and is
+    // the one both findings are named for.
+    let tied = sum["tied"].as_array().unwrap();
+    assert_eq!(tied.len(), 1, "{sum}");
+    assert!(tied[0] == a.as_str() || tied[0] == b.as_str(), "{sum}");
     let mut named: Vec<&str> = sum["same_function"]
         .as_array()
         .unwrap()
