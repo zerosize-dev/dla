@@ -1352,6 +1352,14 @@ fn refuse_grown_unmeasured(ctx: &Ctx, id: &FindingId, loaded: Option<&Loaded<'_>
                 "{id} decided by the result of that dump series: its non-leak sibling refuted and the finding confirmed (growth measured is decided, not closed)"
             ),
         )
+    } else if let Some(l) = &g.longer {
+        (
+            format!("{id} cannot be closed: {}, and {}", g.grew_text(), l.text()),
+            format!(
+                "the alloc-test of {id} run with --extra {} (the window it named), or the budget spent down to its floor (growth measured is decided, not closed)",
+                l.needed
+            ),
+        )
     } else if let Some(sh) = &g.shared {
         (
             format!(

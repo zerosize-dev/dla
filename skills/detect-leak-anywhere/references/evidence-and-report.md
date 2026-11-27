@@ -162,7 +162,11 @@ non-heap finding the primary is `jvm.nonheap_used`, which must plateau together 
   units (counters: every-delta over the extra window), the growth continues and the test favors
   `leak`. If the extra rise is within 3 noise units (counters: no net increase) the growth
   stopped: favors `non-leak`, supports N-WARM and N-HWM. A cache that fills and stops, and a pool
-  that reaches its high-water mark, end up here. Anything else is inconclusive.
+  that reaches its high-water mark, end up here. A column that grows in steps (a `Vec` that doubles
+  its capacity) is read by its steps instead of its slope: a new maximum that holds at the end of the
+  extra window is growth that continues, and a flat window shorter than the next step is expected to
+  come (the gaps grow) is inconclusive, with the `--extra` that covers it. Anything else is
+  inconclusive.
 - **Purge test** (process and off-heap columns, and gauges). `drop` is the value before the purge
   minus the value after; `growth` is the value before the purge minus the value at the end of
   warm-up. A growth that is no more than the column's smallest rise (32 KiB for a byte column,

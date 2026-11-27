@@ -33,6 +33,8 @@ pub struct RunView {
     pub slices: Vec<SliceSummary>,
     /// The run directory, for a view loaded from disk.
     pub run_dir: Option<PathBuf>,
+    /// The worker whose slice this view replays (worker mode), whose deadline also counts.
+    pub worker: Option<String>,
     /// The trend reports (`trend/T<n>.json`), oldest first.
     pub trends: Vec<TrendReport>,
     /// The series files present (`S1`, `S2`, ...), for a view loaded from disk.
@@ -93,6 +95,7 @@ impl RunView {
             checklist,
             slices: Vec::new(),
             run_dir: None,
+            worker: None,
             trends: Vec::new(),
             series_ids: Vec::new(),
             gap_series: std::collections::BTreeSet::new(),
@@ -135,9 +138,11 @@ impl RunView {
         let ledger = Ledger::load_for(run_dir, Some(w))?;
         let coverage = CoverageManifest::load(run_dir)?;
         let slices = slice::summaries(run_dir)?;
-        Ok(Self::new(state, ledger, coverage)
+        let mut view = Self::new(state, ledger, coverage)
             .with_slices(slices)
-            .with_disk_facts(run_dir))
+            .with_disk_facts(run_dir);
+        view.worker = Some(w.to_owned());
+        Ok(view)
     }
 
     /// Adds what lives next to the ledger: the trend reports, the series files and the
