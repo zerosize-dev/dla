@@ -1151,6 +1151,8 @@ fn also_growing_line(view: &RunView, f: &Finding) -> Option<String> {
             .columns
             .iter()
             .filter(|c| dla_core::gate::non_flat(c) && !dla_core::gate::is_whole_process(&c.name))
+            // The capture rule's own pass: a column that failed it does not grow.
+            .filter(|c| dla_core::grown::counts_as_growth(c))
             .filter(|c| c.finding.is_none() && c.candidates.is_empty())
             .collect();
         if cols.is_empty() {

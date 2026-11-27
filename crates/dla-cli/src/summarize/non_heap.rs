@@ -466,9 +466,15 @@ pub fn run_diff(
             "no passing column ties to {f} by holder, site or type: a group ties by its creation site (a goroutine's created-by frame, a thread's spawn frame) equal to the finding's site or one of its writers, and a classloader group by the exact loader class of the holder's declared type"
         )
     } else if site_is_current_frame(&captures[0].snap.source) {
-        "the growing items tie to no finding: a JVM thread dump has no creation site, so its groups never tie; a thread leak is tied by a probe column on the holder, or by a heap-dump holder. Whole-process totals never tie".to_owned()
+        growth::untied_needed(
+            &g,
+            "a JVM thread dump has no creation site, so its groups never tie; a thread leak is tied by a probe column on the holder, or by a heap-dump holder. Whole-process totals never tie",
+        )
     } else {
-        "the growing items tie to no finding: a group ties by its creation site (run dla census so a spawn or handle holder exists there), and a classloader group by the holder's declared loader type (exactly the loader class of the group). Whole-process totals never tie".to_owned()
+        growth::untied_needed(
+            &g,
+            "a group ties by its creation site (run dla census so a spawn or handle holder exists there), and a classloader group by the holder's declared loader type (exactly the loader class of the group). Whole-process totals never tie",
+        )
     };
     body.insert("needed".into(), json!(needed));
     out.evidence.push(g.evidence);

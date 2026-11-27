@@ -1,7 +1,10 @@
 //! The dump-series rule and the plateau discriminator: pure functions over the retained
 //! bytes and dominated counts of one holder in successive dumps.
 
-use dla_core::discriminator::Favors;
+use dla_core::{
+    discriminator::Favors,
+    series::{Axis, ColumnKind, SeriesFile},
+};
 use serde_json::{Value, json};
 
 /// Fewest dumps that can confirm growth.
@@ -136,6 +139,62 @@ pub fn gate_at(o: &Observed, xs: Option<&[f64]>) -> Result<Growth, Vec<String>> 
         last_over_first: ratio,
         resized,
     })
+}
+
+/// The x positions the capture rule reads for the points of a capture series (what `dla
+/// summarize` wrote as the series' own x): the units of work or the bytes allocated at each
+/// capture, so the last-over-first test compares rates; `None` for the capture or dump number
+/// (the points one unit apart), which is the plain rule.
+pub fn series_xs(series: &SeriesFile) -> Option<Vec<f64>> {
+    matches!(series.axis, Axis::Iteration | Axis::AllocatedBytes)
+        .then(|| series.points.iter().map(|p| p.x).collect())
+}
+
+/// The figure of column `idx` at every point of the series (whole numbers: byte and block
+/// counts).
+fn column_figures(series: &SeriesFile, idx: usize) -> Vec<Option<u64>> {
+    series
+        .points
+        .iter()
+        .map(|p| {
+            p.values
+                .get(idx)
+                .copied()
+                .flatten()
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .map(|v| v.round() as u64)
+        })
+        .collect()
+}
+
+/// The figures one thing followed across captures has in a capture series: its bytes column and
+/// its `.count` column (`dla summarize` writes the two side by side), or, for a column that has
+/// no partner, the column itself as both. The two columns of one thing have one verdict.
+pub fn observed_of_column(series: &SeriesFile, idx: usize) -> Observed {
+    let col = &series.columns[idx];
+    let by_name = |name: &str| series.columns.iter().position(|c| c.name == name);
+    let (bytes_at, counts_at) = match col.name.strip_suffix(".count") {
+        Some(base) if col.kind == ColumnKind::Counter => (by_name(base).unwrap_or(idx), idx),
+        _ if col.kind == ColumnKind::Gauge => {
+            (idx, by_name(&format!("{}.count", col.name)).unwrap_or(idx))
+        }
+        _ => (idx, idx),
+    };
+    Observed {
+        bytes: column_figures(series, bytes_at),
+        counts: column_figures(series, counts_at),
+    }
+}
+
+/// The capture rule ([`gate_at`]) on column `idx` of a capture series, at the series' own x
+/// ([`series_xs`]): what `dla trend` reads a series `dla summarize` wrote as, so that a column
+/// has the verdict the summary gave it. `dla summarize` applies [`gate_at`] to the same figures
+/// at the same x when it writes the series.
+pub fn judge_column(series: &SeriesFile, idx: usize) -> Result<Growth, Vec<String>> {
+    gate_at(
+        &observed_of_column(series, idx),
+        series_xs(series).as_deref(),
+    )
 }
 
 /// What to do when [`stood_still`] is true for a series.

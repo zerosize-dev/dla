@@ -485,7 +485,10 @@ pub fn run_diff(
             "no passing column ties to {f} by holder, site or type: dla summarize heap-graph on 3 or more dumps of the same process records the holder's accumulation class, or annotate {f}'s owner so its declared element type is read"
         )
     } else {
-        "no passing type ties to a finding by holder, site or type: dla summarize heap-graph on 3 or more dumps of the same process records each holder's accumulation class; generic types (String, byte[], collections) never tie".to_owned()
+        growth::untied_needed(
+            &g,
+            "no passing type ties to a finding by holder, site or type: dla summarize heap-graph on 3 or more dumps of the same process records each holder's accumulation class; generic types (String, byte[], collections) never tie, so a finding made from one needs the holder or site that keeps it",
+        )
     };
     body.insert("needed".into(), json!(needed));
     out.evidence.push(g.evidence);

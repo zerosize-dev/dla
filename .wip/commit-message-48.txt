@@ -1,0 +1,47 @@
+A capture series has one verdict, and its measured growth stays open until decided
+
+A real run on a Rust library took the allocation stacks of its driver at 1, 2 and 4 times the step.
+`dla summarize alloc-stack-diff` passed two stack columns at project sites. `dla trend` of the same
+series failed every column, and the run ended "no leak confirmed" after 8 of 167 minutes, with the
+growth closed as "inconclusive" by a hypothesis.
+
+The chain that lost the growth applies to the capture summaries of every runtime (allocation stacks,
+heap graphs, type histograms):
+
+- `dla trend` judged a series `dla summarize` wrote by the eight-point slope gate. Three captures
+  always fail "n < 8", and an exact Mann-Kendall test at three points cannot reach p < 0.05.
+- The final gate then offered the failing trend record to `dla ledger add`, so the finding had no
+  site.
+- The summary series named no harness, so an alloc-test of the driver for that finding was refused
+  as `harness-not-about`.
+- Nothing made the finding a lead, so a close by text was accepted.
+
+What changes:
+
+- `dla trend` judges a series of source kind `dump` by the capture rule `dla summarize` applied to
+  it: one function both commands call, over the series' own x.
+  - A column passes in the trend exactly when it passed in the summary. A bytes column and its
+    block-count column have one verdict.
+  - The count column of one block that is resized reads `resized`, not flat.
+  - The report's thresholds say three points, and the evidence names the rule.
+  - A rise that stopped still fails and does not read as growing.
+  - Harness series keep the eight-point gate unchanged.
+- A summary series names the harness when every capture it read lies under that one harness. It is
+  about that harness (an alloc-test of it can decide a finding made from the series). It is never a
+  run of it: attempts, executed counts, the queue, budget rules and residual items read runs only.
+- The final gate lists only capture columns that passed and tie to no finding. Its fix offers the
+  passing record and names the alloc-test on the harness.
+  - `dla summarize` prints the same `dla ledger add --origin growth-series --evidence <E>` command
+    for every summary kind.
+  - The finding takes the site of the largest passing column.
+  - One finding ties both the bytes and the count column of a capture.
+- That finding is a lead when the captures came from a hook driver, and either the finding was made
+  from the series or the driver was made for it.
+  - `dla ledger resolve --as unresolved` by text is then refused while budget is above its floor,
+    and the refusal names the alloc-test.
+  - A passed dump column that names no finding leads to the finding now at its site.
+  - A later trend of the series does not bring back a lead that a decision lifted.
+  - Captures of the project's own workload, or of a driver made for other findings, stay no lead.
+- A finding made from a capture accounts for its growing stacks only while it is open, once it is
+  decided, or when it was closed for time at the budget floor or for an environment blocker.
+- The report's "also growing" lists only columns that passed.

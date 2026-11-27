@@ -190,6 +190,7 @@ mod tests {
             gate: a.gate,
             gate_failed: a.gate_failed,
             gate_note: a.gate_note,
+            resized: false,
         }
     }
 

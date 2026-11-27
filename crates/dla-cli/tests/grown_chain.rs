@@ -176,6 +176,7 @@ fn run_with_a_passed_column(budget: &str) -> (R, String, String) {
         gate: GateVerdict::Pass,
         gate_failed: vec![],
         gate_note: None,
+        resized: false,
     };
     TrendReport {
         schema_version: 1,
@@ -375,6 +376,11 @@ fn growth_at_another_site_of_a_measured_leak_may_be_recorded_as_part_of_it() {
 /// `dump`), its growth evidence and its trend T2 with `n` growing stack columns, the first
 /// `tied` to F2. Returns the evidence id.
 fn a_capture_summary(r: &R, n: usize, tied: bool) -> String {
+    a_capture_summary_with(r, n, tied, GateVerdict::Pass)
+}
+
+/// [`a_capture_summary`] whose columns have the gate verdict `gate`.
+fn a_capture_summary_with(r: &R, n: usize, tied: bool, gate: GateVerdict) -> String {
     fs::write(
         r.run_dir.join("series/S2.json"),
         json!({"id": "S2", "source": {"kind": "dump"},
@@ -407,9 +413,10 @@ fn a_capture_summary(r: &R, n: usize, tied: bool) -> String {
             noise: 0.0,
             rise: 100.0 + i as f64,
             shape: TrendShape::Steady,
-            gate: GateVerdict::Fail,
+            gate,
             gate_failed: vec![],
             gate_note: None,
+            resized: false,
         })
         .collect();
     TrendReport {
@@ -470,6 +477,13 @@ fn untied_stack_columns_of_one_capture_summary_are_one_action() {
 }
 
 #[test]
+fn columns_of_a_capture_summary_that_failed_its_gate_are_no_growth_to_explain() {
+    let (r, _, _) = run_with_a_passed_column("3h");
+    a_capture_summary_with(&r, 5, false, GateVerdict::Fail);
+    assert!(items_of_t2(&r).is_empty(), "{:?}", items_of_t2(&r));
+}
+
+#[test]
 fn the_stacks_of_a_summary_whose_finding_an_alloc_test_decided_need_nothing() {
     let (r, _, _) = run_with_a_passed_column("3h");
     a_capture_summary(&r, 12, true);
@@ -508,9 +522,10 @@ fn a_summary_with_a_total_and_two_groups(r: &R, alloc_tested: bool) -> String {
         noise: 0.0,
         rise: 10.0,
         shape: TrendShape::Steady,
-        gate: GateVerdict::Fail,
+        gate: GateVerdict::Pass,
         gate_failed: vec![],
         gate_note: None,
+        resized: false,
     };
     TrendReport {
         schema_version: 1,

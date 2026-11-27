@@ -156,6 +156,25 @@ pub struct SeriesSource {
 }
 
 impl SeriesSource {
+    /// The harness whose run wrote the series. A series `dla summarize` wrote from captures
+    /// (kind `dump`) names the harness the captures came from in `harness` as well, but no run
+    /// of it wrote the series: it is none here (see [`Self::capture_harness`]).
+    pub fn run_harness(&self) -> Option<&str> {
+        if self.kind == SeriesSourceKind::Dump {
+            return None;
+        }
+        self.harness.as_deref()
+    }
+
+    /// The harness every capture a `dla summarize` series was read from lies under (kind `dump`
+    /// only): what the series is about, not a run that measured.
+    pub fn capture_harness(&self) -> Option<&str> {
+        if self.kind == SeriesSourceKind::Dump {
+            return self.harness.as_deref();
+        }
+        None
+    }
+
     /// A source of `kind` with every other field unset.
     pub fn new(kind: SeriesSourceKind) -> Self {
         Self {

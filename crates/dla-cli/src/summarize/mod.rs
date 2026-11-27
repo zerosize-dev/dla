@@ -164,6 +164,9 @@ pub struct Ctx<'a> {
     pub env: Env,
     ledger: RefCell<Option<Ledger>>,
     resolver: dla_core::attribution::Resolver,
+    /// The harness every input of the call lies under (`harness/<H>/` of the run), when there is
+    /// one: the series a growth summary writes names it as its `source.harness`.
+    capture_harness: Option<String>,
 }
 
 impl<'a> Ctx<'a> {
@@ -177,7 +180,37 @@ impl<'a> Ctx<'a> {
             env: env.clone(),
             ledger: RefCell::new(None),
             resolver: dla_core::attribution::Resolver::new(&tc.run_dir, &tc.project),
+            capture_harness: None,
         })
+    }
+
+    /// Records the harness the `inputs` were captured by: the one rule of
+    /// [`dla_core::measured_holders::harness_of_labels`] over the path of each input inside the
+    /// run directory (an input outside it, or outside any `harness/<H>/`, names none, and so
+    /// does a call over the captures of two harnesses).
+    pub fn with_inputs(mut self, inputs: &[input::Input]) -> Self {
+        let run = self
+            .tc
+            .run_dir
+            .canonicalize()
+            .unwrap_or_else(|_| self.tc.run_dir.clone());
+        let labels: Vec<String> = inputs
+            .iter()
+            .map(|i| {
+                let abs = i.abs.canonicalize().unwrap_or_else(|_| i.abs.clone());
+                abs.strip_prefix(&run)
+                    .map(dla_core::paths::to_slash)
+                    .unwrap_or_default()
+            })
+            .collect();
+        self.capture_harness =
+            dla_core::measured_holders::harness_of_labels(labels.iter().map(String::as_str));
+        self
+    }
+
+    /// The harness every input of the call was captured by (see [`Self::with_inputs`]).
+    pub fn capture_harness(&self) -> Option<&str> {
+        self.capture_harness.as_deref()
     }
 
     /// The run's ledger, loaded on first use. One instance serves the whole command, so
@@ -816,7 +849,7 @@ pub fn execute_in(
         }
     };
     let a = selected.adapter;
-    let ctx = Ctx::new(tc, env)?;
+    let ctx = Ctx::new(tc, env)?.with_inputs(&inputs);
     // An unknown --finding is refused before anything is written, whatever the operation
     // and however many captures there are.
     if let Some(f) = &req.finding

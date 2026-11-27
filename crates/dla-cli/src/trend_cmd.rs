@@ -208,7 +208,20 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         ));
     }
 
-    let th = GateThresholds::default();
+    // A series `dla summarize` wrote from captures is judged by the capture rule it was judged by
+    // there, not by the slope gate: the report's thresholds say so (its fewest points are the
+    // rule's, not the gate's eight), the evidence's limitations name the rule, and a series of
+    // three captures is not a short one.
+    let capture = analysis::is_capture_series(&main.series);
+    let judged_by = analysis::rule_line(&main.series);
+    let th = if capture {
+        GateThresholds {
+            min_points: crate::summarize::rule::MIN_DUMPS as u32,
+            ..GateThresholds::default()
+        }
+    } else {
+        GateThresholds::default()
+    };
     let mut cols = analysis::analyze_series(&main.series, &idx, &th);
     candidates::Matcher::new(project, &ledger)
         .with_census(&ctx.run_dir)
@@ -221,7 +234,8 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         ledger: &ledger,
         series: &main.series,
         columns: &cols,
-        too_short: short::is_short(&main.series, &th).then(|| short::points(&main.series, &th)),
+        too_short: (!capture && short::is_short(&main.series, &th))
+            .then(|| short::points(&main.series, &th)),
         executed: None,
     });
 
@@ -288,8 +302,11 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
             total: Some(total),
         };
         spec.limitations = main.series.limitations.clone();
-        spec.limitations
-            .push("gate thresholds are provisional (not calibrated)".to_owned());
+        spec.limitations.push(
+            judged_by
+                .clone()
+                .unwrap_or_else(|| "gate thresholds are provisional (not calibrated)".to_owned()),
+        );
         let id = tc.add_evidence(&mut ledger, spec)?;
         evidence.push((kind, id));
     }
@@ -496,7 +513,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
     ) {
         next.insert(0, entry);
     }
-    if !short_cols.is_empty() || short::is_short(&main.series, &th) {
+    if !capture && (!short_cols.is_empty() || short::is_short(&main.series, &th)) {
         let rerun = main
             .series
             .source
@@ -546,7 +563,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
     if let Some(line) = dla_core::series::choices_line(&main.series) {
         out.insert("choices".into(), json!(line));
     }
-    if let Some(h) = main.series.source.harness.as_deref()
+    if let Some(h) = main.series.source.run_harness()
         && let Ok(m) = dla_core::HarnessManifest::load(&ctx.run_dir, h)
         && m.is_second_look()
     {
@@ -612,7 +629,7 @@ fn holders_hint(ctx: &Ctx, series: &dla_core::SeriesFile, next: &[String]) -> Op
         n.starts_with("dla ledger add --origin growth-series ")
             && n.contains("# no finding there; py.blocks@")
     })?;
-    let h = series.source.harness.as_deref()?;
+    let h = series.source.run_harness()?;
     let m = dla_core::HarnessManifest::load(&ctx.run_dir, h).ok()?;
     if !dla_workload::harness::capture::heap_is_holder_chains(m.runtime)
         || m.captures.iter().any(|f| f.path.ends_with(".retain.json"))
@@ -627,7 +644,7 @@ fn holders_hint(ctx: &Ctx, series: &dla_core::SeriesFile, next: &[String]) -> Op
 
 /// The registration site of the first detector hit with one, in the run that wrote `series`.
 fn detector_site(ctx: &Ctx, series: &dla_core::SeriesFile) -> Option<String> {
-    let h = series.source.harness.as_deref()?;
+    let h = series.source.run_harness()?;
     let rec = dla_core::harness::run_record_of(&ctx.run_dir, h, &series.id)?;
     rec.detectors.iter().find_map(|d| {
         d["site"]
@@ -648,7 +665,7 @@ fn detector_entry(
     passed: &[&ColumnTrend],
     growth_evidence: &[(EvidenceKind, EvidenceId)],
 ) -> Option<String> {
-    let h = series.source.harness.as_deref()?;
+    let h = series.source.run_harness()?;
     let rec = dla_core::harness::run_record_of(&ctx.run_dir, h, &series.id)?;
     let hit = rec
         .detectors
@@ -747,7 +764,7 @@ fn detector_entry(
 /// The `next` entry of a JVM series while the measurement queue has test-loop batches left: the
 /// count, and the command that makes the next one. `None` otherwise.
 fn test_loop_entry(ctx: &Ctx, series: &dla_core::SeriesFile) -> Option<String> {
-    let h = series.source.harness.as_deref()?;
+    let h = series.source.run_harness()?;
     let m = dla_core::HarnessManifest::load(&ctx.run_dir, h).ok()?;
     if m.runtime != dla_core::runtime::Runtime::Jvm {
         return None;
@@ -767,7 +784,7 @@ fn missed_targets_entry(
     series: &dla_core::SeriesFile,
     verdicts: &[dla_core::trend::TargetVerdict],
 ) -> Option<String> {
-    let h = series.source.harness.as_deref()?;
+    let h = series.source.run_harness()?;
     let m = dla_core::HarnessManifest::load(&ctx.run_dir, h).ok()?;
     if !m.is_hook_driver() || m.is_entry_path() {
         return None;
@@ -817,7 +834,7 @@ fn missed_targets_entry(
 /// report just stored counts), `trigger: reproduced` and the command that comes next.
 fn entry_path_triggers(ctx: &Ctx, series: &dla_core::SeriesFile, out: &mut Map<String, Value>) {
     use dla_core::trigger::{Trigger, Triggers};
-    let Some(h) = series.source.harness.as_deref() else {
+    let Some(h) = series.source.run_harness() else {
         return;
     };
     let Ok(m) = dla_core::HarnessManifest::load(&ctx.run_dir, h) else {
@@ -1026,7 +1043,7 @@ fn evidence_of(evidence: &[(EvidenceKind, EvidenceId)], c: &ColumnTrend) -> Opti
 
 /// The latest `workload` evidence of the series' harness.
 fn harness_evidence(ledger: &Ledger, series: &SeriesFile) -> Option<String> {
-    let h = series.source.harness.as_deref()?;
+    let h = series.source.run_harness()?;
     ledger
         .evidence_in_order()
         .filter(|e| e.kind == EvidenceKind::Workload)
@@ -1097,7 +1114,7 @@ fn suggestions(
                 {
                     next.push(format!("dla ledger test {root} --evidence {harness}"));
                 }
-                if let Some(h) = series.source.harness.as_deref() {
+                if let Some(h) = series.source.run_harness() {
                     if pytest_loop {
                         // An alloc-test on the loop re-runs the whole test suite per run.
                         next.push(format!(
@@ -1122,7 +1139,7 @@ fn suggestions(
                 // A Rust harness has no size probe: the allocation stacks of
                 // `--capture alloc` are what name the site of the growth.
                 if series.source.runtime == Some(dla_core::runtime::Runtime::Rust)
-                    && let Some(h) = series.source.harness.as_deref()
+                    && let Some(h) = series.source.run_harness()
                     // Not again once this harness has allocation stacks of this run.
                     && !ledger
                         .path()

@@ -3,10 +3,12 @@
 use dla_core::{
     Refusal,
     error::codes,
-    series::{ColumnKind, ColumnScope, SeriesFile, not_a_growth_signal},
+    series::{ColumnKind, ColumnScope, SeriesFile, SeriesSourceKind, not_a_growth_signal},
     trend::ColumnTrend,
 };
-use dla_stats::{GateThresholds, GateVerdict, analyze};
+use dla_stats::{GateThresholds, GateVerdict, TrendShape, analyze};
+
+use crate::summarize::rule;
 
 /// The gate-failure reason of a column that describes the whole container.
 pub const CONTAINER_REASON: &str = "container scope";
@@ -91,12 +93,83 @@ pub fn analyze_column(series: &SeriesFile, idx: usize, th: &GateThresholds) -> C
         gate,
         gate_failed,
         gate_note: a.gate_note.filter(|_| gate == GateVerdict::Pass),
+        resized: false,
     }
 }
 
-/// Analyses the selected columns.
+/// Analyses the selected columns. A series `dla summarize` wrote from captures (source kind
+/// `dump`) is judged by the capture rule `dla summarize` applied to it ([`capture_column`]); every
+/// other series by the slope and every-delta gates.
 pub fn analyze_series(series: &SeriesFile, idx: &[usize], th: &GateThresholds) -> Vec<ColumnTrend> {
-    idx.iter().map(|&i| analyze_column(series, i, th)).collect()
+    idx.iter()
+        .map(|&i| {
+            if is_capture_series(series) {
+                capture_column(series, i, th)
+            } else {
+                analyze_column(series, i, th)
+            }
+        })
+        .collect()
+}
+
+/// True for a series `dla summarize` wrote from capture files (source kind `dump`): three to a
+/// few captures, one point each, which the capture rule judges.
+pub fn is_capture_series(series: &SeriesFile) -> bool {
+    series.source.kind == SeriesSourceKind::Dump
+}
+
+/// What `dla trend` says about the rule that judged a series, for its report and its evidence.
+pub fn rule_line(series: &SeriesFile) -> Option<String> {
+    is_capture_series(series).then(|| {
+        format!(
+            "judged by the capture-series rule of `dla summarize`, not the {}-point slope gate (the thresholds of this report are read for the statistics only): at least {} captures, bytes strictly increasing across every pair, the block count strictly increasing too or one constant positive number (resized), the last interval at least {:.0}% of the first{} (provisional, not calibrated)",
+            GateThresholds::default().min_points,
+            rule::MIN_DUMPS,
+            rule::LAST_OVER_FIRST * 100.0,
+            if rule::series_xs(series).is_some() {
+                " (compared as rates over the series' own x)"
+            } else {
+                ""
+            }
+        )
+    })
+}
+
+/// Column `idx` of a capture series: the statistics of [`analyze_column`] (slope, noise, halves
+/// are shown as they are), and the gate of the capture rule ([`rule::judge_column`]): a column
+/// passes exactly when `dla summarize` passed it, whatever the point count. The failure reasons
+/// are the rule's. A column that passes reads `steady` or `stair` by the rule's own shape (the
+/// byte increases within a factor of two of each other or not) and carries `resized`; a column
+/// that fails does not read as growing, whatever the statistics of three points say (a rise that
+/// stopped reads `plateau`). A container-scope column and a column that is no growth signal keep
+/// the verdict [`analyze_column`] gave them.
+pub fn capture_column(series: &SeriesFile, idx: usize, th: &GateThresholds) -> ColumnTrend {
+    let col = &series.columns[idx];
+    let mut t = analyze_column(series, idx, th);
+    if col.scope == ColumnScope::Container || not_a_growth_signal(&col.name).is_some() {
+        return t;
+    }
+    match rule::judge_column(series, idx) {
+        Ok(g) => {
+            t.gate = GateVerdict::Pass;
+            t.gate_failed.clear();
+            t.gate_note = None;
+            t.shape = match rule::shape(&g) {
+                "steady" => TrendShape::Steady,
+                _ => TrendShape::Stair,
+            };
+            t.resized = g.resized;
+        }
+        Err(why) => {
+            t.gate = GateVerdict::Fail;
+            t.gate_failed = why;
+            t.gate_note = None;
+            if matches!(t.shape, TrendShape::Steady | TrendShape::Stair) {
+                t.shape = TrendShape::Plateau;
+            }
+        }
+    }
+    t
 }
 
 #[cfg(test)]
@@ -318,6 +391,113 @@ mod tests {
         let t = analyze_column(&s, 0, &th());
         assert_eq!(t.gate, GateVerdict::Fail);
         assert!(t.gate_failed.iter().any(|r| r.starts_with("n <")));
+    }
+
+    /// A series `dla summarize` wrote: source kind `dump`, three captures at x = 440, 880, 1760
+    /// units of work.
+    fn capture_series(cols: Vec<Col>) -> SeriesFile {
+        let mut s = series("S1", 0, cols);
+        s.source = dla_core::series::SeriesSource::new(SeriesSourceKind::Dump);
+        s.source.command = Some("dla summarize alloc-stack-diff".into());
+        s.axis = dla_core::series::Axis::Iteration;
+        for (p, x) in s.points.iter_mut().zip([440.0, 880.0, 1760.0]) {
+            p.x = x;
+        }
+        s
+    }
+
+    #[test]
+    fn a_capture_series_of_three_points_is_judged_by_the_capture_rule_and_carries_resized() {
+        let s = capture_series(vec![
+            Col::gauge("stack:grow", &[1e6, 2e6, 4e6]).site("src/a.rs:3"),
+            Col::counter("stack:grow.count", &[100.0, 200.0, 400.0]).site("src/a.rs:3"),
+            Col::gauge("stack:buf", &[1_048_576.0, 2_097_152.0, 4_194_304.0]),
+            Col::counter("stack:buf.count", &[1.0, 1.0, 1.0]),
+            // A fill that stopped: the last interval is 2% of the first.
+            Col::gauge("stack:fill", &[500.0, 800.0, 806.0]),
+            Col::counter("stack:fill.count", &[5.0, 8.0, 9.0]),
+            // Bytes that rise evenly over a count that falls: a steady line to the statistics
+            // of three points, no growth to the rule.
+            Col::gauge("stack:drop", &[1000.0, 2000.0, 3000.0]),
+            Col::counter("stack:drop.count", &[30.0, 20.0, 10.0]),
+        ]);
+        let t = analyze_series(&s, &[0, 1, 2, 3, 4, 5, 6, 7], &th());
+        let by = |n: &str| t.iter().find(|c| c.name == n).unwrap();
+        for n in [
+            "stack:grow",
+            "stack:grow.count",
+            "stack:buf",
+            "stack:buf.count",
+        ] {
+            assert_eq!(
+                by(n).gate,
+                GateVerdict::Pass,
+                "{n}: {:?}",
+                by(n).gate_failed
+            );
+            assert!(by(n).gate_failed.is_empty(), "{n}");
+            assert_eq!(by(n).shape, TrendShape::Steady, "{n}");
+        }
+        // The count column of a block that is resized reads `resized`, not flat.
+        assert!(by("stack:buf.count").resized && by("stack:buf").resized);
+        assert!(!by("stack:grow").resized && !by("stack:grow.count").resized);
+        // A fill that stopped fails with the rule's reasons (not the eight-point gate's), in
+        // both of its columns, and does not read as growing.
+        for n in [
+            "stack:fill",
+            "stack:fill.count",
+            "stack:drop",
+            "stack:drop.count",
+        ] {
+            let c = by(n);
+            assert_eq!(c.gate, GateVerdict::Fail, "{n}");
+            assert!(
+                c.gate_failed
+                    .iter()
+                    .any(|r| r.contains("last interval") || r.contains("count does not increase")),
+                "{:?}",
+                c.gate_failed
+            );
+            assert!(c.gate_failed.iter().all(|r| !r.starts_with("n <")), "{n}");
+            assert!(
+                !matches!(c.shape, TrendShape::Steady | TrendShape::Stair),
+                "{n}"
+            );
+        }
+        // The same figures in a harness series are the eight-point gate's: three points fail it.
+        let mut h = capture_series(vec![Col::gauge("stack:grow", &[1e6, 2e6, 4e6])]);
+        h.source = dla_core::series::SeriesSource::new(SeriesSourceKind::Harness);
+        let t = analyze_series(&h, &[0], &th());
+        assert_eq!(t[0].gate, GateVerdict::Fail);
+        assert!(t[0].gate_failed.iter().any(|r| r.starts_with("n <")));
+        assert!(!t[0].resized);
+    }
+
+    #[test]
+    fn a_capture_column_has_the_verdict_the_summary_rule_gives_the_same_figures() {
+        // The column of a capture series passes exactly when the rule passes its bytes and
+        // counts, at the series' own x (a doubling at x doubling: the same rate).
+        let cases: [([f64; 3], [f64; 3], bool); 6] = [
+            ([100.0, 200.0, 400.0], [1.0, 2.0, 4.0], true),
+            ([100.0, 200.0, 400.0], [1.0, 1.0, 1.0], true),
+            ([100.0, 200.0, 400.0], [1.0, 2.0, 2.0], false),
+            ([100.0, 100.0, 400.0], [1.0, 2.0, 4.0], false),
+            ([100.0, 200.0, 250.0], [1.0, 2.0, 3.0], false),
+            ([100.0, 200.0, 400.0], [0.0, 0.0, 0.0], false),
+        ];
+        for (bytes, counts, pass) in cases {
+            let s = capture_series(vec![
+                Col::gauge("stack:x", &bytes),
+                Col::counter("stack:x.count", &counts),
+            ]);
+            let t = analyze_series(&s, &[0, 1], &th());
+            assert!(
+                t.iter().all(|c| (c.gate == GateVerdict::Pass) == pass),
+                "{bytes:?} {counts:?}: {t:?}"
+            );
+            let rule = rule::judge_column(&s, 0).is_ok();
+            assert_eq!(rule, pass, "{bytes:?} {counts:?}");
+        }
     }
 
     #[test]

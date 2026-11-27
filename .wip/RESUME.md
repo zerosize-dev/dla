@@ -3994,3 +3994,49 @@ unattended run at a time and no builder beside it.
   Nov 27, author ngriaznov). Committed README-only 8360432 [skip ci] on main, pushed main + dev.
   !! The S4 commit must NOT use snapshot 84bd3de's tree (it would revert README): use snapshot
   taken after 8360432 (tree = 84bd3de code + README), checked to differ from 84bd3de only in README/.wip.
+  -> USE snapshot d58d361 for the S4 commit (= 84bd3de code + README; checked). CI is on 84bd3de (waiter bpdr915bn).
+- CI 84bd3de (run 46027915364) GREEN 15/15 first try. S4 committed on main 66b5679 (tree d58d361 minus .wip,
+  README kept), Version 0.9.0-preview.15 6796351; pushed main + dev. release.yml publish=true queued on main.
+- Next: verify release v0.9.0-preview.15 (assets, sha256 x86_64 musl), refresh rig, run r8-fastrace alone; then
+  task 99 builder (wip-notes/jvm-flake-brief.md).
+- 17:24 UTC: preview.15 PUBLISHED (tag on 6796351, 11 assets; musl tarball sha 2daf8afc... matches .sha256).
+  Rig: bin/dla = 0.9.0-preview.15 (dla.prev = .14), plugin = git archive 6796351 (marketplace.json removed,
+  skills diff clean), plugin.prev = .14. cargo clean -p (4.7 GB) -> 7.6 GB free.
+  r8-fastrace STARTED 17:24 (pid 26450), alone. No builder beside it. Waiter: u107/wait-run.sh r8-fastrace 13000.
+- 17:34 r8-fastrace ENDED: exit 0, 582 s, COMPLETE, no leak confirmed, 8 of 167 min. Kept: /root/dla-real/r8-fastrace-keep
+  (ledger, report, state, coverage, gate, series, trend, queue, gap, harness json, redacted transcript). Run dir still
+  there (1.8 GB) for diagnosis; delete after.
+  Facts: H4 (model driver with SlowReporter, set_reporter called) p1..p3-alloc summarized: E34 S8 PASS at
+  global_collector.rs:266 (blocks 245->502->1009, 0.52->2.12 GB) and :292 (resized). `dla trend S8` E59/E60 T13 FAIL
+  (failed_beyond_process 18). F45/F46 from failing E59/E60, closed unresolved "reporter backlog" without alloc-test.
+  F21 (SPSC_RXS) closed "ran and showed no growth". O1 (S4/H3) resolved as noise; S5/S6 2 MB/it unattributed "see O1".
+  Ground truth (set A key sec 7): no reporter set -> spsc.rs:55 pending_messages; handle_commands 246-290 also nameable.
+- Diagnosis workflow w70f7ghea (4 Sonnet analysts + 4 Sonnet refuters), scratch u169.
+- Diagnosis w70f7ghea done (u169/summary.txt; 8 Sonnet agents). Confirmed general causes (I spot-checked 1,3,4,6):
+  1 trend judges summary (Dump) series with the 8-point gate (n=3 can never pass; MK p>=1/6); counter gate fails resized count.
+  2 final gate capture item offers the FAILING trend evidence for ledger add (no site).
+  3 summarize series have no source.harness -> alloc-test on H4 refused harness-not-about.
+  4 counts_as_growth only py.blocks@; dump_grown needs named finding; resolve inconclusive by text accepted;
+    capture_accounted ignores state.
+  5 residual open item per region: O1 (S4, 0.94 B/it) resolution covered S5/S6 (2 MB/it).
+  6 close-rest wording "its code ran and showed no growth" when holder never measured (no probe).
+  7 model summarized p1-p3 while p4 still writing; second overlapping run of H4.
+  8 drivers copy the example setup (reporter set); the leak needs NO consumer (slow consumer != absent).
+- r8 run dir deleted (keep has driver sources, shim dumps, captures, histogram).
+- Builder W (Sonnet, a51db38af116d5078) started: wip-notes/w-capture-verdict-brief.md (items 1-4), scratch u170.
+  Builder X later: items 5-8 (residual per series, wording, incomplete dump / overlapping run, missing-consumer
+  variant + skill text). Then task 99 (JVM flake). Then r9-fastrace.
+
+## 2026-11-27 late: round W verification
+- Builder W reported (report in conversation; Write refused its file). 36 files, +1165/-95, new test
+  crates/dla-cli/tests/capture_verdict.rs (assert_cmd, gcc/nm/addr2line; skips if absent).
+- My mutations (u171/check.sh): X1 series_xs None, X2 summary series counted as harness run, X3 no
+  "made from series" lead, X4 any reason accounts, X5 gate lists failing columns: all caught.
+  X6 (hprof source.harness removed) SURVIVED -> X0 item in builder X brief.
+- Disk filled during the suite (mutation incremental caches): killed my pids, cargo clean -p, rerun
+  with CARGO_INCREMENTAL=0 (u171/check2.sh, log check2.log). dla-stats, dla-core, fmt passed before.
+- Commit message ready: wip-notes/commit-message-48.txt. Brief X ready: wip-notes/x-residual-close-brief.md
+  (X0 heap-graph harness pin, X1 residual rows per item, X2 close-rest wording, X3 incomplete dump +
+  harness-running refusal + capture file count, X4 hold sentence action first + skill sentence).
+- Next: suite green -> snapshot "[W]" -> CI -> commit-snapshot-tree on main (msg 48) -> push main + dev
+  branch. Start builder X once the suite is done (no tree edits during it).

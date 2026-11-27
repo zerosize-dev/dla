@@ -31,7 +31,7 @@ struct Plan {
 }
 
 fn unavailable(series: &SeriesFile, runtime: &str, missing: &[&str]) -> Failure {
-    let h = series.source.harness.as_deref().unwrap_or("<H>");
+    let h = series.source.run_harness().unwrap_or("<H>");
     Failure::refuse(
         GAP_UNAVAILABLE,
         format!(
@@ -137,7 +137,7 @@ fn derived_column(name: &str) -> Column {
 /// The derived series of `src`: `gap.accounted` and `gap.unexplained` per point.
 fn derive(id: String, src: &SeriesFile) -> Res<(SeriesFile, String)> {
     let rss = src.column_index(RSS).ok_or_else(|| {
-        let h = src.source.harness.as_deref().unwrap_or("<H>");
+        let h = src.source.run_harness().unwrap_or("<H>");
         Failure::refuse(
             GAP_UNAVAILABLE,
             format!(
@@ -179,7 +179,7 @@ fn derive(id: String, src: &SeriesFile) -> Res<(SeriesFile, String)> {
         ));
     }
     let mut source = SeriesSource::new(SeriesSourceKind::Gap);
-    source.harness.clone_from(&src.source.harness);
+    source.harness = src.source.run_harness().map(str::to_owned);
     source.workload.clone_from(&src.source.workload);
     source.mode = src.source.mode;
     source.runtime = src.source.runtime;
@@ -266,7 +266,7 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile) -> Res<Value> {
     let mut ledger = tc.ledger()?;
     let ev: EvidenceId = tc.add_evidence(&mut ledger, spec)?;
 
-    let h = src.source.harness.as_deref().unwrap_or("<H>");
+    let h = src.source.run_harness().unwrap_or("<H>");
     // Once the series has a gap row, another `--residual` opens a new open item for the same
     // growth; the final gate lists what is left instead (as `dla trend` and the gate do).
     let has_gap_row = CoverageManifest::load(&tc.run_dir)

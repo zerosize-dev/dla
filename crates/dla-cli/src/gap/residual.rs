@@ -360,7 +360,7 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
             ),
             format!(
                 "dla harness run {}   (a runtime agent or driver writes them)",
-                src.source.harness.as_deref().unwrap_or("<H>")
+                src.source.run_harness().unwrap_or("<H>")
             ),
         ));
     }
@@ -464,7 +464,7 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
                     .map(|a| format!("attribute it first: {a}; then "))
                     .unwrap_or_default();
                 let what = if c.region == Region::NonHeap
-                    && let Some(h) = src.source.harness.as_deref()
+                    && let Some(h) = src.source.run_harness()
                 {
                     // Decide non-heap growth with evidence before any close: the plateau
                     // of an extra window tells warm-up from a leak.
@@ -512,7 +512,7 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
     let mut next = Vec::new();
     for (c, a) in calcs.iter().zip(&actions) {
         if let Some(id) = a.item().filter(|_| c.over()) {
-            match src.source.harness.as_deref() {
+            match src.source.run_harness() {
                 Some(h) if c.region == Region::NonHeap => {
                     next.push(dla_core::gate::nonheap_alloc_route(
                         &id.to_string(),
@@ -605,7 +605,7 @@ fn capture_kinds(
 /// The raw capture that can attribute the residual of `region` for the harness that wrote `src`,
 /// as the command to run, or `None` (see [`capture_kinds`]).
 fn capture_advice(src: &dla_core::SeriesFile, region: Region) -> Option<String> {
-    let h = src.source.harness.as_deref()?;
+    let h = src.source.run_harness()?;
     let (kinds, what) = capture_kinds(src.source.runtime?, region)?;
     let mode = match src.source.mode.map(|m| m.as_str()) {
         Some("native") | None => String::new(),

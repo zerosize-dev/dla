@@ -177,6 +177,7 @@ impl Run {
             gate: dla_stats::GateVerdict::Pass,
             gate_failed: vec![],
             gate_note: None,
+            resized: false,
         });
         r.save(self.dir.path()).unwrap();
     }

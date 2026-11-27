@@ -1058,7 +1058,10 @@ fn run_diff(
             "no passing column ties to {f} by holder, site or type: a stack ties to the finding whose site or recorded writer is its first project frame"
         )
     } else {
-        "the growing stacks tie to no finding: a stack ties to the finding at its first project frame (dla census so a holder exists there); a stack with no project frame ties to nothing".to_owned()
+        growth::untied_needed(
+            &g,
+            "a stack ties to the finding at its first project frame (dla census so a holder exists there); a stack with no project frame ties to nothing",
+        )
     };
     let mut needed = needed;
     if !same_function.is_empty() {

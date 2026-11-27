@@ -64,6 +64,7 @@ pub fn analyze_gauge(series: &SeriesFile, idx: usize, th: &GateThresholds) -> Co
         gate,
         gate_failed,
         gate_note: a.gate_note.filter(|_| gate == GateVerdict::Pass),
+        resized: false,
     }
 }
 

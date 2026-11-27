@@ -33,6 +33,7 @@ pub fn passed_column(c: &ColumnTrend) -> PassedColumn {
         ratio: c.halves.and_then(|h| h.ratio).map(round),
         shape: Some(c.shape),
         unit: Some(c.unit),
+        resized: c.resized,
     }
 }
 

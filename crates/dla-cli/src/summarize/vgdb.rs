@@ -890,7 +890,10 @@ impl Adapter for ValgrindVgdb {
                 "no passing column ties to {f} by holder, site or type: the data symbol's module path and name must end the owner of {f} (dla census --lang rust|native)"
             )
         } else {
-            "the growing holder ties to no finding: run dla census for the runtime so a holder with that module path and name exists; a bare name ties only when one finding ends with it".to_owned()
+            growth::untied_needed(
+                &g,
+                "run dla census for the runtime so a holder with that module path and name exists; a bare name ties only when one finding ends with it",
+            )
         };
         body.insert("needed".into(), json!(needed));
         out.evidence = recorded;
