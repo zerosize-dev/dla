@@ -1,0 +1,26 @@
+Growth in steps that come further apart passes the trend gate while its flat end is short
+
+The next unattended run on a Rust library, on the build that reads a late step in the alloc-test,
+built a driver that ran the leak's writer: the allocator shim's live bytes went from 128 MB to
+1.0 GB, doubling at each step (a `Vec` growing its capacity), with the steps ever further apart
+and the last 1760 units flat. `dla trend` failed the column as a plateau (Sen lower bound at 0,
+second half decaying), and the model read "the heap column plateaus" as a reason to set the
+growth aside.
+
+A container that doubles its capacity always ends a finite window in a flat stretch about as long
+as all the growth before it, so a slope gate over that window can always read its second half as
+flat. That holds for the byte columns of every runtime (a Rust `Vec` or `HashMap`, a Go slice or
+map, a Java `ArrayList` or `HashMap`, a Python list or dict).
+
+- The step reading of `dla alloc-test` (new maxima, the gaps between them, the expected next gap)
+  moves to `dla_stats::stair`, and the trend gate reads it too. The alloc-test is unchanged.
+- A gauge that grew in at least two separate steps, whose steps do not shrink, whose total rise is
+  over the noise tolerance, and whose flat end is no longer than the next step is expected to be
+  (twice the last gap plus one point spacing when the gaps grow, else the longest gap) reads
+  `stair` and passes the gate, whatever the Sen lower bound and the half split say. The trend
+  record says why in `gate_note`. A longer flat end keeps the old verdict, and the alloc-test,
+  whose window can reach past the expected step, decides whether the container stopped. Counters
+  keep their every-delta gate.
+- For the trend gate, a step is a new maximum of more than two robust scales of the
+  point-to-point changes and at least 1% of the column's top level: around a straight fit a
+  doubling's scatter is its own steps, so the alloc-test's threshold sees too few of them.
