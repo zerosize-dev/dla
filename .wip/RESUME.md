@@ -3901,3 +3901,12 @@ unattended run at a time and no builder beside it.
   Builder S started (brief wip-notes/stair-flat-brief.md): stair read on flat extra, doubled-gap
   Stopped rule, inconclusive with a longer window decides nothing while budget is left. No rig run
   beside it. Family B (close-rest of tier 5/6 while budget left) NOT addressed yet.
+- 05:30 UTC: stair round on main 0ab91cb, Version 0.9.0-preview.14 575b286 released (11 assets),
+  rig refreshed. r7-fastrace (.14): 843 s wall, 6 of 167 min, COMPLETE, no leak confirmed. This
+  time driver H4 RAN the leak's writer and native.live_bytes went 128 MB -> 1.009 GB in doubling
+  steps (880, 1320, 2200), flat 2200..3960; os.rss steady 110 -> 935 MB. dla trend gate failed the
+  heap column (sen lo <= 0, decaying half-split, shape plateau: classify.rs returns Plateau before
+  Stair; gauge_gate is a pure slope gate); F41 closed unresolved inconclusive "its code ran and
+  showed no growth". Kept: /root/dla-real/r7-fastrace-keep. Builder S2 started
+  (wip-notes/trend-stair-brief.md): shared stair reading in dla-stats, trend gate passes
+  non-shrinking steps whose flat end is under the expected next gap. Family B still open.
