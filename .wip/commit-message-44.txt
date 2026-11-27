@@ -1,0 +1,32 @@
+A step late in the extra window is growth, and a too-short window does not decide
+
+An unattended run on a Rust library built a driver made for the library's documented leak, a
+`Vec` field that grows once a bounded ring is full, and measured its growth: the allocator
+shim's live bytes rose in steps, 4.5 KB per unit. `dla alloc-test` on that driver then read the
+column as a plateau, the finding was refuted, and the run ended COMPLETE after 5 of 167 minutes
+with no leak confirmed.
+
+A `Vec` doubles its capacity, so its live bytes rise in steps that come ever further apart. The
+alloc-test's extra window held the next step: six points flat at 17.4 MB, then 33.1 MB. The
+plateau test fits the extra window with Theil-Sen, and six flat points against two high ones give
+a slope of zero. The reading of the steps, which sees the new maximum, ran only when that fitted
+rise was over the noise. So it never ran, and the column read as a plateau.
+
+- The plateau test of a gauge that grew in separate steps reads the steps whatever the fitted rise
+  of the extra window is. An extra window that ends above the main window's maximum by more than
+  the noise, the column's smallest rise and the drift floor is growth that continues. A spike that
+  comes back down is not.
+- A staircase stopped only once it stays flat for longer than its next gap is expected to be.
+  When each gap is at least the one before, as for a capacity that doubles, that is twice the
+  last gap plus one point spacing; otherwise the longest gap. A shorter flat stretch is
+  inconclusive, and the alloc-test names the extra points that reach past the expected step
+  (`--extra`), lengthening its own window when the time fits.
+- An inconclusive alloc-test on a driver made for the finding that names a longer extra window
+  than it ran no longer decides the growth while the budget is over its floor. The finding stays
+  a lead, with `dla alloc-test <H> --finding <F> --extra <n>` first. `dla ledger resolve` refuses
+  the close, the final gate lists it and the Stop hook holds the stop. The alloc-test records
+  `points_needed` per column and for its result. Older records, a window that ran that long, or
+  a budget at its floor keep the old rule.
+
+Not covered: the run also closed 36 candidates of the two lowest tiers as not exercised with 162
+minutes left, which the gate allows.
