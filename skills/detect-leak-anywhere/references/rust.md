@@ -37,6 +37,18 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   points. Measured points are untouched (the shim slows an allocation-heavy unit about ten times, in those extra processes only). Then run the
   `dla summarize alloc-stack-diff` command it prints. A crate with its own `#[global_allocator]`, or a build without
   debug line tables, shows fewer project frames (limitation lines say so).
+- An unexplained heap residual: `dla trend` writes the residual rows of its series. While a heap row is over its
+  threshold (and its unattributed growth over the series is 64 KiB or more) and the harness has no summarized capture, the
+  first `next` entry of `dla trend` is `dla harness run <H> --mode <mode> --capture alloc, then the `dla summarize`
+  commands it prints`, the final gate lists a `residual_capture` item, `dla ledger resolve <O> --as unresolved` is refused
+  (`capture-not-summarized`) and `dla harness gen --next` is refused (`capture-first`). A Rust run takes `alloc` only
+  (`alloc,heap` prints a limitation). The item goes when `dla summarize alloc-stack-diff` has read the `out/p<k>-alloc/shim-dump.jsonl`
+  files of the harness, or when the capture run itself recorded it could not write stacks (no shim in the agent
+  directory, fewer than three allocation-stack processes that left stacks, no measured process that wrote a dump: a limitation that starts
+  with `--capture alloc`); a crate's own `#[global_allocator]` does not release it. A `Vec` field that grows by one
+  buffer (no block per push) gives the summary one stack with a constant block count and a capacity that doubles,
+  which the dump-series rule does not pass: the summary still lists the growing site in `top`, but ties and leads to nothing; a
+  field that keeps one block per push (a `Box`, a `String`) passes and ties to the finding at that line.
 - Purges: `trim` (glibc `malloc_trim`).
 
 A `thread_local!` holder, and a container of a module or type that owns one, is kept per thread (the census records the holder and its owner, not the writers of a Rust holder): the driver block says so for such a target, and the units must run on a new thread per unit (`std::thread::spawn`, joined) and on a small pool of threads that live across units, not only on the caller's thread (a first pass on one thread leaves such a target pending for its second look).

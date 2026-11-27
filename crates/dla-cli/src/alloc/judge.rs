@@ -3,14 +3,12 @@
 //! column and its `.pre_gc` twin. Pure functions over `(x, y)` points.
 
 use dla_core::discriminator::Favors;
+use dla_stats::stair::{self as steps_of, rise_xs};
 use dla_stats::{GateThresholds, GateVerdict, TrendShape, analyze, every_delta, noise, theil_sen};
 use serde_json::{Value, json};
 
 /// The extra rise must exceed this many noise units for growth to continue.
 const NOISE_MULTIPLE: f64 = 3.0;
-/// A step of a column that grows in steps is a new maximum of more than this many units of the
-/// main window's own scatter around its trend (see [`stair`]).
-const STEP_SCATTERS: f64 = 2.0;
 /// The extra slope must keep at least this share of the main slope.
 const KEEP_SLOPE: f64 = 0.5;
 /// A purge that returns at least this share of the growth releases it.
@@ -295,25 +293,6 @@ pub fn count_rises(main: &[Point], start: Option<f64>, noise: f64) -> u32 {
     rise_xs(main, start, noise).len() as u32
 }
 
-/// The `x` of every point that sets a new maximum by more than `noise` (see [`count_rises`]).
-fn rise_xs(main: &[Point], start: Option<f64>, noise: f64) -> Vec<f64> {
-    let mut pts = main.iter();
-    let first = pts.next();
-    let Some(mut max) = start.or(first.map(|p| p.1)) else {
-        return Vec::new();
-    };
-    let mut xs = Vec::new();
-    // With a `start`, the first point is a reading like the others; without one it is the base.
-    let rest = if start.is_some() { main.iter() } else { pts };
-    for &(x, y) in rest {
-        if y > max + noise {
-            xs.push(x);
-        }
-        max = max.max(y);
-    }
-    xs
-}
-
 /// How the extra window of a column that grew in steps reads (see [`stair`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stair {
@@ -346,43 +325,26 @@ pub enum Stair {
 /// otherwise the longest gap seen. A stretch of at most that is `TooShort` (a step AT the
 /// expected end is still to come), a longer one `Stopped`.
 pub fn stair(main: &[Point], extra: &[Point], noise: f64) -> Option<Stair> {
-    // A step is a new maximum of more than `STEP_SCATTERS` units of the main window's own scatter
-    // around its trend: the scatter of a regular staircase is about a third of its step, so its
-    // steps pass, and the few-KB jitter of a level column (a rise or two of one scatter) does not.
-    let trend = theil_sen(main, 0.05)?;
-    let xs = rise_xs(main, None, STEP_SCATTERS * dla_stats::noise(main, &trend));
-    if xs.len() < 2 || xs.len() >= main.len().saturating_sub(1) {
-        return None;
-    }
+    // The steps are read by `dla_stats::stair`, the reading the trend gate shares.
+    let steps = steps_of::steps(main)?;
     let main_max = main.iter().fold(f64::NEG_INFINITY, |m, p| m.max(p.1));
     let (e0, e1) = (extra.first()?, extra.last()?);
     if e1.1 > main_max + noise {
         return Some(Stair::NewMax);
     }
-    let gaps: Vec<f64> = xs.windows(2).map(|w| w[1] - w[0]).collect();
-    let longest = gaps.iter().copied().fold(0.0_f64, f64::max);
     let span = e1.0 - e0.0;
     let per_point = if extra.len() > 1 {
         span / (extra.len() - 1) as f64
     } else {
         0.0
     };
-    let growing = !gaps.is_empty() && gaps.windows(2).all(|w| w[1] + per_point >= w[0]);
-    let expected = match gaps.last() {
-        Some(last) if growing => longest.max(2.0 * (last + per_point)),
-        _ => longest,
-    };
-    let last_step = xs[xs.len() - 1];
+    let expected = steps.expected_gap(per_point);
+    let last_step = steps.last_x();
     if e1.0 - last_step > expected {
         return Some(Stair::Stopped);
     }
-    let points_needed = if per_point > 0.0 {
-        ((last_step + expected - e0.0) / per_point).floor() as u32 + 2
-    } else {
-        extra.len() as u32 + 1
-    };
     Some(Stair::TooShort {
-        points_needed: points_needed.max(extra.len() as u32 + 1),
+        points_needed: steps_of::points_needed(last_step, expected, e0.0, per_point, extra.len()),
     })
 }
 
@@ -1190,7 +1152,11 @@ mod tests {
     /// The steps `stair` sees in `main` (the rises over two scatters of its trend).
     fn steps_seen(main: &[Point]) -> Vec<f64> {
         let trend = theil_sen(main, 0.05).unwrap();
-        rise_xs(main, None, STEP_SCATTERS * dla_stats::noise(main, &trend))
+        rise_xs(
+            main,
+            None,
+            steps_of::STEP_SCATTERS * dla_stats::noise(main, &trend),
+        )
     }
 
     #[test]

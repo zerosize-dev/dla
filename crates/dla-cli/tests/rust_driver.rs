@@ -512,6 +512,137 @@ fn a_finding_added_from_an_untied_allocation_stack_takes_its_site_from_the_tool(
     assert_eq!(r.id_at(&site), id, "{added}");
 }
 
+#[test]
+fn a_capture_run_without_the_shim_records_it_wrote_no_stacks_and_one_with_it_does_not() {
+    if !have_alloc_tools() {
+        return;
+    }
+    let r = Run::of(leaky);
+    r.ok(&["harness", "gen", "--lang", "rust", "--driver", "--next"]);
+    r.fill("H1", "leaky::leak_one(key);");
+    let shim = r.run_dir.join("harness/H1/agent/libdlashim.so");
+    assert!(shim.is_file());
+    // The shim is there: the run wrote stacks, so nothing releases the harness from a summary.
+    r.ok(&[
+        "harness",
+        "run",
+        "H1",
+        "--mode",
+        "fresh",
+        "--capture",
+        "alloc",
+    ]);
+    assert!(!dla_core::gate::capture_wrote_no_stacks(&r.run_dir, "H1"));
+    // The shim is gone: the run says it could not write stacks, in the line the gate reads.
+    fs::remove_file(&shim).unwrap();
+    for k in 1..=4 {
+        fs::remove_dir_all(r.run_dir.join(format!("harness/H1/out/p{k}-alloc"))).unwrap();
+    }
+    let out = r.ok(&[
+        "harness",
+        "run",
+        "H1",
+        "--mode",
+        "fresh",
+        "--capture",
+        "alloc",
+    ]);
+    assert!(
+        out["summary"]["summarize"]
+            .as_array()
+            .is_none_or(|c| c.iter().all(|c| !c
+                .as_str()
+                .unwrap()
+                .starts_with("dla summarize alloc-stack-diff"))),
+        "{out}"
+    );
+    assert!(dla_core::gate::capture_wrote_no_stacks(&r.run_dir, "H1"));
+    let text = fs::read_to_string(r.run_dir.join("harness/H1/captures.json")).unwrap();
+    assert!(text.contains("needs the allocator shim"), "{text}");
+}
+
+#[test]
+fn a_heap_residual_of_a_rust_driver_is_not_left_unresolved_before_its_stacks_are_summarized() {
+    if !have_alloc_tools() {
+        return;
+    }
+    let r = Run::of(leaky);
+    r.ok(&["harness", "gen", "--lang", "rust", "--driver", "--next"]);
+    // 3,000 kept boxes per unit: far over the growth floor of a residual that demands a capture.
+    r.fill(
+        "H1",
+        "for j in 0..3000u64 {\n        leaky::leak_one(key + j);\n    }",
+    );
+    r.ok(&["harness", "run", "H1", "--mode", "fresh"]);
+    let want = "dla harness run H1 --mode fresh --capture alloc, then the `dla summarize` commands it prints";
+    let trend = r.ok(&["trend", "S1"]);
+    let next = trend["next"].as_array().unwrap();
+    assert_eq!(next[0], want, "{trend}");
+    assert_eq!(
+        next.iter()
+            .filter(|n| n.as_str().is_some_and(|n| n.contains("--capture alloc")))
+            .count(),
+        1,
+        "{trend}"
+    );
+    assert!(
+        trend["_attention"][0]
+            .as_str()
+            .unwrap()
+            .contains("capture H1 first")
+    );
+    let leave = [
+        "ledger",
+        "resolve",
+        "O1",
+        "--as",
+        "unresolved",
+        "--reason",
+        "inconclusive",
+        "--remedy",
+        "a guess",
+    ];
+    let o = r.run(&leave);
+    assert_ne!(o.code, 0, "{}", o.text);
+    assert_eq!(
+        o.json["error"]["code"], "capture-not-summarized",
+        "{}",
+        o.text
+    );
+    assert_eq!(o.json["error"]["fix"], want, "{}", o.text);
+    let o = r.run(&["harness", "gen", "--lang", "rust", "--driver", "--next"]);
+    assert_eq!(o.json["error"]["code"], "capture-first", "{}", o.text);
+    assert_eq!(o.json["error"]["fix"], want, "{}", o.text);
+    // The capture is taken: the next entry is its summary, not the capture again, and the item
+    // is still not to be left.
+    let out = r.ok(&[
+        "harness",
+        "run",
+        "H1",
+        "--mode",
+        "fresh",
+        "--capture",
+        "alloc",
+    ]);
+    let again = r.ok(&["trend", out["summary"]["series"][0].as_str().unwrap()]);
+    assert!(
+        again["next"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("dla summarize alloc-stack-diff"),
+        "{again}"
+    );
+    assert_eq!(
+        r.run(&leave).json["error"]["code"],
+        "capture-not-summarized"
+    );
+    let args = stack_diff_args(&out);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    r.ok(&args);
+    let o = r.run(&leave);
+    assert_eq!(o.code, 0, "{}", o.text);
+}
+
 fn ledger_sync(dir: &Path) {
     fn copy(from: &Path, to: &Path) {
         fs::create_dir_all(to).unwrap();

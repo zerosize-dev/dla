@@ -80,6 +80,10 @@ pub struct ColumnTrend {
     /// Why the gate failed, one reason per failed condition.
     #[serde(default)]
     pub gate_failed: Vec<String>,
+    /// Why the gate passed though its slope test would have failed it (a gauge that grew in steps
+    /// that come further apart: its flat end is shorter than the next step is expected to be).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate_note: Option<String>,
 }
 
 impl ColumnTrend {
@@ -608,6 +612,7 @@ mod tests {
                 shape: TrendShape::Steady,
                 gate: GateVerdict::Pass,
                 gate_failed: vec![],
+                gate_note: None,
             }],
         }
     }

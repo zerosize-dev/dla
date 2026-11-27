@@ -106,6 +106,13 @@
             "type": "string"
           }
         },
+        "gate_note": {
+          "description": "Why the gate passed though its slope test would have failed it (a gauge that grew in steps\nthat come further apart: its flat end is shorter than the next step is expected to be).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "halves": {
           "description": "Slopes of the two halves.",
           "anyOf": [

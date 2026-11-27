@@ -23,6 +23,11 @@
 //!    `y_last - y_first` (which must exceed `tol`) while each remaining delta is `<= tol`.
 //! 8. `steady` when `rise > tol`; otherwise `flat` (a significant but sub-noise drift).
 //!
+//! A gauge that grew in doubling steps (see [`step_growth`]) reads `stair` before rule 5 and
+//! passes the gate whatever the Sen lower bound and the half split say: a container that doubles
+//! its capacity always ends a finite window in a flat stretch about as long as all the growth
+//! before it, so a slope gate over that window can always read its second half as flat.
+//!
 //! The gate for gauges passes iff `n >= min_points`, `p_increasing < alpha`, `sen.lo > 0`,
 //! the second half is not decaying (`ratio >= min_half_ratio`; when the first-half slope is
 //! not positive the ratio is undefined and the half passes if the second-half slope is
@@ -30,6 +35,7 @@
 //! `n >= min_points` and every consecutive delta (including the one from the last warm-up
 //! point to the first measured point) is at least one.
 
+use crate::stair::trend_steps;
 use crate::trend::{every_delta, half_split, mann_kendall, noise, theil_sen};
 use crate::types::{
     EveryDelta, GateThresholds, GateVerdict, HalfSplit, MannKendall, TheilSen, TrendShape,
@@ -60,6 +66,39 @@ pub struct Analysis {
     pub gate: GateVerdict,
     /// Reasons the gate failed (empty on pass).
     pub gate_failed: Vec<String>,
+    /// Why the gate passed though its slope test would not have (see [`STAIR_NOTE`]).
+    pub gate_note: Option<String>,
+}
+
+/// Said of a gauge column that passed the gate as a stair though its slope test failed.
+pub const STAIR_NOTE: &str = "grew in steps that come further apart; its flat end is shorter than the next step is expected to be";
+
+/// A gauge that grew in at least two separate steps whose rises do not shrink, over more than
+/// the noise tolerance, and whose flat end is no longer than the next step is expected to be.
+///
+/// "Separate" means a gap of two point spacings or more between two steps: a ramp (a rise at
+/// every point, then flat, as a bounded fill does) has none. The expected next gap is the one
+/// `dla alloc-test` reads (`Steps::expected_gap`) over this series' own point spacing.
+///
+/// It only ever rescues a column: the one that the slope gate fails (through its Sen lower bound
+/// or its half split) and that passes every other condition once those two are set aside.
+fn rescued(points: &[(f64, f64)], f: &Fit, th: &GateThresholds) -> bool {
+    step_growth(points, f)
+        && !gauge_gate(points.len(), Some(f), th, false).is_empty()
+        && gauge_gate(points.len(), Some(f), th, true).is_empty()
+}
+
+fn step_growth(points: &[(f64, f64)], f: &Fit) -> bool {
+    let Some(st) = trend_steps(points) else {
+        return false;
+    };
+    let per_point = span(points) / (points.len() - 1) as f64;
+    let (first, last) = (points[0], points[points.len() - 1]);
+    let max = points.iter().fold(f64::NEG_INFINITY, |m, p| m.max(p.1));
+    st.gaps().iter().any(|&g| g >= 1.5 * per_point)
+        && st.never_shrink()
+        && max - first.1 > f.tol
+        && last.0 - st.last_x() <= st.expected_gap(per_point)
 }
 
 /// Fitted pieces shared by classification and the gate.
@@ -95,7 +134,7 @@ fn span(points: &[(f64, f64)]) -> f64 {
     points[points.len() - 1].0 - points[0].0
 }
 
-fn classify_fit(points: &[(f64, f64)], f: &Fit, th: &GateThresholds) -> TrendShape {
+fn classify_fit(points: &[(f64, f64)], f: &Fit, th: &GateThresholds, gauge: bool) -> TrendShape {
     let n = points.len();
     let first = points[0].1;
     let last = points[n - 1].1;
@@ -109,6 +148,10 @@ fn classify_fit(points: &[(f64, f64)], f: &Fit, th: &GateThresholds) -> TrendSha
     }
     if f.sen.hi < 0.0 {
         return TrendShape::Declining;
+    }
+
+    if gauge && rescued(points, f, th) {
+        return TrendShape::Stair;
     }
 
     // Plateau: rises in the first half, then levels off.
@@ -146,12 +189,12 @@ fn classify_fit(points: &[(f64, f64)], f: &Fit, th: &GateThresholds) -> TrendSha
 /// Classifies the growth shape of `points` (ascending `x`, warm-up removed).
 pub fn classify(points: &[(f64, f64)], thresholds: &GateThresholds) -> TrendShape {
     match fit(points, thresholds) {
-        Some(f) => classify_fit(points, &f, thresholds),
+        Some(f) => classify_fit(points, &f, thresholds, true),
         None => TrendShape::Insufficient,
     }
 }
 
-fn gauge_gate(n: usize, f: Option<&Fit>, th: &GateThresholds) -> Vec<String> {
+fn gauge_gate(n: usize, f: Option<&Fit>, th: &GateThresholds, stepped: bool) -> Vec<String> {
     let mut why = Vec::new();
     if n < th.min_points as usize {
         why.push(format!("n < {}", th.min_points));
@@ -165,14 +208,16 @@ fn gauge_gate(n: usize, f: Option<&Fit>, th: &GateThresholds) -> Vec<String> {
     if f.mk.p_increasing >= th.alpha {
         why.push(format!("p >= {}", th.alpha));
     }
-    if f.sen.lo <= 0.0 {
+    // A column that grew in steps that come further apart is judged by its steps, not by a slope
+    // that its flat end always pulls down (see `step_growth`).
+    if !stepped && f.sen.lo <= 0.0 {
         why.push("sen lower bound <= 0".to_string());
     }
     let decaying = match f.halves.ratio {
         Some(r) => r < th.min_half_ratio,
         None => f.halves.second <= 0.0,
     };
-    if decaying {
+    if !stepped && decaying {
         why.push("decaying half-split".to_string());
     }
     if f.rise <= f.tol {
@@ -184,7 +229,8 @@ fn gauge_gate(n: usize, f: Option<&Fit>, th: &GateThresholds) -> Vec<String> {
 /// Slope gate for a gauge series: the verdict and the reasons it failed.
 pub fn gate(points: &[(f64, f64)], thresholds: &GateThresholds) -> (GateVerdict, Vec<String>) {
     let f = fit(points, thresholds);
-    let why = gauge_gate(points.len(), f.as_ref(), thresholds);
+    let stepped = f.as_ref().is_some_and(|f| rescued(points, f, thresholds));
+    let why = gauge_gate(points.len(), f.as_ref(), thresholds, stepped);
     (verdict(&why), why)
 }
 
@@ -251,20 +297,24 @@ pub fn analyze(
             shape: TrendShape::Insufficient,
             gate: GateVerdict::Fail,
             gate_failed: vec!["non-finite value".to_string()],
+            gate_note: None,
         };
     }
     pts.sort_by(|a, b| a.0.total_cmp(&b.0));
     let n = pts.len();
     let f = fit(&pts, thresholds);
     let shape = f.as_ref().map_or(TrendShape::Insufficient, |f| {
-        classify_fit(&pts, f, thresholds)
+        classify_fit(&pts, f, thresholds, !counter)
     });
+    let stepped = !counter && f.as_ref().is_some_and(|f| rescued(&pts, f, thresholds));
     let ed = counter.then(|| counter_deltas(&pts, warmup_tail)).flatten();
     let why = if counter {
         counter_gate(n, ed.as_ref(), thresholds)
     } else {
-        gauge_gate(n, f.as_ref(), thresholds)
+        gauge_gate(n, f.as_ref(), thresholds, stepped)
     };
+    // Said only when the slope test alone would have failed the column.
+    let gate_note = stepped.then(|| STAIR_NOTE.to_owned());
     Analysis {
         n: n as u32,
         mk: f.as_ref().map(|f| f.mk),
@@ -276,5 +326,6 @@ pub fn analyze(
         shape,
         gate: verdict(&why),
         gate_failed: why,
+        gate_note,
     }
 }

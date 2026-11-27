@@ -519,6 +519,8 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
     if residual.is_some()
         && let Some((entry, attention)) = capture_entry(ctx, &main.series.id)
     {
+        // A Rust harness's whole-process column proposes the same capture further down.
+        next.retain(|n| !n.starts_with("dla harness run ") || !n.contains("--capture alloc"));
         next.insert(0, entry);
         next.truncate(MAX_NEXT);
         out.insert("_attention".into(), json!([attention]));
@@ -568,6 +570,32 @@ fn capture_entry(ctx: &Ctx, id: &str) -> Option<(String, String)> {
     let u = dla_core::gate::uncaptured_residuals(&view)
         .into_iter()
         .find(|u| u.series.iter().any(|s| s == id))?;
+    // The capture was taken and not summarized: its first `dla summarize` command, not the
+    // capture again (the run printed them and `captures.json` keeps them).
+    let taken = std::fs::read_to_string(
+        dla_core::HarnessManifest::dir_in(&ctx.run_dir, &u.harness).join("captures.json"),
+    )
+    .ok()
+    .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+    .and_then(|v| {
+        let cmds: Vec<String> = v
+            .get("summarize")?
+            .as_array()?
+            .iter()
+            .filter_map(|c| c.as_str().map(str::to_owned))
+            .collect();
+        cmds.iter()
+            .find(|c| c.starts_with("dla summarize alloc-stack-diff"))
+            .or_else(|| cmds.first())
+            .cloned()
+    });
+    if let Some(cmd) = taken {
+        let attention = format!(
+            "{id} heap grows unexplained: summarize the capture of {} first",
+            u.harness
+        );
+        return Some((cmd, attention));
+    }
     let entry = u.fix();
     let attention = format!("{id} heap grows unexplained: capture {} first", u.harness);
     Some((entry, attention))

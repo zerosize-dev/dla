@@ -2080,6 +2080,53 @@ mod tests {
         assert_eq!(grown_by_column(SITE_COLUMN, "steady", "pass"), ["F1"]);
     }
 
+    /// [`grown_by_column`] for a byte gauge of a heap holder at F1's site: `gate_note` is what
+    /// `dla trend` says of a column that passed as a stair.
+    fn grown_by_heap_gauge(name: &str, shape: &str, gate: &str, note: Option<&str>) -> Vec<String> {
+        let (_d, l) = scene();
+        let state =
+            crate::state::RunState::init("/p", None, 3600, None, crate::state::now_utc()).unwrap();
+        let mut view = RunView::new(state, l, None);
+        let col: crate::trend::ColumnTrend = serde_json::from_value(serde_json::json!({
+            "name": name, "unit": "bytes", "kind": "gauge", "region": "heap",
+            "site": "a.py:1", "candidates": ["F1"], "n": 8, "noise": 1.5e8, "rise": 7.3e8,
+            "shape": shape, "gate": gate,
+            "gate_failed": if gate == "fail" {
+                vec!["sen lower bound <= 0", "decaying half-split"]
+            } else {
+                vec![]
+            },
+            "gate_note": note,
+        }))
+        .unwrap();
+        view.trends = vec![crate::trend::TrendReport {
+            schema_version: 1,
+            id: "T1".into(),
+            series: "S1".into(),
+            thresholds: dla_stats::GateThresholds::default(),
+            columns: vec![col],
+            targets: vec![],
+        }];
+        view.series_harness.insert("S1".into(), "H1".into());
+        grown_unmeasured(&view)
+            .iter()
+            .map(|g| g.finding.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_heap_gauge_that_passed_as_a_stair_gives_its_finding_the_growth_lead_a_plateau_does_not() {
+        let note = "grew in steps that come further apart; its flat end is shorter than the next step is expected to be";
+        // Passed as a stair: the finding is growth the run measured and nobody decided, so the
+        // close "its code ran and showed no growth" is refused and the alloc-test route is named.
+        assert_eq!(
+            grown_by_heap_gauge("probe:Registry._by_key", "stair", "pass", Some(note)),
+            ["F1"]
+        );
+        // The same column read before the change: a plateau that failed the slope gate.
+        assert!(grown_by_heap_gauge("probe:Registry._by_key", "plateau", "fail", None).is_empty());
+    }
+
     #[test]
     fn a_steady_or_stair_site_column_points_at_it_although_its_gate_failed() {
         assert_eq!(grown_by_column(SITE_COLUMN, "steady", "fail"), ["F1"]);

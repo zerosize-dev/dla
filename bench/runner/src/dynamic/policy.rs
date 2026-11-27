@@ -2313,6 +2313,44 @@ cause = "{cause}"
         );
     }
 
+    #[test]
+    fn the_capture_of_a_rust_residual_item_is_read_as_printed() {
+        // Rust takes `alloc` only: the text before `, then` is the whole command.
+        assert_eq!(
+            capture_fix(
+                "dla harness run H1 --mode fresh --capture alloc, then the `dla summarize` commands it prints"
+            ),
+            Some((
+                "H1".to_owned(),
+                "dla harness run H1 --mode fresh --capture alloc".to_owned()
+            ))
+        );
+    }
+
+    #[cfg(unix)]
+    const GATE_RESIDUAL_RUST: &str = r#"{"missing":[
+      {"kind":"residual_capture","id":"H1:residual-capture","description":"1 heap residual row of S1 over the threshold","fix":"dla harness run H1 --mode fresh --capture alloc, then the `dla summarize` commands it prints"}]}"#;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_rust_residual_capture_item_is_followed_by_the_alloc_capture_and_its_summaries() {
+        let (_row, calls) = drive_fake_with(
+            &expected("L-COLLECT", "container-field"),
+            false,
+            &[("FAKE_GAPS", "1")],
+            GATE_RESIDUAL_RUST,
+        );
+        let lines: Vec<&str> = calls.lines().collect();
+        let at = |s: &str| lines.iter().position(|l| l.starts_with(s));
+        let run = at("harness run H1 --mode fresh --capture alloc").expect(&calls);
+        assert!(
+            !lines[run].contains("alloc,heap"),
+            "a Rust run takes alloc only: {calls}"
+        );
+        let first = at("summarize alloc-stack-diff a b").expect(&calls);
+        assert!(run < first, "{calls}");
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_next_batch_refused_with_capture_first_takes_the_capture_and_is_repeated() {

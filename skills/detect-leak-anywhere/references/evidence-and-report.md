@@ -87,7 +87,9 @@ Per column:
 
 Shape is the first of these that applies: `insufficient` (fewer than 3 points), `spike` (a
 transient excursion that returns), `flat` (no significant rise and `|rise|` within 3 noise
-units), `declining`, `plateau` (rises in the first half, then levels off), `stair` (80% of the
+units), `declining`, `stair` for a gauge the slope gate would fail that grew in at least two
+separate steps that do not shrink and has not been flat longer than the next step is expected
+(see below), `plateau` (rises in the first half, then levels off), `stair` (80% of the
 rise in the largest third of the deltas), `steady`.
 
 ### The slope gate
@@ -100,6 +102,19 @@ A gauge column passes when all of these hold (current provisional thresholds):
 - the second half is not decaying: `halves.ratio` at least 0.5 (when the first half does not rise
   the ratio is undefined and the half passes if the second half rises);
 - `rise` above 3 noise units.
+
+A gauge that fails only the lower end of the Sen interval and the half split still passes, as shape
+`stair` with a `gate_note`, when it grew in at least two separate steps (new maxima of more than
+two scatters of the changes between points and of at least 1% of the column's top; two or more
+point spacings between two of them) whose rises do not shrink (within one scatter), over more than
+3 noise units, and its flat end is no longer than the next step is expected after the last one (a
+doubling container steps ever further apart: twice the last gap plus a point spacing, else the
+longest gap). A `Vec`, hash map, slice or list that doubles its capacity always ends a finite window
+flat for about as long as all the growth before it, so a slope gate alone fails it. A flat end
+longer than that, a ramp then flat, and steps that shrink keep the verdict above. `dla alloc-test`
+reads the same steps over its extra window and decides whether the container stopped. A whole-process
+total (`native.live_bytes`, `os.rss`) that passes this way still ties to no finding; it leads to the
+residual rows and the allocation stacks.
 
 A counter column passes under the every-delta rule, taken from CPython's refleak check: at least 8
 points and every consecutive delta at least 1, so a single flat step fails it. The counter rule

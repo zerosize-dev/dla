@@ -9,6 +9,7 @@
 mod classify;
 pub mod intervene;
 pub mod normal;
+pub mod stair;
 pub mod trend;
 mod types;
 

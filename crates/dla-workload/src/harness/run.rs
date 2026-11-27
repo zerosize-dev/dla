@@ -2532,10 +2532,10 @@ fn rust_alloc_points(
         .join(super::AGENT)
         .join(super::commands::shim_file());
     if cfg!(windows) || !shim.is_file() {
-        out.limitations.push(
-            "--capture alloc needs the allocator shim in the harness's agent directory (cc builds it at dla harness gen; this harness has none: generate it again with cc on PATH)"
-                .to_owned(),
-        );
+        out.limitations.push(format!(
+            "{} needs the allocator shim in the harness's agent directory (cc builds it at dla harness gen; this harness has none: generate it again with cc on PATH)",
+            dla_core::gate::ALLOC_CAPTURE_FAILED
+        ));
         return Ok(());
     }
     // A crate with its own global allocator is not seen by the shim.
@@ -2626,7 +2626,8 @@ fn rust_alloc_points(
     }
     if written < 3 {
         out.limitations.push(format!(
-            "--capture alloc: {written} of {ALLOC_POINTS} allocation-stack runs left shim stacks (dla summarize alloc-stack-diff needs 3 or more; does the program use the system allocator?)"
+            "{}: {written} of {ALLOC_POINTS} allocation-stack runs left shim stacks (dla summarize alloc-stack-diff needs 3 or more; does the program use the system allocator?)",
+            dla_core::gate::ALLOC_CAPTURE_FAILED
         ));
     }
     Ok(())
@@ -3360,10 +3361,10 @@ pub fn run_points(
                 }
             }
             if wrote == 0 {
-                out.limitations.push(
-                    "--capture alloc: no measured process wrote allocator shim stacks (is the shim preloaded, and does the program use the system allocator?)"
-                        .to_owned(),
-                );
+                out.limitations.push(format!(
+                    "{}: no measured process wrote allocator shim stacks (is the shim preloaded, and does the program use the system allocator?)",
+                    dla_core::gate::ALLOC_CAPTURE_FAILED
+                ));
             }
         } else if usable_modes > 0 {
             rust_alloc_points(ctx, manifest, &paths, timeout, &mut out)?;

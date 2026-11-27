@@ -630,6 +630,7 @@ mod tests {
             shape: dla_stats::TrendShape::Steady,
             gate: GateVerdict::Pass,
             gate_failed: vec![],
+            gate_note: None,
         }
     }
 
