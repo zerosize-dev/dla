@@ -131,7 +131,7 @@ Field rules:
   `thread-local`, `blocked-stack`, `closure/continuation`,
   `native-handle/global-ref`, `cycle-only`.
 - `region` is one of `heap`, `off-heap`, `non-heap`.
-- `cause` is one of the ten `L-*` IDs, the seven `N-*` IDs or `UNCLASSIFIED`.
+- `cause` is one of the ten `L-*` IDs, the eight `N-*` IDs or `UNCLASSIFIED`.
 - A `[[leak]]` has a `site` or an `owner`, or both. A leak without a `site`
   is matched by `owner` (see `GRADING.md`): the owning field or container as
   `package.Class.field`, with no spaces, slashes or colons; a finding's owner

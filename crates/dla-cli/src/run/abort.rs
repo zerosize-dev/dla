@@ -6,7 +6,8 @@ use std::path::{Component, Path};
 use chrono::{DateTime, Utc};
 use clap::Args;
 use dla_core::{
-    RunState,
+    RunState, RunView, abort_rule,
+    error::codes as core_codes,
     proc::{self, CLEANUP_TIMEOUT, CleanupAction, RunOutcome},
     state::{ProcessRecord, ProcessRole, RunStatus, now_utc},
 };
@@ -23,10 +24,18 @@ pub struct AbortArgs {
     /// Why the run is abandoned (recorded as the run's incomplete reason).
     #[arg(long)]
     reason: Option<String>,
+    /// What stands in the way of the run, when it is abandoned while budget is left and
+    /// something is open: user, tool, build, environment, privilege or refusal. The reason
+    /// then names it.
+    #[arg(long, value_name = "KIND")]
+    blocker: Option<String>,
+    /// The code of the refusal the run cannot satisfy (with `--blocker refusal`).
+    #[arg(long, value_name = "CODE")]
+    code: Option<String>,
 }
 
 /// What `dla run abort` prints about the run it ended.
-const ENDED: &str = "this run ends here: it is marked aborted for good and nothing more can be recorded in it that counts; dla run init starts a new run; to stop only what a cut command left and keep the run, use dla run stop";
+const ENDED: &str = "this run ends here: it is marked aborted for good and nothing more can be recorded in it that counts, except a verifier's record (dla bundle F, dla ledger verify F), which is still taken and counted; dla run init starts a new run; to stop only what a cut command left and keep the run, use dla run stop";
 
 /// What happened to one record.
 enum Fate {
@@ -321,8 +330,52 @@ pub fn run(ctx: &Ctx, project: &Path, a: AbortArgs) -> Res<Value> {
             format!("dla --run {} run abort", ctx.run_id),
         ));
     }
+    // Budget left and work open: an abort needs a blocker the run cannot pass.
+    let blocker = match a.blocker.as_deref() {
+        Some(kind) => Some(
+            abort_rule::check_blocker(kind, a.reason.as_deref(), a.code.as_deref()).map_err(
+                |(code, message, fix)| {
+                    Failure::refuse(
+                        code,
+                        message,
+                        "a blocker of the run, with the reason that names it",
+                        fix,
+                    )
+                },
+            )?,
+        ),
+        None => None,
+    };
+    if blocker.as_ref().is_none_or(|b| b.kind != "user") {
+        // A run that cannot be loaded has no work to point at: the abort goes on to its own checks.
+        if blocker.is_none()
+            && let Some(open) = RunView::load(&ctx.run_dir)
+                .ok()
+                .and_then(|view| abort_rule::open_work(&view, &ctx.run_dir))
+        {
+            return Err(Failure::refuse(
+                core_codes::BUDGET_LEFT,
+                format!(
+                    "{} of {} budget minutes remain and work is open ({}); an abort is no way out while the run can still measure",
+                    open.left,
+                    open.total,
+                    open.describe()
+                ),
+                "the open work done, or a blocker the run cannot pass",
+                format!(
+                    "{}   or   {}   or   {}",
+                    open.first,
+                    abort_rule::ABORT_BLOCKER_COMMAND,
+                    abort_rule::ABORT_REFUSAL_COMMAND
+                ),
+            ));
+        }
+    }
     let stopped = stop_processes(ctx, project, None, "abort")?;
-    let given = a.reason.filter(|r| !r.trim().is_empty());
+    let given = match &blocker {
+        Some(b) => Some(b.incomplete_reason()),
+        None => a.reason.filter(|r| !r.trim().is_empty()),
+    };
     let stamp = now_utc();
     let status = RunState::update(&ctx.run_dir, |st| {
         stopped.apply(st, stamp, "abort");
@@ -339,7 +392,15 @@ pub fn run(ctx: &Ctx, project: &Path, a: AbortArgs) -> Res<Value> {
         Ok((st.status, st.incomplete_reason.clone().unwrap_or_default()))
     })?;
     let (status, reason) = status;
-    Ok(json!({
+    // The verifier is not skipped by an abort: the confirmed findings it has not read are
+    // listed with what to run.
+    let unverified: Vec<Value> = RunView::load(&ctx.run_dir)
+        .map(|v| abort_rule::unverified_confirmed(&v))
+        .unwrap_or_default()
+        .iter()
+        .map(|id| json!({"finding": id.to_string(), "verify": abort_rule::verify_steps(id)}))
+        .collect();
+    let mut out = json!({
         "ok": stopped.failed == 0,
         "run_id": ctx.run_id,
         "message": ENDED,
@@ -351,5 +412,181 @@ pub fn run(ctx: &Ctx, project: &Path, a: AbortArgs) -> Res<Value> {
         "skipped": stopped.skipped,
         "failed": stopped.failed,
         "notes": stopped.notes,
-    }))
+    });
+    if !unverified.is_empty() {
+        out["unverified"] = Value::Array(unverified.clone());
+        out["next"] = json!(format!(
+            "{} confirmed finding(s) have no verification record: run the verifier for each (dla bundle F, one dla:verifier subagent, dla ledger verify); the Stop hook holds the stop until they are verified",
+            unverified.len()
+        ));
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    /// A printed command with its `<placeholders>` filled in and split the way a shell splits
+    /// it (double quotes keep a reason together). A `|` outside `<...>` would be a pipe to a
+    /// shell, so it is refused; one `<a|b|c>` choice gives one command per alternative.
+    fn filled(fix: &str) -> Vec<Vec<String>> {
+        let mut texts = vec![String::new()];
+        let mut chars = fix.chars();
+        let mut choices = 0;
+        while let Some(c) = chars.next() {
+            if c == '|' {
+                panic!("a `|` outside `<...>` is a shell pipe: {fix}");
+            }
+            if c != '<' {
+                texts.iter_mut().for_each(|t| t.push(c));
+                continue;
+            }
+            let name: String = chars.by_ref().take_while(|c| *c != '>').collect();
+            if name.contains('|') {
+                choices += 1;
+                assert_eq!(choices, 1, "more than one choice: {fix}");
+                let base = std::mem::take(&mut texts);
+                for alt in name.split('|') {
+                    assert!(!alt.is_empty(), "an empty alternative: {fix}");
+                    texts.extend(base.iter().map(|t| format!("{t}{alt}")));
+                }
+            } else {
+                let fill = if name.starts_with("refusal code") {
+                    "time-left"
+                } else {
+                    "the go toolchain is not installed"
+                };
+                texts.iter_mut().for_each(|t| t.push_str(fill));
+            }
+        }
+        texts.iter().map(|t| shell_words(t)).collect()
+    }
+
+    fn shell_words(text: &str) -> Vec<String> {
+        let (mut words, mut word, mut quoted, mut any) = (Vec::new(), String::new(), false, false);
+        for c in text.chars() {
+            match c {
+                '"' => {
+                    quoted = !quoted;
+                    any = true;
+                }
+                c if c.is_whitespace() && !quoted => {
+                    if any || !word.is_empty() {
+                        words.push(std::mem::take(&mut word));
+                    }
+                    any = false;
+                }
+                c => word.push(c),
+            }
+        }
+        if any || !word.is_empty() {
+            words.push(word);
+        }
+        words
+    }
+
+    /// Every fix `check_blocker` can return is one or more whole commands (joined by `   or   `),
+    /// each with one `--blocker`, that the argument parser accepts once filled in (every
+    /// alternative of its choice), and whose arguments `check_blocker` then accepts. The fix of
+    /// an unknown kind offers every kind.
+    #[test]
+    fn every_fix_of_a_failed_blocker_check_runs_as_printed() {
+        let reason = Some("the capture needs a privilege the run does not have");
+        let cases: [(&str, Option<&str>, Option<&str>); 8] = [
+            ("sleepy", None, None),
+            ("sleepy", reason, Some("time-left")),
+            ("tool", reason, Some("time-left")),
+            ("user", None, Some("time-left")),
+            ("refusal", reason, None),
+            ("refusal", reason, Some("Not A Code")),
+            ("tool", Some("no go"), None),
+            ("refusal", Some("no go"), Some("time-left")),
+        ];
+        for (kind, reason, code) in cases {
+            let (_, _, fix) = abort_rule::check_blocker(kind, reason, code)
+                .expect_err(&format!("{kind} {reason:?} {code:?} is refused"));
+            let mut offered: Vec<String> = Vec::new();
+            for command in fix.split("   or   ") {
+                assert!(
+                    command.starts_with("dla run abort "),
+                    "{kind}: a whole command: {fix}"
+                );
+                assert_eq!(command.matches("--blocker").count(), 1, "{kind}: {fix}");
+                assert!(command.matches("--reason").count() <= 1, "{kind}: {fix}");
+                for words in filled(command) {
+                    let cli = crate::Cli::try_parse_from(&words)
+                        .unwrap_or_else(|e| panic!("{kind}: {command}\n{e}"));
+                    let crate::Command::Run(crate::run::RunCmd::Abort(a)) = cli.command else {
+                        panic!("{kind}: not `dla run abort`: {command}");
+                    };
+                    let blocker = a.blocker.as_deref().expect("a blocker");
+                    assert!(
+                        abort_rule::check_blocker(blocker, a.reason.as_deref(), a.code.as_deref())
+                            .is_ok(),
+                        "{kind}: the fix is refused again: {command}"
+                    );
+                    offered.push(blocker.to_owned());
+                }
+            }
+            if kind == "sleepy" {
+                for k in abort_rule::BLOCKER_KINDS {
+                    assert!(
+                        offered.iter().any(|o| o == k),
+                        "the unknown-kind fix never offers {k}: {fix}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Every command the `budget-left` refusal and the Stop hook print for ending a run on a
+    /// blocker runs as printed for every choice of the blocker: the argument parser accepts it
+    /// and `check_blocker` accepts its arguments.
+    #[test]
+    fn every_choice_of_the_printed_abort_commands_runs_as_printed() {
+        let hook = crate::gate_hooks::abort_offer(None);
+        assert!(crate::gate_hooks::abort_offer(Some("w")).is_empty());
+        let refusal_fix = format!(
+            "dla ledger add   or   {}   or   {}",
+            abort_rule::ABORT_BLOCKER_COMMAND,
+            abort_rule::ABORT_REFUSAL_COMMAND
+        );
+        let mut seen: Vec<String> = Vec::new();
+        for printed in [hook.as_str(), refusal_fix.as_str()] {
+            // The commands inside the text: each starts at `dla run abort`.
+            for part in printed.split("dla run abort").skip(1) {
+                let end = part.find("   or   ").unwrap_or(part.len());
+                let command = format!("dla run abort{}", part[..end].trim_end_matches('.'));
+                // Fill the one choice `<a|b|c>` with each alternative.
+                let alternatives: Vec<String> = match (command.find('<'), command.find('>')) {
+                    (Some(a), Some(b)) if command[a..b].contains('|') => command[a + 1..b]
+                        .split('|')
+                        .map(|alt| format!("{}{alt}{}", &command[..a], &command[b + 1..]))
+                        .collect(),
+                    _ => vec![command.clone()],
+                };
+                for c in alternatives {
+                    let words = filled(&c).pop().expect("one command");
+                    let cli = crate::Cli::try_parse_from(&words)
+                        .unwrap_or_else(|e| panic!("does not parse: {c}\n{e}"));
+                    let crate::Command::Run(crate::run::RunCmd::Abort(a)) = cli.command else {
+                        panic!("not `dla run abort`: {c}");
+                    };
+                    let blocker = a.blocker.as_deref().expect("a blocker");
+                    abort_rule::check_blocker(blocker, a.reason.as_deref(), a.code.as_deref())
+                        .unwrap_or_else(|e| panic!("refused as printed: {c}\n{e:?}"));
+                    seen.push(blocker.to_owned());
+                }
+            }
+        }
+        // Every kind is offered, and the refusal with its code.
+        for kind in abort_rule::BLOCKER_KINDS {
+            assert!(
+                seen.iter().any(|k| k == kind),
+                "{kind} is never offered: {seen:?}"
+            );
+        }
+    }
 }

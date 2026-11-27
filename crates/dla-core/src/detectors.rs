@@ -43,7 +43,7 @@ pub const KNOWN_BACKENDS: [&str; 13] = [
 
 /// The archetype IDs a detector may suggest (leak and non-leak archetypes). The empty
 /// string means "no suggestion". Archetypes are tags only: nothing filters on them.
-pub const ARCHETYPE_IDS: [&str; 17] = [
+pub const ARCHETYPE_IDS: [&str; 18] = [
     "L-HANDLE",
     "L-COLLECT",
     "L-REGISTER",
@@ -61,6 +61,7 @@ pub const ARCHETYPE_IDS: [&str; 17] = [
     "N-SCALE",
     "N-INTENT",
     "N-OBSERVER",
+    "N-RELEASE",
 ];
 
 fn default_true() -> bool {

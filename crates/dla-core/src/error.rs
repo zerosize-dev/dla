@@ -128,6 +128,8 @@ pub mod codes {
     /// `time_budget` was given while more than the shared floor of the budget is left and
     /// no command was refused with nothing smaller that fits.
     pub const TIME_LEFT: &str = "time-left";
+    /// `dla run abort` without a blocker while budget is left and the run can still measure.
+    pub const BUDGET_LEFT: &str = "budget-left";
     /// A finding a passed growth column points at was closed without an alloc-test bound to it.
     pub const GROWTH_NOT_MEASURED: &str = "growth-not-measured";
     /// The open item of a heap residual above its threshold was closed unresolved while its

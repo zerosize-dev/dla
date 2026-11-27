@@ -387,6 +387,7 @@ fn causes_come_from_the_archetype_vocabulary() {
         "N-SCALE",
         "N-INTENT",
         "N-OBSERVER",
+        "N-RELEASE",
         "UNCLASSIFIED",
     ] {
         let t = tempfile::tempdir().unwrap();

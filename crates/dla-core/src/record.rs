@@ -232,6 +232,9 @@ string_enum! {
         Conditional = "conditional",
         /// A remover exists and uses another key.
         WrongKey = "wrong-key",
+        /// A remover exists and runs only when the caller calls a release the API offers
+        /// (stop, close, dispose, unsubscribe, cancel, shutdown).
+        OnRelease = "on-release",
         /// A remover exists and is never reached.
         Unreachable = "unreachable",
     }
@@ -249,7 +252,7 @@ pub struct FindingExplained {
     pub adds: Vec<String>,
     /// What happens to the items afterwards.
     pub removal: RemovalClaim,
-    /// `file:line` of the remover, for `conditional`, `wrong-key` and `unreachable`.
+    /// `file:line` of the remover, for `conditional`, `wrong-key`, `on-release` and `unreachable`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remover: Option<String>,
     /// Evidence that shows the pairing, required with `observed`.

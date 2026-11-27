@@ -51,7 +51,7 @@ intend to use those operations). Stages 1, 2, then:
   the artifact path.
 - A command that was cut or timed out (a `harness run` over its timeout): `dla run stop` stops the processes DLA started and undoes attaches (it never kills the target) and the run goes on; or run the command again,
   which stops what the earlier one left.
-- Interrupted or finished early for good: `dla run abort --reason "<why>"` does the same and ends the run: it is marked aborted, the gate and the queue count it as over and nothing more can be recorded in it that counts. `dla run init` starts the next one.
+- Interrupted or finished early for good: `dla run abort --reason "<why>"` does the same and ends the run: it is marked aborted, the gate and the queue count it as over and nothing more can be recorded in it that counts, except a verifier's record (`dla bundle F`, `dla ledger verify F`), which is still taken: the abort lists the confirmed findings still unverified and the Stop hook holds the stop for them. While budget is over the floor and a queue, an undecided growth or another measurement is open, the abort is refused (`budget-left`) unless `--blocker user|tool|build|environment|privilege|refusal` (a reason that names what blocks the run; `--code` for a refusal) is given. `dla run init` starts the next one.
 
 ### Artifact
 `dla run init --entry artifact --artifact <path>...` (paths relative to the project root, one flag
@@ -439,7 +439,29 @@ For each passed column tied to a candidate `F3`:
 
 - Sibling first: `dla ledger add --sibling-of F3 --origin hypothesis --hypothesis N-WARM --refute-if
   "<result that would refute it>" --evidence E7`. The hypothesis starts with one of `N-ALLOC`,
-  `N-HEADROOM`, `N-WARM`, `N-HWM`, `N-SCALE`, `N-INTENT`, `N-OBSERVER`.
+  `N-HEADROOM`, `N-WARM`, `N-HWM`, `N-SCALE`, `N-INTENT`, `N-OBSERVER`, `N-RELEASE`.
+- `N-RELEASE` is growth only while the caller skips a release the API requires (`stop`, `close`,
+  `dispose`, `unsubscribe`, `cancel`); with the release called on every unit the series is flat. Its sibling
+  names the line that releases the holder: `dla ledger add --sibling-of F3 --origin hypothesis --hypothesis
+  N-RELEASE --remover <file:line> --refute-if "<result>" --evidence E7`. Only an alloc-test on a driver made for the finding in which that
+  line ran decides it (confirm when it favors non-leak, refute when it favors leak: the holder grows with the
+  release called, a leak of the project); a runtime that cannot count lines (the JVM, native code, or a coverage
+  record that says the tool could not count the line) is accepted and the decision carries the note `remover run
+  not shown`. Where the runtime counts lines (Rust, Go, Node, Python) an alloc-test with no coverage record, or
+  one made before the sibling named the line, is refused (`release-not-run`): `dla alloc-test <H> --finding F3`
+  after the sibling is added writes the record.
+- Two drivers made for the finding whose newest alloc-tests disagree (one favors leak, one non-leak) hold the
+  confirm of the leak (`drivers-disagree`): the refusal asks what the flat driver does that the other does not,
+  and the way out is the `N-RELEASE` sibling above, or another non-leak sibling that names the difference,
+  refuted by a new alloc-test on a driver made for the finding.
+- An explanation that says `removal: on-release` with a remover (`dla ledger explain F3 --removal on-release
+  --remover <file:line>`, accepted for a finding under test as well as a confirmed one) asks for the same run
+  with the release called: until an `N-RELEASE` sibling of the root has decided it, `dla ledger confirm` is
+  refused (`release-untested`) and a confirmed finding is listed by the final gate under that name. A
+  confirmed sibling decides it whatever remover it names (the growth was measured flat with a release called,
+  so the report counts the finding apart, "grows only while callers skip the release", never as a confirmed
+  leak); a refuted sibling decides it only when it names that same remover line (a release that did not stop
+  the growth says nothing about another one).
 - `dla ledger test F3 --evidence E9`, citing the harness `workload` evidence.
 - `dla alloc-test H1 --finding F3` re-runs the harness with extra points and a purge and records a
   discriminator whose `favors` is `leak`, `non-leak` or `inconclusive`. The alloc-test runs on a harness that
@@ -558,8 +580,8 @@ dla ledger explain F3 --tag inferred --adds src/Cache.java:88 --removal never --
 - `--tag observed` needs `--evidence` (a retention, intervention or tied growth record that shows the
   pairing); `inferred` is a reading of the code.
 - `--adds` names the sites that add to the holder; they must be recorded writers (annotate them
-  first) or the finding's site. `--removal` is `never`, `not-found`, `conditional`, `wrong-key` or
-  `unreachable`; the last three need `--remover file:line`, which must match a recorded remover.
+  first) or the finding's site. `--removal` is `never`, `not-found`, `conditional`, `wrong-key`, `on-release` or
+  `unreachable`; the last four need `--remover file:line`, which must match a recorded remover. `on-release`: removed only when the caller calls the API's release; a confirm then needs N-RELEASE refuted on a driver that calls it.
 - `--text` is 40 to 600 characters on one line. It must name the site or the owner, the holder kind or
   the owner's last name, an adding site and how removal fails. DLA checks that these are stated and
   consistent with the record; it cannot check that they are true, so read the code first.
@@ -710,7 +732,7 @@ Stop when every remaining item has a reason and a remedy that a command cannot c
 or something only the user can supply) or the deadline has passed, then judge the newest report. There
 is no fixed number of rounds: ending with most of the budget unspent and entry points unexercised
 measured nothing. Never ask the user whether to continue while time is left. To stop early,
-`dla run abort --reason "<why>"` closes the run.
+`dla run abort --reason "<why>"` closes the run (with budget left and work open it needs `--blocker <kind>`, and the confirmed findings still go to the verifier).
 
 The final gate, `dla gate check` and `dla run status` count actions, not dependents: `N item(s) missing (and D more that wait on them)`. A line that stands for others says `(+K waiting on it: A, B, C, ...)`: the whole-process columns and residual rows that wait for one open item are that open item's line, the queue candidates are the queue's line. Work the list from the top: queue, findings whose column grew, triggers, open items, findings, the rest. The stored gate file keeps every item.
 

@@ -38,7 +38,7 @@ pub struct ExplainInput<'a> {
     pub adds: &'a [String],
     /// What happens to the items afterwards.
     pub removal: RemovalClaim,
-    /// The remover, for `conditional`, `wrong-key` and `unreachable`.
+    /// The remover, for `conditional`, `wrong-key`, `on-release` and `unreachable`.
     pub remover: Option<&'a str>,
     /// Evidence that shows the pairing (required with `observed`).
     pub evidence: Option<&'a EvidenceId>,
@@ -89,6 +89,15 @@ pub fn markers(removal: RemovalClaim) -> &'static [&'static str] {
         RemovalClaim::NotFound => &["no remover found", "found no remover", "not found"],
         RemovalClaim::Conditional => &["only when", "unless", "if"],
         RemovalClaim::WrongKey => &["key", "different"],
+        RemovalClaim::OnRelease => &[
+            "release",
+            "stop",
+            "close",
+            "dispose",
+            "unsubscribe",
+            "cancel",
+            "shutdown",
+        ],
         RemovalClaim::Unreachable => &["never reached", "not reached", "dead"],
     }
 }
@@ -187,12 +196,15 @@ fn structural(
         )
     })?;
     if f.polarity() != Polarity::Leak
-        || !matches!(f.state, FindingState::Confirmed | FindingState::Strong)
+        || !matches!(
+            f.state,
+            FindingState::UnderTest | FindingState::Confirmed | FindingState::Strong
+        )
     {
         return Err(refuse(
             codes::EXPLAIN_STATE,
             format!(
-                "{id} is {} ({}): only a confirmed or strong leak-side finding is explained",
+                "{id} is {} ({}): only a leak-side finding under test, confirmed or strong is explained",
                 f.state_label(),
                 if f.polarity() == Polarity::Leak {
                     "leak-side"
@@ -200,7 +212,7 @@ fn structural(
                     "non-leak"
                 }
             ),
-            "a confirmed or strong leak-side finding",
+            "a leak-side finding under test, confirmed or strong",
             format!("dla ledger confirm {id} --evidence <growth evidence id>"),
         ));
     }
@@ -334,7 +346,13 @@ fn structural(
                 format!("dla ledger explain {id} --removal conditional --remover {r} ..."),
             ));
         }
-        (RemovalClaim::Conditional | RemovalClaim::WrongKey | RemovalClaim::Unreachable, None) => {
+        (
+            RemovalClaim::Conditional
+            | RemovalClaim::WrongKey
+            | RemovalClaim::OnRelease
+            | RemovalClaim::Unreachable,
+            None,
+        ) => {
             return Err(refuse(
                 codes::EXPLAIN_REMOVER,
                 format!("removal {} needs the remover that exists", rec.removal),
@@ -529,7 +547,7 @@ pub fn plan(
                 return Err(refuse(
                     codes::EXPLAIN_REMOVER_RECORDED,
                     format!(
-                        "removal {} contradicts the recorded remover {r}: say conditional, wrong-key or unreachable and cite it",
+                        "removal {} contradicts the recorded remover {r}: say conditional, wrong-key, on-release or unreachable and cite it",
                         rec.removal
                     ),
                     "a removal claim consistent with the recorded removers",
@@ -571,15 +589,18 @@ pub fn plan(
 fn structural_state(findings: &dyn FindingLookup, id: &FindingId) -> Result<(), Refusal> {
     let f = findings.finding(id).expect("checked by the caller");
     if f.polarity() != Polarity::Leak
-        || !matches!(f.state, FindingState::Confirmed | FindingState::Strong)
+        || !matches!(
+            f.state,
+            FindingState::UnderTest | FindingState::Confirmed | FindingState::Strong
+        )
     {
         return Err(refuse(
             codes::EXPLAIN_STATE,
             format!(
-                "{id} is {}: only a confirmed or strong leak-side finding is explained",
+                "{id} is {}: only a leak-side finding under test, confirmed or strong is explained",
                 f.state_label()
             ),
-            "a confirmed or strong leak-side finding",
+            "a leak-side finding under test, confirmed or strong",
             format!("dla ledger confirm {id} --evidence <growth evidence id>"),
         ));
     }

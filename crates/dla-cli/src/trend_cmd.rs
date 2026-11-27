@@ -998,7 +998,7 @@ fn evidence_of(evidence: &[(EvidenceKind, EvidenceId)], c: &ColumnTrend) -> Opti
 fn harness_evidence(ledger: &Ledger, series: &SeriesFile) -> Option<String> {
     let h = series.source.harness.as_deref()?;
     ledger
-        .evidence()
+        .evidence_in_order()
         .filter(|e| e.kind == EvidenceKind::Workload)
         .filter(|e| e.result.get("harness").and_then(Value::as_str) == Some(h))
         .last()

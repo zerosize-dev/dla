@@ -20,7 +20,6 @@ use crate::{
     evidence::EvidenceKind,
     finding::{Finding, FindingState, Polarity, Region, UnresolvedReason},
     ids::FindingId,
-    record::Record,
     series::ColumnKind,
     state::{EntryPath, Stage},
     trend::{ColumnTrend, TrendReport},
@@ -727,7 +726,7 @@ fn evidence_for_column(view: &RunView, t: &TrendReport, c: &ColumnTrend) -> Opti
         ColumnKind::Counter => EvidenceKind::UnitCountSeries,
     };
     view.ledger
-        .evidence()
+        .evidence_in_order()
         .filter(|e| e.kind == want)
         .find(|e| e.result.get("trend").and_then(|v| v.as_str()) == Some(t.id.as_str()))
         .map(|e| e.evidence_id.to_string())
@@ -1126,7 +1125,7 @@ fn series_harness(view: &RunView, series: Option<&str>) -> Option<HarnessId> {
 fn residual_evidence_of(view: &RunView, series: Option<&str>) -> Option<String> {
     let series = series?;
     view.ledger
-        .evidence()
+        .evidence_in_order()
         .filter(|e| {
             e.kind == EvidenceKind::Residual
                 && e.result.get("series").and_then(|v| v.as_str()) == Some(series)
@@ -2108,6 +2107,7 @@ fn final_items(view: &RunView, out: &mut Out) {
             );
         }
     }
+    release_untested_items(view, out);
     // Every confirmed or strong leak-side finding has a label decision: an archetype ID, or
     // UNCLASSIFIED with a note (the only label with archetypes off).
     for f in confirmed_leaks(view) {
@@ -2164,6 +2164,29 @@ fn final_items(view: &RunView, out: &mut Out) {
                 s.worker
             ),
             "dla ledger merge",
+        );
+    }
+}
+
+/// An item `release-untested` for every confirmed or strong leak-side finding whose explanation
+/// says `removal: on-release` with a remover and whose release no run decided: no `N-RELEASE`
+/// sibling of its root is confirmed (whatever line it names: the growth exists only while callers
+/// skip the release, which the report counts apart from the leaks) and none that names that
+/// remover line is refuted (the holder grows with the release called). A refuted sibling that
+/// names another release decides nothing about this one.
+fn release_untested_items(view: &RunView, out: &mut Out) {
+    for f in confirmed_leaks(view) {
+        let Some(u) = crate::release::release_untested(&view.ledger, f) else {
+            continue;
+        };
+        out.add(
+            crate::release::codes::RELEASE_UNTESTED,
+            f.id.to_string(),
+            format!(
+                "finding {} is {} and its explanation says the holder is released by {} only when the caller calls the release; no run called that release (no N-RELEASE sibling is confirmed and none naming {} is refuted), so the growth may exist only while callers skip it",
+                f.id, f.state, u.remover, u.remover
+            ),
+            crate::release::release_route(view, &f.root_id(), Some(&u.remover), None),
         );
     }
 }
@@ -2336,33 +2359,31 @@ pub(crate) fn harness_ids(run_dir: &Path) -> Vec<(u32, HarnessId)> {
     ids
 }
 
-/// Where the ledger recorded that harness `h` was generated: the sequence number of its
-/// first `workload` evidence without a `series` key (a run's evidence has one).
-fn generated_at(view: &RunView, h: &str) -> Option<u64> {
-    view.ledger.lines().iter().find_map(|l| match &l.record {
-        Record::Evidence(e)
-            if e.kind == EvidenceKind::Workload
-                && crate::harness::harness_id_of(&e.result) == Some(h)
-                && e.result.get("series").is_none() =>
-        {
-            Some(l.seq)
-        }
-        _ => None,
+/// Where the ledger recorded that harness `h` was generated: the chronological key of its
+/// first `workload` evidence without a `series` key (a run's evidence has one). The key is
+/// time, not a line number: in a worker's view `lines()` holds only the slice's lines, and a
+/// harness generated in the main ledger is still found.
+fn generated_at(view: &RunView, h: &str) -> Option<crate::RecordOrder> {
+    view.ledger.evidence_in_order().find_map(|e| {
+        (e.kind == EvidenceKind::Workload
+            && crate::harness::harness_id_of(&e.result) == Some(h)
+            && e.result.get("series").is_none())
+        .then(|| view.ledger.evidence_order(&e.evidence_id))
+        .flatten()
     })
 }
 
 /// True when `intake.workload` was answered `unresolved` with a blocker reason and a
 /// remedy after harness `h` (of `runtime`) was generated, for `runtime` or for none.
 fn blocker_recorded(view: &RunView, h: &str, runtime: &str) -> bool {
-    let after = generated_at(view, h).unwrap_or(0);
-    view.ledger.lines().iter().any(|l| {
-        l.seq > after
-            && matches!(&l.record, Record::ChecklistAnswer(a)
-                if a.item == "intake.workload"
-                    && answer_covers(a, runtime)
-                    && a.status == AnswerStatus::Unresolved
-                    && a.reason.is_some_and(is_blocker_reason)
-                    && a.remedy.as_deref().is_some_and(|r| !r.trim().is_empty()))
+    let after = generated_at(view, h);
+    view.ledger.answers_in_order().into_iter().any(|(key, a)| {
+        after.is_none_or(|g| key > g)
+            && a.item == "intake.workload"
+            && answer_covers(a, runtime)
+            && a.status == AnswerStatus::Unresolved
+            && a.reason.is_some_and(is_blocker_reason)
+            && a.remedy.as_deref().is_some_and(|r| !r.trim().is_empty())
     })
 }
 
@@ -2720,9 +2741,12 @@ pub(crate) fn workload_answer<'a>(
     runtime: &str,
 ) -> Option<&'a crate::checklist::ChecklistAnswer> {
     let time_left = !blocker_only && budget_over_floor(&view.state, None).is_some();
-    view.ledger.lines().iter().find_map(|l| match &l.record {
-        Record::ChecklistAnswer(a)
-            if a.item == "intake.workload"
+    view.ledger
+        .answers_in_order()
+        .into_iter()
+        .map(|(_, a)| a)
+        .find(|a| {
+            a.item == "intake.workload"
                 && answer_covers(a, runtime)
                 && a.status == AnswerStatus::Unresolved
                 && a.reason.is_some_and(|r| {
@@ -2732,12 +2756,8 @@ pub(crate) fn workload_answer<'a>(
                         !(time_left && r == UnresolvedReason::TimeBudget)
                     }
                 })
-                && a.remedy.as_deref().is_some_and(|r| !r.trim().is_empty()) =>
-        {
-            Some(a)
-        }
-        _ => None,
-    })
+                && a.remedy.as_deref().is_some_and(|r| !r.trim().is_empty())
+        })
 }
 
 /// True when the run has a harness directory of `runtime` with a manifest, generated by
@@ -2768,10 +2788,9 @@ fn is_intervention_clone(view: &RunView, h: &str) -> bool {
     }) {
         return true;
     }
-    view.ledger.lines().iter().any(|l| {
-        matches!(&l.record, Record::Evidence(e)
-            if e.kind == EvidenceKind::Intervention
-                && e.result.get("treated_harness").and_then(|v| v.as_str()) == Some(h))
+    view.ledger.evidence().any(|e| {
+        e.kind == EvidenceKind::Intervention
+            && e.result.get("treated_harness").and_then(|v| v.as_str()) == Some(h)
     })
 }
 
@@ -2975,15 +2994,14 @@ pub enum HarnessStep {
 /// `reason: remedy` (`reason for <runtime>: remedy` when the answer names the runtime).
 fn workload_blocker(view: &RunView, runtime: &str) -> Option<String> {
     view.ledger
-        .lines()
-        .iter()
+        .answers_in_order()
+        .into_iter()
         .rev()
-        .find_map(|l| match &l.record {
-            Record::ChecklistAnswer(a)
-                if a.item == "intake.workload"
-                    && answer_covers(a, runtime)
-                    && a.status == AnswerStatus::Unresolved
-                    && a.reason.is_some_and(is_blocker_reason) =>
+        .find_map(|(_, a)| {
+            if a.item == "intake.workload"
+                && answer_covers(a, runtime)
+                && a.status == AnswerStatus::Unresolved
+                && a.reason.is_some_and(is_blocker_reason)
             {
                 let remedy = a
                     .remedy
@@ -2995,8 +3013,9 @@ fn workload_blocker(view: &RunView, runtime: &str) -> Option<String> {
                     Some(rt) => format!("{reason} for {rt}: {remedy}"),
                     None => format!("{reason}: {remedy}"),
                 })
+            } else {
+                None
             }
-            _ => None,
         })
 }
 

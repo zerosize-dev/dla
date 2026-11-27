@@ -1,4 +1,4 @@
-# Archetypes: the ten leak mechanisms (L-*) and the seven look-alikes that are not leaks (N-*).
+# Archetypes: the ten leak mechanisms (L-*) and the eight look-alikes that are not leaks (N-*).
 #
 # Archetypes are labels. They never filter, order or close a candidate, and a finding
 # without a fitting row stays UNCLASSIFIED. `dla ledger label` reads this file; ledger
@@ -162,3 +162,10 @@ requires = [["discriminator"]]
 disconfirm = []
 signals = ["os.rss"]
 summary = "The measurement tool itself (profiler, snapshot, tracing, driver reference) holds the memory."
+
+[N-RELEASE]
+regions = ["heap", "non-heap", "off-heap"]
+requires = [["growth-series", "discriminator"]]
+disconfirm = []
+signals = ["os.threads", "jvm.threads"]
+summary = "Growth only while the caller skips a release the API requires (stop, close, dispose, unsubscribe, cancel); with the release called on every unit, the series is flat."

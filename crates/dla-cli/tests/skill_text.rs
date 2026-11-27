@@ -160,8 +160,8 @@ fn nothing_fits_and_before_you_stop_say_what_they_must() {
         "dla gate check --final",
         "reason and a next step",
         "INCOMPLETE",
-        "a `queue` or undecided growth open, none pass",
-        "dla run abort --reason \"<why>\"",
+        "a `queue` or undecided growth open: measure;",
+        "dla run abort --blocker <kind> --reason \"<why>\"` if blocked",
         "integrity seals",
     ] {
         assert!(stop.contains(want), "Before you stop lacks {want:?}");
@@ -1172,7 +1172,7 @@ fn the_texts_say_a_cut_command_is_stopped_with_run_stop_and_not_aborted() {
     }
     assert!(
         stages.contains("A command that was cut or timed out (a `harness run` over its timeout): `dla run stop` stops the processes DLA started")
-            && stages.contains("`dla run abort --reason \"<why>\"` does the same and ends the run: it is marked aborted, the gate and the queue count it as over and nothing more can be recorded in it that counts"),
+            && stages.contains("`dla run abort --reason \"<why>\"` does the same and ends the run: it is marked aborted, the gate and the queue count it as over and nothing more can be recorded in it that counts, except a verifier's record"),
         "stages.md does not separate dla run stop from dla run abort"
     );
     // The line of the skill the model reads on every run: a cut command is stopped, not aborted.
@@ -1375,4 +1375,36 @@ fn the_texts_say_a_holder_kept_per_thread_needs_units_from_many_threads_and_a_se
         "VERIFY.md lacks the instance-field row"
     );
     assert!(!read("skills/detect-leak-anywhere/SKILL.md").contains("kept per thread"));
+}
+
+#[test]
+fn the_texts_say_an_abort_needs_a_blocker_while_budget_is_left_and_keeps_the_verifier() {
+    let read = |p: &str| {
+        fs::read_to_string(root().join(p))
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let recovery = read("skills/detect-leak-anywhere/references/recovery.md");
+    for want in [
+        "`dla run abort` is refused (`budget-left`) while it is open unless `--blocker <kind> --reason \"<what blocks the run>\"` names something the run cannot pass",
+        "`refusal` with `--code <the refusal's code>`",
+        "An abort does not skip the verifier",
+        "\"not verified: the run was aborted before the verifier ran\"",
+    ] {
+        assert!(recovery.contains(want), "recovery.md lacks: {want}");
+    }
+    let stages = read("skills/detect-leak-anywhere/references/stages.md");
+    for want in [
+        "except a verifier's record (`dla bundle F`, `dla ledger verify F`), which is still taken",
+        "the abort is refused (`budget-left`) unless `--blocker user|tool|build|environment|privilege|refusal`",
+    ] {
+        assert!(stages.contains(want), "stages.md lacks: {want}");
+    }
+    // The skill no longer offers a plain abort as the way out of a held stop.
+    assert!(
+        !skill().contains("run its fix, or `dla run abort --reason"),
+        "SKILL.md still offers a plain abort"
+    );
 }

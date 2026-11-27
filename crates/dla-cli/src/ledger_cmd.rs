@@ -30,6 +30,8 @@ use crate::{
 
 #[path = "ledger_queue.rs"]
 mod ledger_queue;
+#[path = "ledger_release.rs"]
+mod ledger_release;
 
 pub use ledger_queue::list;
 
@@ -206,6 +208,10 @@ pub struct AddArgs {
     /// The result that would refute this sibling (with --sibling-of).
     #[arg(long)]
     refute_if: Option<String>,
+    /// `file:line` of the line that releases the holder (the stop, close, dispose, unsubscribe
+    /// or cancel the API requires); required with `--hypothesis N-RELEASE`, refused otherwise.
+    #[arg(long, value_name = "FILE:LINE")]
+    remover: Option<String>,
     /// Refused from schema 6: use `dla ledger explain`, which checks the explanation.
     #[arg(long, requires = "explanation_tag")]
     explanation: Option<String>,
@@ -376,6 +382,7 @@ pub fn add(ctx: &Ctx, a: AddArgs) -> Res<Value> {
     nf.suggested_archetype = a.suggested_archetype;
     nf.hypothesis = a.hypothesis;
     nf.refute_if = a.refute_if;
+    nf.remover = a.remover;
     nf.holder = a.holder;
     nf.owner = a.owner;
     nf.region = a.region;
@@ -634,10 +641,12 @@ pub fn move_to(ctx: &Ctx, a: MoveArgs, to: FindingState) -> Res<Value> {
     let from = ledger.finding(&finding).map(|f| f.state);
     if to == FindingState::Confirmed {
         refuse_registration_only(ctx, &finding, &evidence)?;
+        ledger_release::refuse_held_confirm(ctx, &finding)?;
     }
     if matches!(to, FindingState::Confirmed | FindingState::Refuted) {
         refuse_unrelated_alloc_test(ctx, &finding, &evidence)?;
     }
+    let note = ledger_release::judge_release_move(ctx, &finding, &evidence, to)?;
     let line = ledger.transition(&finding, to, None, None, evidence.clone(), by)?;
     let mut out = json!({
         "ok": true,
@@ -652,6 +661,9 @@ pub fn move_to(ctx: &Ctx, a: MoveArgs, to: FindingState) -> Res<Value> {
         && let Some(w) = ledger.confirm_warning(&finding)
     {
         out["warning"] = json!(w);
+    }
+    if let Some(n) = note {
+        out["note"] = json!(n);
     }
     Ok(out)
 }

@@ -976,7 +976,7 @@ fn the_floor_rule_still_lets_the_time_budget_close_it_and_the_gate_keeps_the_ite
 #[test]
 fn an_aborted_run_is_not_held_to_it_and_the_floor_keeps_its_own_rule() {
     let (r, _, _) = run_with_a_passed_column("3h");
-    r.ok(&["run", "abort", "--reason", "x"]);
+    r.ok(&["run", "abort", "--blocker", "user", "--reason", "x"]);
     r.ok(&[
         "ledger",
         "resolve",

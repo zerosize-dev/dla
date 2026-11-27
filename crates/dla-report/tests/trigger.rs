@@ -366,3 +366,75 @@ fn a_confirmed_finding_the_verifier_reads_as_not_a_leak_is_counted_apart_and_lis
         "{o:?}"
     );
 }
+
+/// Reads the number after `label` in the `Findings:` line.
+fn counted(line: &str, label: &str) -> usize {
+    let at = line
+        .find(label)
+        .unwrap_or_else(|| panic!("{label}: {line}"));
+    line[at + label.len()..]
+        .trim_start()
+        .split(|c: char| !c.is_ascii_digit())
+        .next()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("{label}: {line}"))
+}
+
+#[test]
+fn a_finding_disputed_by_the_verifier_and_released_is_counted_once_and_the_plain_one_is_not_hidden()
+{
+    let run = Run::new();
+    let ts = r#""schema_version":2,"ts":"2026-01-01T00:00:00Z""#;
+    let mut text = ledger_text();
+    let mut seq = text.lines().count();
+    let mut push = |body: String| {
+        seq += 1;
+        text.push_str(&format!("{{{ts},\"seq\":{seq},{body}}}\n"));
+    };
+    // F1 is released: its family holds a confirmed N-RELEASE sibling (the flat driver with the
+    // release called) ...
+    push(r#""type":"evidence","evidence_id":"E9","source":{"repo":{"commit":"abc123"}},"tool":{"name":"dla","version":"0.1.0"},"authority":"test","kind":"discriminator","result":{"test":"plateau+purge","favors":"non-leak","supports":["non-leak"],"finding":"F1","harness":"H1","series":"S1"}"#.to_owned());
+    push(r#""type":"finding_added","finding":{"id":"F1.n2","state":"candidate","origin":"hypothesis","supports":["E6"],"parent":"F1","hypothesis":"N-RELEASE","refute_if":"the holder still grows with the release called","remover":"src/bus.go:30"}"#.to_owned());
+    push(r#""type":"transition","finding":"F1.n2","from":"candidate","to":"under_test","evidence":["E2"],"by":"dla ledger test""#.to_owned());
+    push(r#""type":"transition","finding":"F1.n2","from":"under_test","to":"confirmed","evidence":["E9"],"by":"dla ledger confirm""#.to_owned());
+    // ... and the blind verifier reads it as N-INTENT.
+    push(format!(
+        "\"type\":\"verification\",\"finding\":\"F1\",\"site\":\"src/bus.go:12\",\"holder\":\"registration-table\",\"mechanism\":\"m\",\"label\":\"N-INTENT\",\"bundle\":\"{}\",\"agrees_site\":true,\"agrees_holder\":true,\"agrees_label\":false",
+        "a".repeat(64)
+    ));
+    // F3 is a plain confirmed leak.
+    let st = RunState::load(run.dir.path()).unwrap();
+    let md = render_markdown(
+        &RunView::new(st, Ledger::from_text(&text).unwrap(), None).with_disk_facts(run.dir.path()),
+    );
+    let line = findings_line(&md);
+    // Two confirmed leaks, each in one bucket: F3 plain, F1 disputed (the verifier's word comes
+    // first); nothing is counted twice and nothing is hidden.
+    assert!(
+        line.contains("leak hypotheses: confirmed 1, confirmed but disputed by the verifier (reads N-INTENT) 1, strong 0"),
+        "{line}"
+    );
+    assert!(
+        !line.contains("grows only while callers skip the release"),
+        "{line}"
+    );
+    assert!(!line.contains("no leak confirmed"), "{line}");
+    assert_eq!(
+        counted(line, "leak hypotheses: confirmed")
+            + counted(
+                line,
+                "confirmed but disputed by the verifier (reads N-INTENT)"
+            ),
+        2,
+        "{line}"
+    );
+    assert!(
+        line.contains("non-leak explanations: confirmed 1"),
+        "{line}"
+    );
+    // F1's own section still says it grows only while the release is skipped.
+    assert!(
+        md.contains("Grows only while callers skip the release"),
+        "{md}"
+    );
+}

@@ -784,6 +784,13 @@
             "null"
           ]
         },
+        "remover": {
+          "description": "`file:line` of the line that releases the holder, on an `N-RELEASE` sibling: the call\nthe API requires (`stop`, `close`, `dispose`, `unsubscribe`, `cancel`) whose absence is\nthe growth.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "repair_class": {
           "description": "Class of repair.",
           "anyOf": [
@@ -1082,7 +1089,7 @@
           "$ref": "#/$defs/RemovalClaim"
         },
         "remover": {
-          "description": "`file:line` of the remover, for `conditional`, `wrong-key` and `unreachable`.",
+          "description": "`file:line` of the remover, for `conditional`, `wrong-key`, `on-release` and `unreachable`.",
           "type": [
             "string",
             "null"
@@ -1474,6 +1481,11 @@
           "description": "A remover exists and uses another key.",
           "type": "string",
           "const": "wrong-key"
+        },
+        {
+          "description": "A remover exists and runs only when the caller calls a release the API offers\n(stop, close, dispose, unsubscribe, cancel, shutdown).",
+          "type": "string",
+          "const": "on-release"
         },
         {
           "description": "A remover exists and is never reached.",

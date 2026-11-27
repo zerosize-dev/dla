@@ -262,8 +262,26 @@ fn header(out: &mut String, view: &RunView, st: &ReportStatus) {
     let _ = writeln!(out, "Entry: {}\n", entry_line(view));
     let _ = writeln!(out, "Scope: {}\n", scope_line(view));
     let disputed = disputed_confirmed(view);
-    let mut line = findings_line(c, &disputed);
+    let skipped = dla_core::release::grows_only_while_skipped(&view.ledger);
+    let released_strong = skipped
+        .iter()
+        .filter(|f| f.state == FindingState::Strong)
+        .count();
+    // A finding goes in one bucket of the line: the verifier's word comes first, so a confirmed
+    // finding it disputes is counted as disputed even when its family holds a confirmed
+    // `N-RELEASE` sibling (its own section says so).
+    let released_confirmed = skipped
+        .iter()
+        .filter(|f| f.state == FindingState::Confirmed)
+        .filter(|f| !disputed.iter().any(|(id, _)| id == &f.id))
+        .count();
+    let labels: Vec<String> = disputed.into_iter().map(|(_, label)| label).collect();
+    let mut line = findings_line(c, &labels, (released_confirmed, released_strong));
     if let Some(clause) = TRIGGERS.with(|t| t.borrow().as_ref().and_then(|f| f.clause())) {
+        line.push_str("; ");
+        line.push_str(&clause);
+    }
+    if let Some(clause) = unverified_clause(view) {
         line.push_str("; ");
         line.push_str(&clause);
     }
@@ -309,13 +327,38 @@ fn disputed_label(view: &RunView, f: &Finding) -> Option<String> {
         .map(|v| v.label.clone())
 }
 
-/// [`disputed_label`] of every finding it applies to.
-fn disputed_confirmed(view: &RunView) -> Vec<String> {
+/// [`disputed_label`] of every finding it applies to, with the finding.
+fn disputed_confirmed(view: &RunView) -> Vec<(dla_core::FindingId, String)> {
     view.ledger
         .findings()
         .filter(|f| view.ledger.merged_into(&f.id).is_none())
-        .filter_map(|f| disputed_label(view, f))
+        .filter_map(|f| disputed_label(view, f).map(|l| (f.id.clone(), l)))
         .collect()
+}
+
+/// What a run aborted before the verifier ran says of a confirmed finding that no verification
+/// record covers.
+const NOT_VERIFIED_ABORTED: &str = "not verified: the run was aborted before the verifier ran";
+
+/// `; not verified: ...` for the `Verified:` line of a finding of an aborted run, else nothing.
+fn not_verified_note(view: &RunView) -> String {
+    if view.state.status == dla_core::state::RunStatus::Aborted {
+        format!("; {NOT_VERIFIED_ABORTED}")
+    } else {
+        String::new()
+    }
+}
+
+/// The clause of the `Findings:` line that counts, apart, the confirmed findings of an aborted
+/// run that the verifier never read; `None` when there are none or the run was not aborted.
+fn unverified_clause(view: &RunView) -> Option<String> {
+    if view.state.status != dla_core::state::RunStatus::Aborted {
+        return None;
+    }
+    let n = dla_core::abort_rule::unverified_confirmed(view).len();
+    (n > 0).then(|| {
+        format!("confirmed but not verified (the run was aborted before the verifier ran) {n}")
+    })
 }
 
 /// The `Findings:` line. The leak hypotheses and the non-leak explanations (the `N-*`
@@ -323,7 +366,16 @@ fn disputed_confirmed(view: &RunView) -> Vec<String> {
 /// its leak-side root is `refuted` on the other, so one test read as two leaks when the two
 /// were added together. When something was measured and no leak is confirmed or strong,
 /// the line says so in words.
-fn findings_line(c: &dla_core::view::StatusCounts, disputed: &[String]) -> String {
+///
+/// Every finding is in one bucket, so the counts add up: `disputed` are the labels the verifier
+/// read for the confirmed findings it disputes, and `released` the confirmed and strong leaks
+/// whose family holds a confirmed `N-RELEASE` sibling, those already disputed left out (the
+/// caller does that: it knows which findings they are).
+fn findings_line(
+    c: &dla_core::view::StatusCounts,
+    disputed: &[String],
+    released: (usize, usize),
+) -> String {
     let leak = c.by_state.minus(&c.non_leak);
     let n = &c.non_leak;
     // A confirmed finding the blind verifier reads as a non-leak (`N-*`) is not plain
@@ -332,21 +384,38 @@ fn findings_line(c: &dla_core::view::StatusCounts, disputed: &[String]) -> Strin
     let mut labels: Vec<&str> = disputed.iter().map(String::as_str).collect();
     labels.sort_unstable();
     labels.dedup();
-    let confirmed = if apart > 0 {
+    // A confirmed finding whose family holds a confirmed `N-RELEASE` sibling grows only while
+    // callers skip a release the API requires: it is counted apart from the confirmed leaks.
+    let (released, released_strong) = (
+        released.0.min(leak.confirmed - apart),
+        released.1.min(leak.strong),
+    );
+    let mut confirmed = if apart > 0 {
         format!(
             "{}, confirmed but disputed by the verifier (reads {}) {apart}",
-            leak.confirmed - apart,
+            leak.confirmed - apart - released,
             labels.join(", ")
         )
     } else {
-        leak.confirmed.to_string()
+        (leak.confirmed - released).to_string()
     };
+    if released > 0 {
+        confirmed.push_str(&format!(
+            ", grows only while callers skip the release: {released}"
+        ));
+    }
+    let mut strong = (leak.strong - released_strong).to_string();
+    if released_strong > 0 {
+        strong.push_str(&format!(
+            ", grows only while callers skip the release: {released_strong}"
+        ));
+    }
     let mut line = format!(
         "Findings: {} enumerated, {} dispositioned; leak hypotheses: confirmed {}, strong {}, refuted {}, suspected {}, unresolved {}; non-leak explanations: confirmed {}, refuted {}, suspected {}, unresolved {}",
         c.enumerated,
         c.dispositioned,
         confirmed,
-        leak.strong,
+        strong,
         leak.refuted,
         leak.suspected_static_only,
         leak.unresolved,
@@ -355,7 +424,7 @@ fn findings_line(c: &dla_core::view::StatusCounts, disputed: &[String]) -> Strin
         n.suspected_static_only,
         n.unresolved
     );
-    if c.measured && leak.confirmed + leak.strong == 0 {
+    if c.measured && leak.confirmed + leak.strong - released - released_strong == 0 {
         line.push_str("; no leak confirmed");
     }
     line
@@ -1188,7 +1257,7 @@ fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
     } else if matches!(f.state, FindingState::Confirmed | FindingState::Strong)
         && f.polarity() == Polarity::Leak
     {
-        let _ = writeln!(out, "- Verified: no");
+        let _ = writeln!(out, "- Verified: no{}", not_verified_note(view));
     }
     let dups = view.ledger.duplicates_of(&f.id);
     if !dups.is_empty() {
@@ -1210,6 +1279,22 @@ fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
     }
     if let Some(r) = &f.refute_if {
         let _ = writeln!(out, "- Refuted if: {}", inline(r));
+    }
+    if let Some(r) = &f.remover {
+        let note = dla_core::release::decision_note(view, f)
+            .map_or_else(String::new, |n| format!(" ({n})"));
+        let _ = writeln!(out, "- Release the caller must make: {}{note}", code(r));
+    }
+    if let Some(s) = dla_core::release::release_confirmed(&view.ledger, &f.id).filter(|_| {
+        matches!(f.state, FindingState::Confirmed | FindingState::Strong)
+            && f.polarity() == Polarity::Leak
+    }) {
+        let _ = writeln!(
+            out,
+            "- Grows only while callers skip the release: {} confirmed (the release {} called on every unit leaves the series flat); counted apart from the confirmed leaks",
+            s.id,
+            s.remover.as_deref().map_or_else(String::new, code)
+        );
     }
     if !f.siblings.is_empty() {
         let s: Vec<String> = f.siblings.iter().map(ToString::to_string).collect();
@@ -1723,6 +1808,41 @@ mod tests {
         assert!(
             out.starts_with("### F1.n1: Hypothesis N-WARM (UNCLASSIFIED)\n"),
             "{out}"
+        );
+    }
+
+    #[test]
+    fn every_count_of_the_findings_line_adds_up_for_confirmed_and_strong_leaks() {
+        let mut c = dla_core::view::StatusCounts {
+            enumerated: 6,
+            ..Default::default()
+        };
+        c.by_state.confirmed = 3;
+        c.by_state.strong = 3;
+        // The caller leaves a disputed finding out of the released count, so with three
+        // confirmed (one disputed, one released, one plain) and three strong (two released):
+        let line = findings_line(&c, &["N-INTENT".to_owned()], (1, 2));
+        assert!(
+            line.contains("confirmed 1, confirmed but disputed by the verifier (reads N-INTENT) 1, grows only while callers skip the release: 1, strong 1, grows only while callers skip the release: 2, refuted 0"),
+            "{line}"
+        );
+        assert!(!line.contains("no leak confirmed"), "{line}");
+        // Nothing disputed: the confirmed are the plain ones and the released.
+        let line = findings_line(&c, &[], (2, 3));
+        assert!(
+            line.contains("confirmed 1, grows only while callers skip the release: 2, strong 0, grows only while callers skip the release: 3, refuted 0"),
+            "{line}"
+        );
+        // Everything released: no leak is confirmed.
+        c.measured = true;
+        let line = findings_line(&c, &[], (3, 3));
+        assert!(line.ends_with("; no leak confirmed"), "{line}");
+        // A disputed finding that is also released is one finding: a plain count that left it
+        // in both would hide the plain one. Disputed and released counts never exceed the whole.
+        let line = findings_line(&c, &["N-INTENT".to_owned()], (2, 0));
+        assert!(
+            line.contains("confirmed 0, confirmed but disputed by the verifier (reads N-INTENT) 1, grows only while callers skip the release: 2"),
+            "{line}"
         );
     }
 

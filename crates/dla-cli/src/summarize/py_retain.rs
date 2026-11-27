@@ -733,7 +733,7 @@ fn harness_of(rel: &str) -> Option<&str> {
 fn growth_evidence_of(ledger: &Ledger, site: &str) -> Option<String> {
     let column = format!("py.blocks@{site}");
     ledger
-        .evidence()
+        .evidence_in_order()
         .filter(|e| {
             matches!(
                 e.kind,

@@ -172,6 +172,10 @@ pub fn add_sibling(l: &mut Ledger, root: &FindingId, hypothesis: &str) -> Findin
     nf.sibling_of = Some(root.clone());
     nf.hypothesis = Some(hypothesis.into());
     nf.refute_if = Some("growth continues".into());
+    // An `N-RELEASE` sibling names the line that releases the holder.
+    if hypothesis.starts_with("N-RELEASE") {
+        nf.remover = Some("a.go:40".into());
+    }
     let line = l.add_finding(nf).unwrap();
     match line.record {
         Record::FindingAdded { finding } => finding.id,

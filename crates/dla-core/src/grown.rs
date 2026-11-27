@@ -278,7 +278,7 @@ pub(crate) fn alloc_tested(view: &RunView, root: &FindingId) -> bool {
         .filter(|f| roots.contains(&f.id) || f.parent.as_ref().is_some_and(|p| roots.contains(p)))
         .map(|f| f.id.clone())
         .collect();
-    view.ledger.evidence().any(|e| {
+    view.ledger.evidence_in_order().any(|e| {
         e.kind == EvidenceKind::Discriminator
             && e.result.get("test").and_then(|t| t.as_str()) == Some("plateau+purge")
             && crate::discriminator::finding_of(e).is_some_and(|f| family.contains(&f))
@@ -337,7 +337,7 @@ fn decided_by_alloc_test(view: &RunView, root: &FindingId) -> AllocVerdict {
         .filter(|f| roots.contains(&f.id) || f.parent.as_ref().is_some_and(|p| roots.contains(p)))
         .map(|f| f.id.clone())
         .collect();
-    let records: Vec<&EvidenceRecord> = view.ledger.evidence().collect();
+    let records: Vec<&EvidenceRecord> = view.ledger.evidence_in_order().collect();
     let newest = bound_alloc_tests(&records, &family)
         .into_iter()
         .rev()
@@ -580,7 +580,7 @@ pub fn harness_about(
         .findings()
         .filter(|f| f.id == root || f.parent.as_ref() == Some(&root))
         .collect();
-    for ev in ledger.evidence() {
+    for ev in ledger.evidence_in_order() {
         if !matches!(
             ev.kind,
             EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries
@@ -599,7 +599,7 @@ pub fn harness_about(
     {
         let subjects: Vec<&crate::finding::Finding> =
             std::iter::once(rf).chain(family.iter().copied()).collect();
-        for ev in ledger.evidence() {
+        for ev in ledger.evidence_in_order() {
             if crate::labels::names_finding(ev, &subjects)
                 && made_from_capture_of(dir, ev, &manifest.id)
             {
@@ -669,7 +669,7 @@ pub fn column_site(c: &crate::trend::ColumnTrend) -> Option<&str> {
 /// `dla ledger duplicate`'s own rule. The growth of `f` is then another site of that leak.
 fn same_leak_as(view: &RunView, f: &FindingId, harness: &str) -> Option<(FindingId, String)> {
     view.ledger
-        .evidence()
+        .evidence_in_order()
         .filter(|e| {
             e.kind == EvidenceKind::Discriminator
                 && e.result.get("test").and_then(|t| t.as_str()) == Some("plateau+purge")
@@ -784,7 +784,7 @@ pub fn growth_evidence(
 /// The newest `workload` evidence of harness `harness`.
 pub fn workload_evidence(ledger: &crate::ledger::Ledger, harness: &str) -> Option<EvidenceId> {
     ledger
-        .evidence()
+        .evidence_in_order()
         .filter(|e| e.kind == EvidenceKind::Workload)
         .filter(|e| e.result.get("harness").and_then(|h| h.as_str()) == Some(harness))
         .last()
@@ -844,7 +844,7 @@ pub fn confirm_commands(
     // (`suspected_static_only`, `unresolved`), still gets its test and confirm.
     let can_test = crate::machine::is_allowed(root_f.state, FindingState::UnderTest);
     if !root_f.state.is_dispositioned() || can_test {
-        let records: Vec<&EvidenceRecord> = ledger.evidence().collect();
+        let records: Vec<&EvidenceRecord> = ledger.evidence_in_order().collect();
         let prefer = series_of_harness(
             &records,
             harness,
@@ -932,7 +932,7 @@ pub fn route_to_confirm(view: &RunView, root: &FindingId) -> Option<ConfirmRoute
         .filter(|f| &f.id == root || f.parent.as_ref() == Some(root))
         .map(|f| f.id.clone())
         .collect();
-    let records: Vec<&EvidenceRecord> = ledger.evidence().collect();
+    let records: Vec<&EvidenceRecord> = ledger.evidence_in_order().collect();
     // The newest alloc-test on any harness about the finding decides (a newer one that does not
     // favor leak lifts the route); the route needs it to have run on a driver made for the finding.
     let (disc, favors, made_for_it) = bound_alloc_tests(&records, &family)
@@ -1081,13 +1081,13 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
                 column,
                 growth: view
                     .ledger
-                    .evidence()
+                    .evidence_in_order()
                     .filter(|e| e.kind == want)
                     .find(|e| e.result.get("trend").and_then(|v| v.as_str()) == Some(t.id.as_str()))
                     .map(|e| e.evidence_id.to_string()),
                 workload: view
                     .ledger
-                    .evidence()
+                    .evidence_in_order()
                     .filter(|e| e.kind == EvidenceKind::Workload)
                     .filter(|e| {
                         e.result.get("harness").and_then(|v| v.as_str()) == Some(harness.as_str())
@@ -1173,7 +1173,7 @@ fn dump_harness(records: &[&EvidenceRecord], at: usize) -> Option<String> {
 fn dump_grown(view: &RunView, out: &mut Vec<Grown>) {
     use crate::discriminator::{Favors, favors_of, finding_of};
     let ledger = &view.ledger;
-    let records: Vec<&EvidenceRecord> = ledger.evidence().collect();
+    let records: Vec<&EvidenceRecord> = ledger.evidence_in_order().collect();
     let series_of = |e: &EvidenceRecord| {
         e.result
             .get("series")
@@ -1465,14 +1465,6 @@ fn dump_grown(view: &RunView, out: &mut Vec<Grown>) {
     }
 }
 
-/// The ledger line (`seq`) that holds evidence `id`.
-fn evidence_seq(ledger: &crate::ledger::Ledger, id: &EvidenceId) -> Option<u64> {
-    ledger.lines().iter().find_map(|l| match &l.record {
-        crate::record::Record::Evidence(e) if &e.evidence_id == id => Some(l.seq),
-        _ => None,
-    })
-}
-
 /// True when a non-leak sibling in `family` was confirmed after the ledger line of the lead's
 /// record `lead`: a confirmed non-leak explanation decides the dump lead, and the newest record
 /// decides, as for the other lifts (a newer growth record or leak discriminator brings it back,
@@ -1482,19 +1474,14 @@ fn explained_since(
     family: &[FindingId],
     lead: &EvidenceId,
 ) -> bool {
-    let Some(lead_seq) = evidence_seq(ledger, lead) else {
+    let Some(lead_at) = ledger.evidence_order(lead) else {
         return false;
     };
-    ledger.lines().iter().any(|l| match &l.record {
-        crate::record::Record::Transition(t) => {
-            l.seq > lead_seq
-                && t.to == FindingState::Confirmed
-                && family.contains(&t.finding)
-                && ledger
-                    .finding(&t.finding)
-                    .is_some_and(|f| f.polarity() == Polarity::NonLeak)
-        }
-        _ => false,
+    family.iter().any(|f| {
+        ledger.confirmed_order(f).is_some_and(|at| at > lead_at)
+            && ledger
+                .finding(f)
+                .is_some_and(|x| x.polarity() == Polarity::NonLeak)
     })
 }
 
@@ -1544,7 +1531,7 @@ pub fn explanation_route(
 ) -> String {
     let id = &root.id;
     let record = ledger
-        .evidence()
+        .evidence_in_order()
         .filter(|e| crate::machine::shows_holder_of(e, root))
         .last()
         .map(|e| e.evidence_id.to_string());
@@ -3271,5 +3258,63 @@ mod tests {
         );
         let grown = grown_unmeasured(&no_trend_view(l));
         assert_eq!(grown[0].harness, "");
+    }
+
+    #[test]
+    fn an_explanation_confirmed_in_a_workers_slice_is_after_a_lead_of_the_main_ledger() {
+        // The lead (a growth record) is a line of the main ledger, which a worker's slice does
+        // not hold; the worker confirms a non-leak sibling of its own finding afterwards.
+        let dir = tempfile::tempdir().unwrap();
+        crate::state::RunState::init("/p", None, 3600, None, crate::state::now_utc())
+            .unwrap()
+            .save(dir.path())
+            .unwrap();
+        let mut main = Ledger::create(dir.path()).unwrap();
+        let hit = add_ev(&mut main, EvidenceKind::StaticHit, serde_json::json!({}));
+        let ws = add_ev(
+            &mut main,
+            EvidenceKind::Workload,
+            serde_json::json!({"harness": "H1"}),
+        );
+        let flat = add_ev(
+            &mut main,
+            EvidenceKind::Discriminator,
+            serde_json::json!({"test": "plateau+purge", "favors": "non-leak", "finding": "w/F1",
+                "harness": "H1", "series": "S1"}),
+        );
+        let lead = growth(&mut main, "S1");
+        let mut w = Ledger::load_for(dir.path(), Some("w")).unwrap();
+        let mut nf = NewFinding::new(Origin::parse("census").unwrap(), vec![hit.clone()]);
+        nf.site = Some("a.py:1".into());
+        nf.holder = Some(crate::finding::Holder::StaticGlobal);
+        w.add_finding(nf).unwrap();
+        let mut nf = NewFinding::new(Origin::parse("hypothesis").unwrap(), vec![hit]);
+        nf.sibling_of = Some("w/F1".parse().unwrap());
+        nf.hypothesis = Some("N-RELEASE".into());
+        nf.refute_if = Some(REFUTE_IF.into());
+        nf.remover = Some("a.py:30".into());
+        w.add_finding(nf).unwrap();
+        let (root, sib): (FindingId, FindingId) =
+            ("w/F1".parse().unwrap(), "w/F1.n1".parse().unwrap());
+        let family = vec![root.clone(), sib.clone()];
+        // Nothing confirmed yet.
+        assert!(!explained_since(&w, &family, &lead));
+        for (f, to, by) in [
+            (&root, FindingState::UnderTest, &ws),
+            (&root, FindingState::Refuted, &flat),
+            (&sib, FindingState::UnderTest, &ws),
+            (&sib, FindingState::Confirmed, &flat),
+        ] {
+            w.transition(f, to, None, None, vec![by.clone()], "t")
+                .unwrap();
+        }
+        assert!(
+            explained_since(&w, &family, &lead),
+            "confirmed after the lead"
+        );
+        // A growth record of the worker after the confirm brings the lead back.
+        let newer = growth(&mut w, "S2");
+        assert_eq!(newer.to_string(), "w/E1");
+        assert!(!explained_since(&w, &family, &newer));
     }
 }

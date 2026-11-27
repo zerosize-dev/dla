@@ -87,10 +87,10 @@ pub struct ExplainArgs {
     /// recorded writers).
     #[arg(long, value_delimiter = ',', value_name = "FILE:LINE")]
     pub adds: Vec<String>,
-    /// never | not-found | conditional | wrong-key | unreachable
+    /// never | not-found | conditional | wrong-key | on-release (removed only when the caller calls the API's release; a confirm then needs N-RELEASE refuted on a driver that calls it) | unreachable
     #[arg(long, value_parser = parse_enum::<RemovalClaim>)]
     pub removal: RemovalClaim,
-    /// `file:line` of the remover (required with conditional, wrong-key, unreachable).
+    /// `file:line` of the remover (required with conditional, wrong-key, on-release, unreachable).
     #[arg(long, value_name = "FILE:LINE")]
     pub remover: Option<String>,
     /// A retention, intervention or tied growth record that shows the pairing.

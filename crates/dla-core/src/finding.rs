@@ -283,8 +283,8 @@ impl JsonSchema for Origin {
     }
 }
 
-/// The seven non-leak explanations a sibling hypothesis can name.
-pub const NON_LEAK_IDS: [&str; 7] = [
+/// The eight non-leak explanations a sibling hypothesis can name.
+pub const NON_LEAK_IDS: [&str; 8] = [
     "N-ALLOC",
     "N-HEADROOM",
     "N-WARM",
@@ -292,6 +292,7 @@ pub const NON_LEAK_IDS: [&str; 7] = [
     "N-SCALE",
     "N-INTENT",
     "N-OBSERVER",
+    "N-RELEASE",
 ];
 
 /// The `N-*` id a hypothesis begins with, when it is one of [`NON_LEAK_IDS`] followed by
@@ -389,6 +390,11 @@ pub struct Finding {
     /// Sibling hypotheses; maintained by the ledger.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub siblings: Vec<FindingId>,
+    /// `file:line` of the line that releases the holder, on an `N-RELEASE` sibling: the call
+    /// the API requires (`stop`, `close`, `dispose`, `unsubscribe`, `cancel`) whose absence is
+    /// the growth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remover: Option<String>,
     /// Explanation with its tag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explanation: Option<Explanation>,
@@ -420,6 +426,7 @@ impl Finding {
             supports,
             contradicts: Vec::new(),
             siblings: Vec::new(),
+            remover: None,
             explanation: None,
         }
     }

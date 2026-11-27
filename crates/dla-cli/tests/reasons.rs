@@ -293,6 +293,48 @@ fn a_refusal_from_before_the_finding_does_not_count() {
     );
 }
 
+/// Writes a time refusal the way `note_time_refusal` stamps it (whole seconds, `.000`), `back`
+/// seconds before the second of F1's line.
+fn refusal_in_the_second_of_f1(r: &Run, back: i64) {
+    let l = Ledger::load_for(&r.run_dir(), None).unwrap();
+    let added = l.finding_added_at(&"F1".parse().unwrap()).unwrap();
+    let at = chrono::SubsecRound::trunc_subsecs(added, 0) - chrono::TimeDelta::seconds(back);
+    fs::write(
+        r.run_dir().join(dla_core::toolctx::TIME_REFUSALS_FILE),
+        format!(
+            "{}\n",
+            json!({
+                "ts": at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                "worker": null,
+                "none_fits": true
+            })
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_refusal_stamped_in_the_second_of_the_finding_counts() {
+    let r = scene();
+    assert_eq!(
+        r.close(None, "F1", "time_budget").as_deref(),
+        Some("time-left")
+    );
+    // The line of F1 is stamped to the millisecond, the refusal to the whole second.
+    refusal_in_the_second_of_f1(&r, 0);
+    assert_eq!(r.close(None, "F1", "time_budget"), None);
+}
+
+#[test]
+fn a_refusal_a_second_before_the_finding_does_not_count() {
+    let r = scene();
+    refusal_in_the_second_of_f1(&r, 1);
+    assert_eq!(
+        r.close(None, "F1", "time_budget").as_deref(),
+        Some("time-left")
+    );
+}
+
 #[test]
 fn an_open_item_is_held_to_the_same_rule() {
     let r = scene();

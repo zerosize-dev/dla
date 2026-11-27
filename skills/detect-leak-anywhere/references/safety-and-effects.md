@@ -106,7 +106,7 @@ call. A stop hook never fails closed: it blocks the first two stop attempts, and
 stop through, marks the run (or the worker) INCOMPLETE (stalled), and says why. Claude Code also ends a turn
 after eight stop-hook continuations in a row; the count resets when Claude calls a tool.
 
-Once a run is complete, incomplete or aborted the hooks allow everything: they guard a run that is in
+Once a run is complete, incomplete or aborted the hooks allow everything (an aborted run's Stop hook still holds the stop while a confirmed finding has no verification record): they guard a run that is in
 progress, and `dla` takes no part in what is written afterwards. The seals are what keep the result honest
 then: `report`, `gate check` and `run status` still compare every protected file with its seal.
 

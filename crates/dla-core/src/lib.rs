@@ -18,6 +18,7 @@
 #[macro_use]
 mod macros;
 
+pub mod abort_rule;
 pub mod archetypes;
 pub mod attribution;
 pub mod capture_keep;
@@ -55,6 +56,7 @@ pub mod queue;
 pub mod rank;
 pub mod record;
 pub mod redact;
+pub mod release;
 pub mod runtime;
 pub mod schema;
 pub mod series;
@@ -102,7 +104,7 @@ pub use evidence::{
 pub use finding::{Finding, FindingState, Origin, UNCLASSIFIED, UnresolvedReason};
 pub use harness::{HarnessDump, HarnessManifest};
 pub use ids::{EvidenceId, FindingId, OpenItemId};
-pub use ledger::{Annotation, HolderChange, Ledger, NewFinding, OpenItemState};
+pub use ledger::{Annotation, HolderChange, Ledger, NewFinding, OpenItemState, RecordOrder};
 pub use record::{
     FindingAnnotation, FindingExplained, FindingLabeled, FindingMerged, IntegrityResealed,
     LabelSatisfied, LedgerLine, Record, RemovalClaim, Resolution, SliceDone, SliceMerged,

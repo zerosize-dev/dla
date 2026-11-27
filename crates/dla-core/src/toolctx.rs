@@ -103,6 +103,11 @@ fn refused_since(
     let extended = RunState::load(run_dir)
         .ok()
         .and_then(|s| s.budget.extensions.iter().map(|e| e.at).max());
+    // The refusal file is stamped to the whole second (`now_utc`), while a ledger line is
+    // stamped to the millisecond: a finding added at 12:00:00.400 and a refusal written at
+    // 12:00:00.900 (stamped 12:00:00.000) must count. Compare at the refusal file's own
+    // precision, so the finding's time is cut to the second.
+    let since = chrono::SubsecRound::trunc_subsecs(since, 0);
     let since = extended.map_or(since, |at| since.max(at));
     text.lines().any(|l| {
         let Ok(v) = serde_json::from_str::<Value>(l) else {
@@ -1074,6 +1079,31 @@ mod tests {
         state::{Consent, now_utc},
     };
     use serde_json::json;
+
+    /// A refusal is stamped to the whole second, a ledger line to the millisecond: a refusal in
+    /// the second of a finding counts for it, one a second earlier does not.
+    #[test]
+    fn a_refusal_in_the_second_of_the_finding_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let line = |ts: &str| format!("{}\n", json!({"ts": ts, "worker": null, "none_fits": true}));
+        let since = chrono::DateTime::parse_from_rfc3339("2030-01-01T12:00:00.400Z")
+            .unwrap()
+            .to_utc();
+        fs::write(
+            dir.path().join(TIME_REFUSALS_FILE),
+            line("2030-01-01T12:00:00.000Z"),
+        )
+        .unwrap();
+        assert!(time_refused_since(dir.path(), None, since));
+        assert!(nothing_fits_since(dir.path(), None, since));
+        fs::write(
+            dir.path().join(TIME_REFUSALS_FILE),
+            line("2030-01-01T11:59:59.000Z"),
+        )
+        .unwrap();
+        assert!(!time_refused_since(dir.path(), None, since));
+        assert!(!nothing_fits_since(dir.path(), None, since));
+    }
 
     fn run(tiers: Option<Vec<u8>>) -> (tempfile::TempDir, ToolCtx) {
         let dir = tempfile::tempdir().unwrap();

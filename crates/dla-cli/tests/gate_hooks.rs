@@ -1665,10 +1665,14 @@ fn an_open_queue_with_budget_over_the_floor_is_not_given_up_by_four_stop_attempt
         assert!(reason.len() <= 1000, "{} bytes", reason.len());
         assert!(reason.contains("This stop is not counted: "), "{reason}");
         assert!(reason.contains(" budget minutes remain and the python queue is open. Run its next batch (dla harness gen --lang python --driver --next)"), "{reason}");
+        // The next measurement first; the abort only for a blocker, never a plain one.
         assert!(
-            reason.contains(
-                "dla run abort --reason \"<why>\" (the report says the run is aborted, and why)"
-            ),
+            reason.contains("dla run abort --blocker <user|tool|build|environment|privilege> --reason \"<what blocks the run>\""),
+            "{reason}"
+        );
+        assert!(!reason.contains("dla run abort --reason"), "{reason}");
+        assert!(
+            reason.find("Run its next batch").unwrap() < reason.find("dla run abort").unwrap(),
             "{reason}"
         );
         // After the budget line, before the items.
@@ -1800,18 +1804,25 @@ fn a_worker_slice_with_an_open_queue_is_held_and_not_counted() {
 }
 
 #[test]
-fn run_abort_with_a_reason_ends_a_held_run_and_the_stop_is_allowed() {
+fn run_abort_for_the_user_ends_a_held_run_and_the_stop_is_allowed() {
     let p = queue_project();
     let held = p.hook(&["stop-hook"], &stop_json(p.path()));
     assert_eq!(held.json()["decision"], "block", "{held:?}");
-    p.ok(&["run", "abort", "--reason", "the owner asked to end it"]);
+    p.ok(&[
+        "run",
+        "abort",
+        "--blocker",
+        "user",
+        "--reason",
+        "the owner asked to end it",
+    ]);
     let out = p.hook(&["stop-hook"], &stop_json(p.path()));
     assert!(out.allowed(), "{out:?}");
     assert_eq!(p.state()["status"], "aborted");
     let report = p.dla().arg("report").output().unwrap();
     let md = String::from_utf8(report.stdout).unwrap();
     assert!(
-        md.contains("run is aborted: the owner asked to end it"),
+        md.contains("run is aborted: aborted at the user's request: the owner asked to end it"),
         "{md}"
     );
     assert!(md.contains("the owner asked to end it"), "{md}");
@@ -1964,7 +1975,8 @@ fn growth_measured_and_not_decided_with_budget_over_the_floor_is_not_given_up_by
             "{reason}"
         );
         assert!(
-            reason.contains("dla run abort --reason \"<why>\""),
+            reason.contains("dla run abort --blocker <user|tool|build|environment|privilege> --reason \"<what blocks the run>\"")
+                && !reason.contains("dla run abort --reason"),
             "{reason}"
         );
     }
@@ -2114,4 +2126,199 @@ fn growth_of_a_finding_still_open_holds_the_stop_like_a_closed_one() {
     set_deadline(&p, 4);
     let outs = stop_attempts(&p, 3);
     assert!(outs[2].allowed(), "{:?}", outs[2]);
+}
+
+// ------------------------------------------------ abort is no free exit while budget is left
+
+/// What `dla run abort <args>` printed: the exit code and the JSON.
+fn abort_out(p: &P, args: &[&str]) -> (i32, Value) {
+    let out = p.dla().args(["run", "abort"]).args(args).output().unwrap();
+    (
+        out.status.code().unwrap(),
+        serde_json::from_slice(&out.stdout).unwrap_or(Value::Null),
+    )
+}
+
+fn refused_with(p: &P, args: &[&str], code: &str) -> Value {
+    let (exit, v) = abort_out(p, args);
+    assert_eq!(exit, 2, "{args:?}: {v}");
+    assert_eq!(v["error"]["code"], code, "{args:?}: {v}");
+    assert_eq!(
+        p.state()["status"],
+        "active",
+        "a refused abort ends nothing"
+    );
+    v["error"].clone()
+}
+
+#[test]
+fn a_plain_abort_with_an_open_queue_and_budget_left_is_refused_and_names_the_next_batch() {
+    let p = queue_project();
+    let e = refused_with(&p, &[], "budget-left");
+    let message = e["message"].as_str().unwrap();
+    assert!(
+        message.contains(" budget minutes remain and work is open (queue: "),
+        "{message}"
+    );
+    assert!(
+        message.contains("candidate(s) of python are ranked for measurement"),
+        "{message}"
+    );
+    let fix = e["fix"].as_str().unwrap();
+    assert!(
+        fix.starts_with("dla harness gen --lang python --driver --next   or   dla run abort --blocker <user|tool|build|environment|privilege> --reason \"<what blocks the run>\"   or   dla run abort --blocker refusal --code <refusal code> --reason "),
+        "{fix}"
+    );
+    // A reason alone does not make it pass, whatever it says.
+    refused_with(
+        &p,
+        &["--reason", "139 ranked candidates not targeted"],
+        "budget-left",
+    );
+}
+
+#[test]
+fn an_abort_for_the_user_passes_with_an_open_queue() {
+    let p = queue_project();
+    let (exit, v) = abort_out(&p, &["--blocker", "user"]);
+    assert_eq!(exit, 0, "{v}");
+    assert_eq!(v["status"], "aborted");
+    assert_eq!(v["reason"], "aborted at the user's request");
+    assert_eq!(
+        p.state()["incomplete_reason"],
+        "aborted at the user's request"
+    );
+    let md = String::from_utf8(p.dla().arg("report").output().unwrap().stdout).unwrap();
+    assert!(
+        md.contains("run is aborted: aborted at the user's request"),
+        "{md}"
+    );
+}
+
+#[test]
+fn a_blocker_of_the_environment_needs_a_reason_that_names_it() {
+    let p = queue_project();
+    // Empty reason, no reason, too short, a count of the work left: refused, nothing ended.
+    for args in [
+        &["--blocker", "tool"][..],
+        &["--blocker", "tool", "--reason", ""][..],
+        &["--blocker", "build", "--reason", "stuck"][..],
+        &[
+            "--blocker",
+            "tool",
+            "--reason",
+            "unattended run: 4 leak hypotheses confirmed plus 2 SDK caches measured; 139 ranked candidates not targeted (each harness batch settles 2-3)",
+        ][..],
+    ] {
+        let e = refused_with(&p, args, "missing-argument");
+        assert!(e["message"].as_str().unwrap().contains("--reason"), "{e}");
+    }
+    // An unknown kind, and a code with a kind that takes none.
+    refused_with(
+        &p,
+        &["--blocker", "boredom", "--reason", "the run is tired of it"],
+        "invalid-value",
+    );
+    refused_with(
+        &p,
+        &[
+            "--blocker",
+            "tool",
+            "--code",
+            "time-left",
+            "--reason",
+            "go is not installed",
+        ],
+        "invalid-value",
+    );
+    // A blocker that names what is in the way passes.
+    let (exit, v) = abort_out(
+        &p,
+        &[
+            "--blocker",
+            "tool",
+            "--reason",
+            "the go toolchain is not installed",
+        ],
+    );
+    assert_eq!(exit, 0, "{v}");
+    assert_eq!(
+        v["reason"],
+        "aborted with blocker tool: the go toolchain is not installed"
+    );
+}
+
+#[test]
+fn a_refusal_blocker_needs_the_code_of_the_refusal() {
+    let p = queue_project();
+    for args in [
+        &[
+            "--blocker",
+            "refusal",
+            "--reason",
+            "the run cannot satisfy the refusal",
+        ][..],
+        &[
+            "--blocker",
+            "refusal",
+            "--code",
+            "Not A Code",
+            "--reason",
+            "the run cannot satisfy it",
+        ][..],
+    ] {
+        let e = refused_with(&p, args, "missing-argument");
+        assert!(e["message"].as_str().unwrap().contains("--code"), "{e}");
+    }
+    let (exit, v) = abort_out(
+        &p,
+        &[
+            "--blocker",
+            "refusal",
+            "--code",
+            "capture-not-summarized",
+            "--reason",
+            "the capture needs a privilege the run does not have",
+        ],
+    );
+    assert_eq!(exit, 0, "{v}");
+    assert_eq!(
+        v["reason"],
+        "aborted with blocker refusal capture-not-summarized: the capture needs a privilege the run does not have"
+    );
+}
+
+#[test]
+fn a_plain_abort_passes_under_the_floor_and_with_nothing_open() {
+    let p = queue_project();
+    set_deadline(&p, 4);
+    let (exit, v) = abort_out(&p, &["--reason", "out of time"]);
+    assert_eq!(exit, 0, "{v}");
+    assert_eq!(v["reason"], "out of time");
+    // Nothing open: no queue, no growth, no measurement to run.
+    let q = project("symptom");
+    let (exit, v) = abort_out(&q, &["--reason", "nothing to measure here"]);
+    assert_eq!(exit, 0, "{v}");
+    assert_eq!(v["status"], "aborted");
+}
+
+#[test]
+fn a_plain_abort_with_an_undecided_growth_is_refused_and_names_its_first_command() {
+    let (p, f) = growth_project();
+    let e = refused_with(&p, &[], "budget-left");
+    let message = e["message"].as_str().unwrap();
+    assert!(
+        message.contains(&format!("1 undecided growth(s): {f}")),
+        "{message}"
+    );
+    let fix = e["fix"].as_str().unwrap();
+    assert!(fix.starts_with("dla "), "{fix}");
+    assert!(
+        fix.contains(
+            "   or   dla run abort --blocker <user|tool|build|environment|privilege> --reason"
+        ),
+        "{fix}"
+    );
+    let (exit, v) = abort_out(&p, &["--blocker", "user"]);
+    assert_eq!(exit, 0, "{v}");
 }

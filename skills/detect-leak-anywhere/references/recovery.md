@@ -25,7 +25,8 @@ ptrace refused, the tool exits non-zero), or the target exited.
   is above 0; memray needs to be importable by the target's own interpreter.
 - Record: `dla ledger resolve <F|O> --as unresolved --reason env_unavailable --remedy "<what to
   change on the machine, then rerun dla attach ...>"`; reason `privilege_declined` when the tier
-  was not consented. Then `dla run abort --reason "attach failed"` if the run is being abandoned:
+  was not consented. Then `dla run abort --blocker environment --reason "attach failed: <why>"` if the run is being abandoned
+  (the blocker is needed while budget is left and work is open):
   it undoes what was attached and never kills the target.
 
 ## Insufficient resources
@@ -95,8 +96,14 @@ stop attempts; at the third attempt with no change in the ledger it lets the sto
 INCOMPLETE with the reason "stop hook let the stop through after 3 stop attempts with no ledger change"
 and the missing ids, and the report says so. While budget is over the floor and a `queue` is open (and no
 command was refused for time with nothing smaller that fits), no stop attempt is counted and none is let
-through: the block names the queue's next command and `dla run abort --reason "<why>"`, the deliberate way
-to end the run. With no queue open, growth that was measured and not decided holds the stop the same way,
+through: the block names the queue's next command, and `dla run abort` is refused (`budget-left`) while it is
+open unless `--blocker <kind> --reason "<what blocks the run>"` names something the run cannot pass: `user` (the
+user asked to stop), `tool`, `build`, `environment` or `privilege` (with a reason that names the missing tool, the
+build that does not compile, the environment or permission), or `refusal` with `--code <the refusal's code>`. A
+count of work left is no reason. An abort does not skip the verifier: its output lists the confirmed findings with
+no verification record and the commands for each, the Stop hook of the aborted run blocks the first two stop
+attempts while one is unverified and allows the third (with a note), and the report marks it "not verified: the
+run was aborted before the verifier ran". With no queue open, growth that was measured and not decided holds the stop the same way,
 whether its finding is closed (a `growth` item) or still open (a `finding` item): the block names the first
 command of its route, often `dla harness gen --lang <rt> --driver --probe <F>` when an alloc-test of a test
 loop or of the project's own workload did not decide it. While a `dla` command of the run (census, sweep, harness run,

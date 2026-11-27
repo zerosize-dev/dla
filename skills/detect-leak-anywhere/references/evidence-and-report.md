@@ -198,7 +198,7 @@ iterations (`dla harness run H1 --iterations N`), or record the item `unresolved
 
 A finding is leak-side when it is top-level or a sibling whose hypothesis is not an N-* id. It is
 non-leak when it is a sibling whose hypothesis begins with `N-ALLOC`, `N-HEADROOM`, `N-WARM`,
-`N-HWM`, `N-SCALE`, `N-INTENT` or `N-OBSERVER`. The family of a finding is its root plus all
+`N-HWM`, `N-SCALE`, `N-INTENT`, `N-OBSERVER` or `N-RELEASE`. The family of a finding is its root plus all
 siblings of the root.
 
 | Move | What the ledger requires | Refusal code |
@@ -210,10 +210,13 @@ siblings of the root.
 | | a cited passing growth column tied to the finding (probe, site, owner or `candidates`) | `growth-not-tied` |
 | | the finding has a `site` and a `holder` | `site-required`, `holder-required` |
 | | some non-leak member of the family is `refuted` | `nonleak-refutation-required` (when an alloc-test bound to the finding favors leak, the fix is the refute of each open sibling with it, then the confirm) |
+| | no two drivers made for the finding have newest alloc-tests that disagree (one favors leak, one non-leak) unless a non-leak sibling added after the older of the two was refuted by an alloc-test newer than both, on a driver made for it other than the one that favors leak | `drivers-disagree` |
+| | its explanation does not say `removal: on-release` with a remover while no `N-RELEASE` sibling of its root has decided it: a confirmed one, whatever remover it names (the finding is then counted apart, "grows only while callers skip the release", and is no leak to ask about), or a refuted one that names that same remover line (a refuted sibling that names another release says nothing about this one) | `release-untested` |
 | | the growth is not only the unit's own calls of the registration function of a start-up registration (trigger `direct`; the fix gives one route, an entry-path harness whose unit does not call it, then `dla alloc-test`) | `registration-only` |
 | `bundle F3` (confirmed or strong, leak-side) | the bundle holds an allocation or retention record when the growth is a count of blocks allocated at one line (`py.blocks@<file:line>`) and the runtime captures allocation stacks: run `dla harness run <H> --mode <m> --capture alloc` and the `dla summarize alloc-stack-diff` command it prints, then bundle again; a capture that was made and never summarized is refused too, and the fix is its summarize command | `stacks-not-captured` |
 | `alloc-test H --finding F3`, `ledger refute F3` or `ledger confirm F3.n1` citing the alloc-test evidence of `H` | `H` targets the finding, runs the project's own workload (a command-mode harness with a workload, or a test loop), or measured something tied to it (a column of a trend of its series tied to the finding, growth evidence the finding cites, or an allocation-stack or retention-path summary of its captures that names the finding); the fix names the harness that does, and the driver of its own (`dla harness gen --lang <rt> --driver --probe F3`) | `harness-not-about` |
 | `harness gen --next` (any language, any mode) | no holder of the project (a module global or a class attribute of a project source file that is not test code) that a capture showed keeps a growing line has no finding with its owner; the fix is the `dla ledger add ... --owner <owner> --site <line> --holder static/global --region heap` it names | `measured-holder-first` |
+| `ledger confirm F3.n2` or `ledger refute F3.n2` (`N-RELEASE`, added with `--remover <file:line>`) | a cited alloc-test on a driver made for the finding in which the remover line ran (count above 0 where the runtime counts lines: Rust, Go and Node from the coverage record `dla alloc-test` writes, Python from the line counts of the series; a missing record or one from before the sibling named the line is refused, and the fix is `dla alloc-test <H> --finding F3`; the JVM, native code and a record that says the tool could not count the line are accepted with the note `remover run not shown`), favoring non-leak to confirm and leak to refute | `release-not-run` |
 | `ledger confirm F3.n1` (non-leak) | a `discriminator` with `favors: non-leak`, and the leak-side root is `refuted` | `discriminator-required`, `discriminator-direction`, `leak-refutation-required` |
 | `ledger refute F3` (leak-side) | a discriminator with `favors: non-leak` | `discriminator-direction` (none at all: `discriminator-required`) |
 | `ledger refute F3.n1` (non-leak) | a discriminator with `favors: leak` | the same |

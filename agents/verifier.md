@@ -43,6 +43,7 @@ IDs (`L-` a leak mechanism, `N-` growth that is not a leak):
 - `N-HWM`: A pool, buffer or map keeps the capacity of its largest batch; the level steps up once and stays.
 - `N-INTENT`: Retention the code asks for on purpose (a log, a bounded memo, pinned data) with a bound or a stated purpose.
 - `N-OBSERVER`: The measurement tool itself (profiler, snapshot, tracing, driver reference) holds the memory.
+- `N-RELEASE`: Growth only while the caller skips a release the API requires (stop, close, dispose, unsubscribe, cancel); with the release called on every unit, the series is flat.
 - `N-SCALE`: Memory is proportional to live load (connections, sessions) and falls when the load falls.
 - `N-WARM`: A one-time fill (cache to its cap, class loading, lazy init, pool to size) that stops, or memory the code gives back.
 <!-- archetypes:end -->

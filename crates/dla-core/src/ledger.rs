@@ -147,6 +147,8 @@ pub struct NewFinding {
     pub amplifiers: Vec<String>,
     /// Repair class.
     pub repair_class: Option<RepairClass>,
+    /// `file:line` of the release an `N-RELEASE` sibling names.
+    pub remover: Option<String>,
     /// Explanation.
     pub explanation: Option<Explanation>,
 }
@@ -170,6 +172,7 @@ impl NewFinding {
             site: None,
             amplifiers: Vec::new(),
             repair_class: None,
+            remover: None,
             explanation: None,
         }
     }
@@ -209,6 +212,33 @@ struct Index {
     explanations: BTreeMap<FindingId, FindingExplained>,
     /// Every `integrity_resealed` record, oldest first (schema 6).
     reseals: Vec<IntegrityResealed>,
+    /// Records committed so far: the tie-break of [`RecordOrder`].
+    clock: u64,
+    /// The newest `ts` of any committed line: the floor of a fresh line's stamp (see
+    /// [`floored_ts`]).
+    latest_ts: Option<DateTime<Utc>>,
+    /// The chronological key of every evidence record (see [`Ledger::evidence_order`]).
+    evidence_order: BTreeMap<EvidenceId, RecordOrder>,
+    /// The chronological key of every `finding_added` record.
+    finding_order: BTreeMap<FindingId, RecordOrder>,
+    /// The `ts` of the line that raised every open item.
+    open_item_ts: BTreeMap<OpenItemId, DateTime<Utc>>,
+    /// The chronological key of the latest transition of a finding to `confirmed`.
+    confirmed_order: BTreeMap<FindingId, RecordOrder>,
+    /// Every checklist answer with its key, in replay order (`answers` keeps only the latest
+    /// per item).
+    answer_log: Vec<(RecordOrder, ChecklistAnswer)>,
+}
+
+/// The chronological key of a record: when its line was written (`ts`; a merged line keeps its
+/// worker's), and its replay position as the tie-break. Compare keys with `Ord`; the position
+/// alone is no clock, because a merge appends a slice's lines after main lines that may be newer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RecordOrder {
+    /// The `ts` of the record's line.
+    pub ts: DateTime<Utc>,
+    /// Records committed up to and including this one (the tie-break when `ts` is equal).
+    pub at: u64,
 }
 
 impl Index {
@@ -227,6 +257,13 @@ impl Index {
             labels: BTreeMap::new(),
             explanations: BTreeMap::new(),
             reseals: Vec::new(),
+            clock: 0,
+            latest_ts: None,
+            evidence_order: BTreeMap::new(),
+            finding_order: BTreeMap::new(),
+            open_item_ts: BTreeMap::new(),
+            confirmed_order: BTreeMap::new(),
+            answer_log: Vec::new(),
         }
     }
 }
@@ -321,7 +358,13 @@ impl EvidenceLookup for Index {
         self.evidence.get(id)
     }
     fn evidence_ids(&self) -> Vec<EvidenceId> {
-        self.evidence.keys().cloned().collect()
+        let mut ids: Vec<(Option<RecordOrder>, &EvidenceId)> = self
+            .evidence
+            .keys()
+            .map(|id| (self.evidence_order.get(id).copied(), id))
+            .collect();
+        ids.sort_by_key(|(at, _)| *at);
+        ids.into_iter().map(|(_, id)| id.clone()).collect()
     }
 }
 
@@ -1270,6 +1313,49 @@ impl Index {
                 ),
             ));
         }
+        let release = f
+            .hypothesis
+            .as_deref()
+            .and_then(nonleak_id)
+            .is_some_and(|n| n == "N-RELEASE");
+        if release || f.remover.is_some() {
+            let fix = format!(
+                "dla ledger add --sibling-of {} --origin hypothesis --hypothesis N-RELEASE --remover <file:line> --refute-if \"<result>\" --evidence <id>",
+                f.root_id()
+            );
+            if f.remover.is_some() && !release {
+                return Err(Refusal::new(
+                    codes::INVALID_VALUE,
+                    format!(
+                        "{id} names a remover but its hypothesis is not N-RELEASE: a remover is the release line an N-RELEASE sibling names"
+                    ),
+                    "--remover only with --hypothesis N-RELEASE",
+                    fix,
+                ));
+            }
+            match f.remover.as_deref() {
+                None => {
+                    return Err(Refusal::new(
+                        codes::INVALID_VALUE,
+                        format!(
+                            "{id} is an N-RELEASE sibling without a remover: the hypothesis names the line that releases the holder (the stop, close, dispose, unsubscribe or cancel the API requires), so that a run can show that line ran"
+                        ),
+                        "--remover <file:line>, the line that releases the holder",
+                        fix,
+                    ));
+                }
+                Some(r) => {
+                    if let Err(why) = check_site(r) {
+                        return Err(Refusal::new(
+                            codes::INVALID_VALUE,
+                            format!("remover of {id}: {why}"),
+                            "--remover <file:line>, the line that releases the holder",
+                            fix,
+                        ));
+                    }
+                }
+            }
+        }
         if !f.siblings.is_empty() {
             return Err(Refusal::new(
                 codes::SIBLINGS_MANAGED,
@@ -1541,12 +1627,17 @@ impl Index {
     }
 
     /// Applies a record that [`Index::check`] accepted. Cannot fail.
-    fn commit(&mut self, record: &Record, version: u32) {
+    fn commit(&mut self, record: &Record, version: u32, ts: DateTime<Utc>) {
+        self.clock += 1;
+        self.latest_ts = Some(self.latest_ts.map_or(ts, |t| t.max(ts)));
+        let at = RecordOrder { ts, at: self.clock };
         match record {
             Record::Evidence(e) => {
                 self.evidence.insert(e.evidence_id.clone(), e.clone());
+                self.evidence_order.insert(e.evidence_id.clone(), at);
             }
             Record::FindingAdded { finding } => {
+                self.finding_order.insert(finding.id.clone(), at);
                 if let Some(parent) = finding.id.parent()
                     && let Some(p) = self.findings.get_mut(&parent)
                 {
@@ -1555,6 +1646,9 @@ impl Index {
                 self.findings.insert(finding.id.clone(), finding.clone());
             }
             Record::Transition(t) => {
+                if t.to == FindingState::Confirmed {
+                    self.confirmed_order.insert(t.finding.clone(), at);
+                }
                 if let Some(f) = self.findings.get_mut(&t.finding) {
                     f.state = t.to;
                     f.reason = None;
@@ -1579,6 +1673,7 @@ impl Index {
                 }
             }
             Record::OpenItem(o) => {
+                self.open_item_ts.insert(o.id.clone(), ts);
                 self.open_items.insert(
                     o.id.clone(),
                     OpenItemState {
@@ -1594,6 +1689,7 @@ impl Index {
             }
             Record::ChecklistAnswer(a) => {
                 self.answers.insert(a.item.clone(), a.clone());
+                self.answer_log.push((at, a.clone()));
             }
             Record::FindingAnnotated(a) => {
                 if let Some(f) = self.findings.get_mut(&a.finding) {
@@ -1772,6 +1868,22 @@ impl Pending {
             version: LEDGER_SCHEMA_VERSION,
         }
     }
+}
+
+/// The `ts` of a line written now: to the millisecond, because [`RecordOrder`] is keyed on it and
+/// a core record written while a worker's slice is open lands in the same second as the worker's
+/// (whole seconds would leave the order of the two to the position of the merged line).
+fn line_ts() -> DateTime<Utc> {
+    let now = Utc::now();
+    DateTime::from_timestamp_millis(now.timestamp_millis()).unwrap_or(now)
+}
+
+/// The `ts` of a fresh line: the clock `now`, but never below `floor` (the newest `ts` the
+/// ledger holds, or the line before in the same batch). A wall clock that steps backward (a time
+/// sync, a resumed VM) would otherwise sort a later record of one writer before an earlier one,
+/// because [`RecordOrder`] is keyed on `ts` first.
+fn floored_ts(now: DateTime<Utc>, floor: Option<DateTime<Utc>>) -> DateTime<Utc> {
+    floor.map_or(now, |f| now.max(f))
 }
 
 fn replay_err(path: Option<&Path>, line: u64, malformed: bool, refusal: Refusal) -> Error {
@@ -2063,7 +2175,8 @@ impl Ledger {
                     }
                     replay_err(p, n, false, r)
                 })?;
-            self.index.commit(&line.record, line.schema_version);
+            self.index
+                .commit(&line.record, line.schema_version, line.ts);
             self.lines.push(line);
         }
         Ok(())
@@ -2156,9 +2269,49 @@ impl Ledger {
     pub fn reseals(&self) -> &[IntegrityResealed] {
         &self.index.reseals
     }
-    /// All evidence, ordered by ID.
+    /// All evidence, ordered by ID. The ID is no clock: after a merge `W/E1` sorts after every
+    /// plain `E<n>` whatever was recorded first. Where "newer" or "older" matters use
+    /// [`Ledger::evidence_in_order`].
     pub fn evidence(&self) -> impl Iterator<Item = &EvidenceRecord> {
         self.index.evidence.values()
+    }
+    /// All evidence, oldest first: by [`Ledger::evidence_order`].
+    pub fn evidence_in_order(&self) -> impl Iterator<Item = &EvidenceRecord> {
+        let mut rows: Vec<(Option<RecordOrder>, &EvidenceRecord)> = self
+            .index
+            .evidence
+            .iter()
+            .map(|(id, e)| (self.index.evidence_order.get(id).copied(), e))
+            .collect();
+        rows.sort_by_key(|(at, _)| *at);
+        rows.into_iter().map(|(_, e)| e)
+    }
+    /// The chronological key of evidence `id`: the `ts` of the line it was written at, with the
+    /// replay position as the tie-break (see [`RecordOrder`]). Valid in a plain ledger, in a
+    /// merged one (a merged line keeps its worker's `ts`, so a main record written while the
+    /// slice was open sorts by when it was written, not after the merge appended the slice) and in
+    /// a worker's view (the main lines up to the slice's `base_seq` come first in replay, and the
+    /// slice's own lines are later by `ts`; the position keeps that order when `ts` ties).
+    pub fn evidence_order(&self, id: &EvidenceId) -> Option<RecordOrder> {
+        self.index.evidence_order.get(id).copied()
+    }
+    /// The chronological key of finding `id` (the line that added it), as
+    /// [`Ledger::evidence_order`].
+    pub fn finding_order(&self, id: &FindingId) -> Option<RecordOrder> {
+        self.index.finding_order.get(id).copied()
+    }
+    /// The chronological key of the latest transition of `id` to `confirmed`, as
+    /// [`Ledger::evidence_order`]; `None` when it never was.
+    pub fn confirmed_order(&self, id: &FindingId) -> Option<RecordOrder> {
+        self.index.confirmed_order.get(id).copied()
+    }
+    /// Every checklist answer ever recorded (the latest per item is [`Ledger::answers`]), oldest
+    /// first by its key (see [`RecordOrder`]).
+    pub fn answers_in_order(&self) -> Vec<(RecordOrder, &ChecklistAnswer)> {
+        let mut rows: Vec<(RecordOrder, &ChecklistAnswer)> =
+            self.index.answer_log.iter().map(|(k, a)| (*k, a)).collect();
+        rows.sort_by_key(|(k, _)| *k);
+        rows
     }
     /// One evidence record.
     pub fn evidence_by_id(&self, id: &EvidenceId) -> Option<&EvidenceRecord> {
@@ -2407,18 +2560,21 @@ impl Ledger {
         let mut trial = (pending.len() > 1).then(|| self.index.clone());
         let first_seq = self.next_seq();
         let mut new_lines = Vec::with_capacity(pending.len());
+        // Each fresh line is at least the newest line before it, in the ledger or this batch.
+        let mut floor = self.index.latest_ts;
         for (seq, p) in (first_seq..).zip(pending) {
             let idx = trial.as_ref().unwrap_or(&self.index);
             idx.check(&p.record, p.version)?;
             let line = LedgerLine {
                 schema_version: p.version,
                 seq,
-                ts: p.ts.unwrap_or_else(now_utc),
+                ts: p.ts.unwrap_or_else(|| floored_ts(line_ts(), floor)),
                 worker: p.worker,
                 record: p.record,
             };
+            floor = Some(floor.map_or(line.ts, |f| f.max(line.ts)));
             if let Some(t) = trial.as_mut() {
-                t.commit(&line.record, line.schema_version);
+                t.commit(&line.record, line.schema_version, line.ts);
             }
             new_lines.push(line);
         }
@@ -2485,7 +2641,7 @@ impl Ledger {
             Some(t) => self.index = t,
             None => {
                 for l in &new_lines {
-                    self.index.commit(&l.record, l.schema_version);
+                    self.index.commit(&l.record, l.schema_version, l.ts);
                 }
             }
         }
@@ -2505,7 +2661,9 @@ impl Ledger {
             let mut trial = self.index.clone();
             for p in &batch {
                 trial.check(&p.record, p.version)?;
-                trial.commit(&p.record, p.version);
+                let ts =
+                    p.ts.unwrap_or_else(|| floored_ts(line_ts(), trial.latest_ts));
+                trial.commit(&p.record, p.version, ts);
             }
             self.mark_running()?;
         }
@@ -2599,6 +2757,7 @@ impl Ledger {
         f.site = new.site;
         f.amplifiers = new.amplifiers;
         f.repair_class = new.repair_class;
+        f.remover = new.remover;
         f.explanation = new.explanation;
         self.append(Record::FindingAdded { finding: f })
     }
@@ -2694,22 +2853,18 @@ impl Ledger {
     }
 
     /// When the line that raised finding `id` was written; `None` when it is not in this
-    /// ledger's lines.
+    /// ledger. Read from the index, so a worker's view (whose own lines are only its slice)
+    /// gives a main-ledger finding's `ts` too.
     pub fn finding_added_at(&self, id: &FindingId) -> Option<DateTime<Utc>> {
         let id = self.own_finding_id(id);
-        self.lines.iter().find_map(|l| match &l.record {
-            Record::FindingAdded { finding } if finding.id == id => Some(l.ts),
-            _ => None,
-        })
+        self.finding_order(&id).map(|k| k.ts)
     }
 
-    /// When the line that raised open item `id` was written.
+    /// When the line that raised open item `id` was written. Read from the index, so a worker's
+    /// view gives a main-ledger item's `ts` too.
     pub fn open_item_added_at(&self, id: &OpenItemId) -> Option<DateTime<Utc>> {
         let id = self.own_open_item_id(id);
-        self.lines.iter().find_map(|l| match &l.record {
-            Record::OpenItem(o) if o.id == id => Some(l.ts),
-            _ => None,
-        })
+        self.index.open_item_ts.get(&id).copied()
     }
 
     /// Raises an open item, allocating `O<n>`.
@@ -3256,5 +3411,25 @@ impl Ledger {
     pub fn confirm_warning(&self, id: &FindingId) -> Option<String> {
         let f = self.index.findings.get(id)?;
         machine::confirm_warning(f, &self.index)
+    }
+}
+
+#[cfg(test)]
+mod floor_tests {
+    use super::floored_ts;
+    use chrono::{DateTime, TimeDelta, Utc};
+
+    fn at(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().to_utc()
+    }
+
+    #[test]
+    fn a_clock_behind_the_floor_gives_the_floor_and_otherwise_the_clock() {
+        let now = at("2030-01-01T12:00:00.500Z");
+        let hour = TimeDelta::hours(1);
+        assert_eq!(floored_ts(now, Some(now + hour)), now + hour);
+        assert_eq!(floored_ts(now, Some(now)), now);
+        assert_eq!(floored_ts(now, Some(now - hour)), now);
+        assert_eq!(floored_ts(now, None), now);
     }
 }
