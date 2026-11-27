@@ -344,13 +344,19 @@ fn tracemalloc_stacks_grow_and_show_their_first_project_frame() {
             .any(|c| c == "stack:ingest.watchers"),
         "{v}"
     );
-    // No census finding sits at that line, so nothing is tied and the output says why.
-    assert_eq!(v["tied"], json!([]), "{v}");
+    // No census finding sits at that line (watchers.py:8), so that stack ties to nothing. The one
+    // finding that ties is the listener table's, through its own stack (`ingest.registry`: two
+    // blocks whose bytes rise at every capture, which passes since the constant-count change;
+    // before it nothing was tied and `needed` said "first project frame" for the watchers line).
+    let registry = p.finding_with_owner("ingest.registry._LISTENERS", "ingest/registry.py:3");
+    let rid = registry["id"].as_str().unwrap();
+    assert_eq!(v["tied"], json!([rid]), "{v}");
     assert!(
         v["needed"]
             .as_str()
             .unwrap()
-            .contains("first project frame")
+            .contains(&format!("dla ledger confirm {rid}")),
+        "{v}"
     );
 }
 
@@ -439,7 +445,11 @@ fn a_root_level_file_is_a_project_site() {
     let files = with_first_stack(&p, json!([["gateway.py", 24], ["gateway.py", 40]]));
     let v = summarize(&p, "alloc-stack-diff", "py-tracemalloc", &files, &[]);
     assert_eq!(v["top"][0]["site"], "gateway.py:24", "{v}");
-    assert_eq!(v["tied"], json!([id]), "{v}");
+    // The fixture's listener table (`ingest.registry`, two blocks whose bytes rise at every
+    // capture) passes as one block that grows and ties to its own finding as well.
+    let tied = v["tied"].as_array().unwrap();
+    assert!(tied.contains(&json!(id)), "{v}");
+    assert_eq!(tied.len(), 2, "{v}");
 }
 
 #[test]

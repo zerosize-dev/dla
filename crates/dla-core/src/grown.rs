@@ -15,7 +15,7 @@
 //!
 //! Whole-process columns tie to no finding and stay with the residual rows.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     evidence::{Authority, EvidenceKind, EvidenceRecord},
@@ -1203,6 +1203,57 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
     out
 }
 
+/// True when growth record `e` is the one of a series that `dla summarize` wrote from capture
+/// files (its series file has no harness and names the summarize command), as against a trend
+/// of a harness series.
+fn is_summary_series(view: &RunView, e: &EvidenceRecord) -> bool {
+    let (Some(dir), Some(series)) = (
+        view.run_dir.as_deref(),
+        e.result.get("series").and_then(|s| s.as_str()),
+    ) else {
+        return false;
+    };
+    crate::series::SeriesFile::load(dir, series).is_ok_and(|s| {
+        s.source.harness.is_none()
+            && s.source
+                .command
+                .as_deref()
+                .is_some_and(|c| c.starts_with("dla summarize "))
+    })
+}
+
+/// The harness whose capture files the summary that wrote the growth record `records[at]` read,
+/// when it is one hook driver made for `root` (`Target` or `EntryPath` of [`harness_about`], as
+/// [`route_to_confirm`] reads it): the raw file of the summary's own record (the record of the
+/// same tool right before the growth record) lists its inputs, which lie under `harness/<H>/`.
+/// A capture of a test loop, of the project's own workload or of a driver made for other findings
+/// is not a lead of the finding.
+fn summary_harness(
+    view: &RunView,
+    records: &[&EvidenceRecord],
+    at: usize,
+    root: &FindingId,
+) -> Option<String> {
+    let dir = view.run_dir.as_deref()?;
+    let growth = records[at];
+    let own = records[..at]
+        .iter()
+        .rev()
+        .take(4)
+        .find(|r| r.tool.name == growth.tool.name && !is_growth_record(r) && r.raw.is_some())?;
+    let harnesses = crate::measured_holders::capture_harnesses(Some(dir), own);
+    let [h] = harnesses.iter().collect::<Vec<_>>()[..] else {
+        return None;
+    };
+    let m = crate::harness::HarnessManifest::load(dir, h).ok()?;
+    (m.is_hook_driver()
+        && matches!(
+            harness_about(view, &m, root)?,
+            HarnessAbout::Target | HarnessAbout::EntryPath
+        ))
+    .then(|| h.clone())
+}
+
 /// The harness a dump growth record `records[at]` was measured from: the capture files of the
 /// summarize call that wrote it. The call writes one `retention-path` record per dump right
 /// before the growth record, each with the dump file as its artifact source, so the harness is
@@ -1248,7 +1299,11 @@ fn dump_harness(records: &[&EvidenceRecord], at: usize) -> Option<String> {
 /// * What counts: a `growth-series` or `unit-count-series` record of authority `dump` whose
 ///   gate passed ([`crate::machine::is_passing_growth`]) with a passed column that names a
 ///   finding (`finding`, else the first of `candidates` that exists), and a `discriminator` of
-///   authority `dump` that favors leak and names a finding. The finding must be a leak-side root
+///   authority `dump` that favors leak and names a finding. So does the growth record of a
+///   summary of capture files read from the running process (authority `live`: a series that
+///   `dla summarize` wrote, whose capture files lie under one harness that is a hook driver made
+///   for the finding, [`summary_harness`]) with a passed column tied to the finding: the Rust
+///   allocator shim's `stack:` columns, an allocation-stack summary of Go or Python. The finding must be a leak-side root
 ///   (a column or discriminator naming a non-leak sibling counts for nothing), open or closed
 ///   `unresolved` or `suspected_static_only`, not merged, and not already listed through a trend
 ///   column.
@@ -1273,8 +1328,13 @@ fn dump_grown(view: &RunView, out: &mut Vec<Grown>) {
     };
     // (record index, root, column, series, is a discriminator)
     let mut hits: Vec<(usize, FindingId, String, Option<String>, bool)> = Vec::new();
+    // The harness whose capture files a live summary's growth record was read from, by record.
+    let mut live_harness: BTreeMap<usize, String> = BTreeMap::new();
     for (at, e) in records.iter().enumerate() {
-        if e.authority != Authority::Dump {
+        let live = e.authority == Authority::Live
+            && e.kind == EvidenceKind::GrowthSeries
+            && is_summary_series(view, e);
+        if e.authority != Authority::Dump && !live {
             continue;
         }
         let series = series_of(e);
@@ -1324,7 +1384,15 @@ fn dump_grown(view: &RunView, out: &mut Vec<Grown>) {
             if ff.polarity() != Polarity::Leak || f.is_sibling() {
                 continue;
             }
-            hits.push((at, ff.root_id(), column, series.clone(), is_disc));
+            let root = ff.root_id();
+            if live {
+                // Only a capture of a driver made for the finding is a lead of it.
+                let Some(h) = summary_harness(view, &records, at, &root) else {
+                    continue;
+                };
+                live_harness.insert(at, h);
+            }
+            hits.push((at, root, column, series.clone(), is_disc));
         }
     }
     // The harness a dump series was captured from: the first growth record of the series
@@ -1424,6 +1492,7 @@ fn dump_grown(view: &RunView, out: &mut Vec<Grown>) {
             .as_deref()
             .and_then(&series_harness)
             .or_else(|| growth_at.and_then(|g| dump_harness(&records, g)))
+            .or_else(|| growth_at.and_then(|g| live_harness.get(&g).cloned()))
             .unwrap_or_default();
         // A leak confirmed outside this family on growth over the dumps of the same capture (a
         // record of the same series, or of a series whose capture is of the same harness)
@@ -3163,6 +3232,163 @@ mod tests {
             "t",
         )
         .unwrap();
+    }
+
+    /// A run directory with the summary of capture files of harness H1 that `dla summarize
+    /// alloc-stack-diff` leaves: its series file (no harness, the summarize command), the raw file
+    /// of the allocation-stack record listing three captures under `harness/H1/`, and the two
+    /// records (authority `live`, the Rust shim's tool): the stacks and the growth whose passed
+    /// column `stack:push (a.py:6)` is tied to `finding`.
+    fn live_summary(
+        l: &mut Ledger,
+        dir: &std::path::Path,
+        finding: &str,
+    ) -> (EvidenceId, EvidenceId) {
+        let mut series = crate::series::SeriesFile {
+            schema_version: 1,
+            id: "S9".into(),
+            source: crate::series::SeriesSource::new(crate::series::SeriesSourceKind::Dump),
+            axis: crate::series::Axis::Iteration,
+            warmup: 0,
+            columns: vec![],
+            points: vec![],
+            events: vec![],
+            limitations: vec![],
+        };
+        series.source.command = Some("dla summarize alloc-stack-diff".into());
+        series.save(dir).unwrap();
+        std::fs::create_dir_all(dir.join("histograms")).unwrap();
+        std::fs::write(
+            dir.join("histograms/H1.json"),
+            serde_json::json!({"captures": (1..=3).map(|k| serde_json::json!({
+                "label": format!(".dla/R1/harness/H1/out/p{k}-alloc/shim-dump.jsonl"),
+                "x": 1000 * k, "sha256": "0"
+            })).collect::<Vec<_>>()})
+            .to_string(),
+        )
+        .unwrap();
+        let mut ev = |kind, source, raw: Option<&str>, result| {
+            l.add_evidence(NewEvidence {
+                source,
+                tool: Tool {
+                    name: "shim-stack-groups".into(),
+                    version: "1".into(),
+                },
+                authority: Authority::Live,
+                kind,
+                result,
+                raw: raw.map(str::to_owned),
+                coverage: EvidenceCoverage::default(),
+                limitations: vec![],
+                unknowns: vec![],
+            })
+            .unwrap();
+            l.evidence().last().unwrap().evidence_id.clone()
+        };
+        let stacks = ev(
+            EvidenceKind::AllocStack,
+            Source::Artifact {
+                path: "histograms/H1.json".into(),
+                sha256: "0".repeat(64),
+            },
+            Some("histograms/H1.json"),
+            serde_json::json!({"captures": 3, "monotone": 1}),
+        );
+        let growth = ev(
+            EvidenceKind::GrowthSeries,
+            Source::Artifact {
+                path: "series/S9.json".into(),
+                sha256: "0".repeat(64),
+            },
+            Some("series/S9.json"),
+            serde_json::json!({"series": "S9", "axis": "iteration", "n": 3, "gate": "pass",
+                "passed": [{"column": "stack:push (a.py:6)", "shape": "stair", "resized": true, "finding": finding}]}),
+        );
+        (stacks, growth)
+    }
+
+    fn live_summary_view(
+        manifests: &[(&str, serde_json::Value)],
+        finding: &str,
+    ) -> (tempfile::TempDir, RunView, EvidenceId) {
+        let (_d, mut l) = scene();
+        let dir = tempfile::tempdir().unwrap();
+        for (id, extra) in manifests {
+            manifest(id, extra.clone()).save(dir.path()).unwrap();
+        }
+        let (_, growth) = live_summary(&mut l, dir.path(), finding);
+        let mut view = no_trend_view(l);
+        view.run_dir = Some(dir.path().to_path_buf());
+        (dir, view, growth)
+    }
+
+    #[test]
+    fn a_tied_passing_summary_of_a_capture_of_a_driver_made_for_the_finding_is_a_lead() {
+        let (_r, view, growth) = live_summary_view(
+            &[(
+                "H1",
+                serde_json::json!({"runtime": "rust", "targets": ["F1"]}),
+            )],
+            "F1",
+        );
+        let g = grown_f1(&view).expect("the summary is a lead of F1");
+        assert_eq!((g.harness.as_str(), g.series.as_str()), ("H1", "S9"));
+        assert_eq!(g.column, "stack:push (a.py:6)");
+        assert_eq!(g.growth.as_deref(), Some(growth.to_string().as_str()));
+        let cmds = g.commands();
+        assert!(
+            cmds.iter()
+                .any(|c| c.starts_with("dla alloc-test H1 --finding F1")),
+            "{cmds:?}"
+        );
+        // It is a dump-kind lead (the gate lists an open finding with these commands, and
+        // refuses to close it while the lead stands); closed unresolved it is a growth item.
+        assert!(g.dump.is_some(), "{g:?}");
+        let (_d, mut l) = scene();
+        let dir = tempfile::tempdir().unwrap();
+        manifest(
+            "H1",
+            serde_json::json!({"runtime": "rust", "targets": ["F1"]}),
+        )
+        .save(dir.path())
+        .unwrap();
+        live_summary(&mut l, dir.path(), "F1");
+        close_f1(&mut l);
+        let mut closed = no_trend_view(l);
+        closed.run_dir = Some(dir.path().to_path_buf());
+        let grown = grown_unmeasured(&closed);
+        assert_eq!(items(&closed, &grown).len(), 1);
+        // An alloc-test of the driver that favors non-leak lifts it, as for a dump lead.
+        let (_d, mut l) = scene();
+        let dir = tempfile::tempdir().unwrap();
+        manifest(
+            "H1",
+            serde_json::json!({"runtime": "rust", "targets": ["F1"]}),
+        )
+        .save(dir.path())
+        .unwrap();
+        live_summary(&mut l, dir.path(), "F1");
+        alloc_test(&mut l, "non-leak", "H1");
+        let mut view = no_trend_view(l);
+        view.run_dir = Some(dir.path().to_path_buf());
+        assert_eq!(grown_f1(&view), None);
+    }
+
+    #[test]
+    fn a_summary_of_a_capture_of_a_harness_not_made_for_the_finding_is_no_lead() {
+        // The driver targets another finding, a test loop is about everything, a command-mode
+        // harness has no hooks: only a driver made for the finding makes its summary a lead.
+        for extra in [
+            serde_json::json!({"runtime": "rust", "targets": ["F2"]}),
+            serde_json::json!({"runtime": "jvm", "tools": [crate::harness::JUNIT_TOOL]}),
+            serde_json::json!({"runtime": "rust", "mode": "command", "targets": ["F1"]}),
+        ] {
+            let (_r, view, _) = live_summary_view(&[("H1", extra.clone())], "F1");
+            assert_eq!(grown_f1(&view), None, "{extra}");
+        }
+        // No harness manifest at all, and a growth record of a harness series (a trend's): no.
+        let (_r, view, _) = live_summary_view(&[], "F1");
+        assert_eq!(grown_f1(&view), None);
     }
 
     #[test]

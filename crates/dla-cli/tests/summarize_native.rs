@@ -727,6 +727,113 @@ mod shim {
         assert!(p.writers(&f).is_empty());
     }
 
+    /// The exit record of one point whose only project stack is one block (`blocks`, the same at
+    /// every point) of `bytes` live bytes: a buffer that is resized.
+    fn dump_block(prog: &Path, addr: u64, x: u64, bytes: u64, blocks: u64) -> String {
+        dump(prog, addr, x, bytes).replace(
+            &format!("\"live_blocks\":{}", bytes / 4096),
+            &format!("\"live_blocks\":{blocks}"),
+        )
+    }
+
+    /// Four points of one block (capacity `caps`) at the given x; returns the summarize answer.
+    fn resized_block(xs: [u64; 4], caps: [u64; 4]) -> (Project, Value, String) {
+        let p = Project::new();
+        let work = p.run_dir.join("harness/H1/work");
+        let Some(addr) = build(&work) else {
+            return (p, Value::Null, String::new());
+        };
+        p.put(
+            "src/leak.c",
+            &fs::read_to_string(work.join("src/leak.c")).unwrap(),
+        );
+        let f = p.finding("src.leak.leak_site", "src/leak.c:3");
+        let prog = work.join("prog");
+        let mut files = Vec::new();
+        for (k, (x, cap)) in xs.into_iter().zip(caps).enumerate() {
+            let rel = format!(
+                ".dla/{}/harness/H1/out/p{}-alloc/shim-dump.jsonl",
+                p.run_dir.file_name().unwrap().to_string_lossy(),
+                k + 1
+            );
+            let path = p.path().join(&rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, dump_block(&prog, addr, x, cap, 1)).unwrap();
+            files.push(rel);
+        }
+        let v = summarize(&p, "alloc-stack-diff", &files);
+        (p, v, f.to_string())
+    }
+
+    #[test]
+    fn one_block_whose_capacity_doubles_passes_and_ties_at_geometric_x_and_not_across_a_flat_pair()
+    {
+        if !(have("gcc") && have("nm") && have("addr2line")) {
+            return;
+        }
+        const MIB: u64 = 1 << 20;
+        // Points at step x 1, 2, 4, 8 (what a Rust harness takes): the capacity is 1, 2, 4, 8
+        // MiB in one block at every point. The count never moves; the bytes rise at every pair.
+        let (p, v, f) = resized_block([1000, 2000, 4000, 8000], [MIB, 2 * MIB, 4 * MIB, 8 * MIB]);
+        if v.is_null() {
+            return;
+        }
+        assert_eq!(v["gate"], "pass", "{v}");
+        assert_eq!(v["tied"], serde_json::json!([f]), "{v}");
+        let col = first_tie(&p, &v);
+        assert_eq!(col["tie"]["rule"], "site", "{col}");
+        assert_eq!(col["tie"]["key"], "src/leak.c:3", "{col}");
+        assert_eq!(col["resized"], true, "{col}");
+        // The same block at step x 1, 2, 3, 4: the capacity doubles on the way to the third
+        // point and holds at the fourth (1, 2, 4, 4 MiB), so a pair stands still. The spacing is
+        // why it does not pass: the points fell between two doublings.
+        let (_p, v, _) = resized_block([1000, 2000, 3000, 4000], [MIB, 2 * MIB, 4 * MIB, 4 * MIB]);
+        assert_eq!(v["gate"], "fail", "{v}");
+        assert_eq!(v["tied"], serde_json::json!([]), "{v}");
+        let needed = v["needed"].as_str().unwrap();
+        assert!(needed.contains("stood still between two dumps"), "{needed}");
+        assert!(
+            !needed.contains("capture a point with more work"),
+            "{needed}"
+        );
+    }
+
+    #[test]
+    fn captures_at_uneven_x_are_judged_by_their_rate_over_x() {
+        if !(have("gcc") && have("nm") && have("addr2line")) {
+            return;
+        }
+        let p = Project::new();
+        let work = p.run_dir.join("harness/H1/work");
+        let Some(addr) = build(&work) else { return };
+        p.put(
+            "src/leak.c",
+            &fs::read_to_string(work.join("src/leak.c")).unwrap(),
+        );
+        let f = p.finding("src.leak.leak_site", "src/leak.c:3");
+        let prog = work.join("prog");
+        let mut files = Vec::new();
+        // A leak of 4096 bytes per unit of work read at 8000, 12000, 14000 and 15000 units: the
+        // last step is a quarter of the first in bytes (the plain rule fails it), the same rate.
+        for (k, x) in [8000u64, 12000, 14000, 15000].into_iter().enumerate() {
+            let rel = format!(
+                ".dla/{}/harness/H1/out/p{}-alloc/shim-dump.jsonl",
+                p.run_dir.file_name().unwrap().to_string_lossy(),
+                k + 1
+            );
+            let path = p.path().join(&rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, dump(&prog, addr, x, x * 4096)).unwrap();
+            files.push(rel);
+        }
+        let v = summarize(&p, "alloc-stack-diff", &files);
+        assert_eq!(v["ordered_by"], "x", "{v}");
+        assert_eq!(v["gate"], "pass", "{v}");
+        // The count of monotone stacks reads the same positions as the growth series does.
+        assert_eq!(v["monotone"], 1, "{v}");
+        assert_eq!(v["tied"], serde_json::json!([f]), "{v}");
+    }
+
     #[test]
     fn the_shim_stacks_are_an_alloc_stack_input_tied_by_site_alone() {
         if !(have("gcc") && have("nm") && have("addr2line")) {

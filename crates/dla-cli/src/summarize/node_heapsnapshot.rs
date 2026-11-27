@@ -868,10 +868,12 @@ fn series_part(
     // ---- the dump-series rule
     let mut passed: Vec<(String, rule::Growth)> = Vec::new();
     let mut best_failure: Option<(String, Vec<String>, u64)> = None;
+    let mut stood_still = false;
     for key in &keys {
         match rule::gate(&observed(key)) {
             Ok(g) => passed.push((key.clone(), g)),
             Err(why) => {
+                stood_still |= rule::stood_still(&observed(key));
                 let size = latest(key).map_or(0, |v| v.retained);
                 if best_failure.as_ref().is_none_or(|b| size > b.2) && n >= rule::MIN_DUMPS {
                     best_failure = Some((key.clone(), why, size));
@@ -1070,7 +1072,7 @@ fn series_part(
     if n < rule::MIN_DUMPS {
         reasons.push(format!("snapshots < {}", rule::MIN_DUMPS));
     } else if !gate_pass {
-        reasons.push("no holder grows strictly in bytes and count across all snapshots".into());
+        reasons.push("no holder grows strictly in bytes (and in count, unless its count is one constant number of blocks) across all snapshots".into());
         if !internal_growing.is_empty() {
             reasons.push(format!(
                 "the only holders that grow strictly are inside Node's own modules ({}): the growth is in the runtime, not in a variable of the project",
@@ -1116,6 +1118,10 @@ fn series_part(
                 "shape": rule::shape(g),
                 "last_over_first": (g.last_over_first * 100.0).round() / 100.0,
             });
+            // One block (or a fixed set of blocks) whose bytes grew: a buffer that is resized.
+            if g.resized {
+                v["resized"] = json!(true);
+            }
             // The holder kind observed for the column: the ledger reads it to accept a
             // corrected holder.
             if let Some(l) = latest(key) {
@@ -1165,7 +1171,7 @@ fn series_part(
     spec.coverage = complete(n as u64);
     spec.limitations = vec![
         format!(
-            "dump-series rule: at least {} snapshots, retained bytes and dominated count strictly increasing across every pair, last interval at least {:.0}% of the first (provisional, not calibrated)",
+            "dump-series rule: at least {} snapshots, retained bytes strictly increasing across every pair and dominated count too (or one constant number of blocks, a buffer that is resized), last interval at least {:.0}% of the first (provisional, not calibrated)",
             rule::MIN_DUMPS,
             rule::LAST_OVER_FIRST * 100.0
         ),
@@ -1298,6 +1304,8 @@ fn series_part(
         needed(n)
     } else if !gate_pass && !internal_growing.is_empty() {
         "the growth is held inside Node's own modules (see reasons): name the registration or API of the project that feeds it (a heap-graph holder column needs a variable of the project that keeps it), or measure it with a probe or an allocation-stack capture".to_owned()
+    } else if !gate_pass && stood_still {
+        rule::STOOD_STILL_NEEDED.to_owned()
     } else if !gate_pass {
         "growth over every interval: take another snapshot after more traffic, rerun with all snapshots".to_owned()
     } else if let Some(f) = tied_ids.first() {

@@ -522,12 +522,14 @@ fn run_diff_axis(
     let xaxis = if alloc_axis && n >= 2 && axis_fallback.is_none() {
         growth::XAxis {
             allocated: Some(alloc_totals(&captures).iter().map(|&t| t as f64).collect()),
+            work: None,
             fallback: None,
             note: axis_note,
         }
     } else {
         growth::XAxis {
             allocated: None,
+            work: None,
             fallback: axis_fallback,
             note: None,
         }

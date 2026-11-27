@@ -142,7 +142,7 @@ fn lines_of(entry: &Value) -> Vec<String> {
 /// The harnesses whose capture files an allocation-stack summary was computed from: the
 /// `captures[].label` of its raw file is the project-relative path of each input, so a file the
 /// harness wrote lies under `harness/<H>/`.
-fn capture_harnesses(run_dir: Option<&Path>, rec: &EvidenceRecord) -> BTreeSet<String> {
+pub(crate) fn capture_harnesses(run_dir: Option<&Path>, rec: &EvidenceRecord) -> BTreeSet<String> {
     run_dir
         .zip(rec.raw.as_deref())
         .and_then(|(dir, raw)| fs::read_to_string(dir.join(raw)).ok())

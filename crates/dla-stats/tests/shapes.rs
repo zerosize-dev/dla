@@ -458,17 +458,21 @@ fn a_staircase_whose_last_reading_falls_back_to_its_first_is_a_spike_not_a_stair
 
 #[test]
 fn a_ramp_with_one_skipped_sample_is_still_a_ramp() {
-    // x = 0,1,2,3,5,6,7: a rise at every point, a gap in x between two of them, then flat. Steps
-    // are separate when a point that is not a rise lies between them, counted in points.
-    let pts: Vec<(f64, f64)> = [0.0, 1.0, 2.0, 3.0, 5.0, 6.0, 7.0]
-        .into_iter()
-        .zip([0.0, 100.0, 200.0, 300.0, 400.0, 400.0, 400.0])
-        .collect();
-    let a = gate_of(&pts);
-    assert_eq!(
-        (a.shape, a.gate),
-        (TrendShape::Plateau, GateVerdict::Fail),
-        "{a:?}"
-    );
-    assert!(a.gate_note.is_none(), "{a:?}");
+    // x = 0,1,2,3,5,6,7,...: a rise at every point, a gap in x between two of them, then flat.
+    // Steps are separate when a point that is not a rise lies between them, counted in points.
+    let xs = [0.0, 1.0, 2.0, 3.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+    let ys = [
+        0.0, 100.0, 200.0, 300.0, 400.0, 400.0, 400.0, 400.0, 400.0, 400.0,
+    ];
+    for n in [7, 10] {
+        let pts: Vec<(f64, f64)> = xs[..n]
+            .iter()
+            .copied()
+            .zip(ys[..n].iter().copied())
+            .collect();
+        let a = gate_of(&pts);
+        assert_eq!(a.shape, TrendShape::Plateau, "{n}: {a:?}");
+        assert_eq!(a.gate, GateVerdict::Fail, "{n}: {a:?}");
+        assert!(a.gate_note.is_none(), "{n}: {a:?}");
+    }
 }

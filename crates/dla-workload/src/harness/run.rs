@@ -2509,14 +2509,36 @@ fn go_cover_point(
     Ok(())
 }
 
-/// Process counts of the allocation-stack points of a Rust driver: units `step * k`.
+/// Process counts of the allocation-stack points of a Rust driver.
 const ALLOC_POINTS: u32 = 4;
+
+/// The rounds of the allocation-stack point `k` (1-based) of a Rust driver: `1, 2, 4, 8`, so its
+/// units are `step` times that. A container that grows its capacity by a factor of at most two
+/// reallocates between any two points whose units differ by a factor of two or more, so its
+/// bytes rise from one point to the next (with evenly spaced points `1, 2, 3, 4`, a capacity
+/// that doubles is equal at two of them). The cost is `1 + 2 + 4 + 8 = 15` rounds against
+/// `1 + 2 + 3 + 4 = 10`; each point is still its own process under the harness's timeout.
+fn alloc_point_rounds(k: u32) -> u32 {
+    1 << (k - 1)
+}
+
+/// The `(rounds, units)` of each allocation-stack point of a Rust driver; the units are the `x`
+/// the shim records (`DLA_ITER`) for the point.
+fn alloc_points(step: u64) -> Vec<(u32, u64)> {
+    (1..=ALLOC_POINTS)
+        .map(|k| {
+            let rounds = alloc_point_rounds(k);
+            (rounds, step.saturating_mul(u64::from(rounds)))
+        })
+        .collect()
+}
 
 /// `--capture alloc` for a Rust driver. The driver counts allocations itself and the shim
 /// writes at process exit, so the stacks come from separate short processes (like the Go and
 /// Rust coverage points, the measured points stay as they are): the same binary
 /// (`line-tables-only` debug info) with the allocator shim preloaded and narrowed to it, run
-/// for `k = 1..=4` rounds of `step` units without a warm-up, key mode `fresh`. Each process
+/// for 1, 2, 4 and 8 rounds of `step` units without a warm-up (see [`alloc_point_rounds`]; the
+/// units are the `x` the shim writes into its record), key mode `fresh`. Each process
 /// leaves `out/p<k>-alloc/dump.jsonl` (the driver's records and the shim's exit record) and the
 /// shim's record is split out into `shim-dump.jsonl` next to it, which
 /// `dla summarize alloc-stack-diff` reads. Problems are limitations, never refusals.
@@ -2576,16 +2598,16 @@ fn rust_alloc_points(
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let mode = KeyMode::Fresh;
     let mut written = 0;
-    for k in 1..=ALLOC_POINTS {
+    for (k, (rounds, units)) in (1..).zip(alloc_points(manifest.step)) {
         let label = format!("p{k}-alloc");
         let pe = PointEnv {
             manifest,
             paths,
             label: label.clone(),
             mode,
-            n: manifest.step,
+            n: units,
             purge: None,
-            rounds: k,
+            rounds,
             capture: None,
             dumps: 0,
         };
@@ -4348,6 +4370,21 @@ mod test_hooks {
 mod tests {
     use crate::harness::{build::PointInput, dumps::parse_record};
     use dla_core::harness::LINE_COUNTS_UNAVAILABLE;
+
+    #[test]
+    fn the_allocation_stack_points_of_a_rust_driver_are_geometric() {
+        // A container that doubles its capacity reallocates between two points whose units
+        // differ by a factor of two or more: with step 2^20 and evenly spaced points its
+        // capacities would be 2^20, 2^21, 2^22, 2^22 (equal at the last two).
+        let pts = super::alloc_points(1 << 20);
+        assert_eq!(pts.len(), super::ALLOC_POINTS as usize);
+        let units: Vec<u64> = pts.iter().map(|p| p.1).collect();
+        assert_eq!(units, [1 << 20, 1 << 21, 1 << 22, 1 << 23]);
+        assert!(units.windows(2).all(|w| w[1] >= 2 * w[0]), "{units:?}");
+        // The rounds a process runs are the units over the step; x is recorded as the units.
+        assert!(pts.iter().all(|&(r, u)| u == (1 << 20) * u64::from(r)));
+        assert_eq!(super::alloc_points(0).iter().map(|p| p.1).sum::<u64>(), 0);
+    }
 
     fn point(mut rec: serde_json::Value) -> PointInput {
         rec["dla_harness"] = 1.into();

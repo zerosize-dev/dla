@@ -705,13 +705,21 @@ fn run_diff(
             .cmp(&delta(&a.bytes))
             .then_with(|| a.key.cmp(&b.key))
     });
+    // The captures' own x (units of work), when every capture has one and they increase: the
+    // last-over-first test is then between rates, as for any unevenly spaced captures. A run's
+    // points that are not spread evenly (a Rust harness takes its allocation stacks at 1, 2, 4
+    // and 8 times its step) would otherwise bias it.
+    let xs: Option<Vec<f64>> = captures
+        .iter()
+        .map(|c| c.x)
+        .collect::<Option<Vec<f64>>>()
+        .filter(|x| x.windows(2).all(|w| w[1] > w[0]));
+    let observed_of = |r: &Row| Observed {
+        bytes: r.bytes.clone(),
+        counts: r.blocks.clone(),
+    };
     let monotone = |r: &Row| -> bool {
-        n >= rule::MIN_DUMPS
-            && rule::gate(&Observed {
-                bytes: r.bytes.clone(),
-                counts: r.blocks.clone(),
-            })
-            .is_ok()
+        n >= rule::MIN_DUMPS && rule::gate_at(&observed_of(r), xs.as_deref()).is_ok()
     };
     let mono: Vec<&Row> = ranked.iter().copied().filter(|r| monotone(r)).collect();
 
@@ -974,7 +982,7 @@ fn run_diff(
         .filter(|(t, r)| !t.ambiguous.is_empty() && monotone(r))
         .map(|(t, _)| (t.name.clone(), t.ambiguous.clone()))
         .collect();
-    let g = growth::write(
+    let g = growth::write_at(
         ctx,
         ledger,
         growth::Plan {
@@ -994,6 +1002,10 @@ fn run_diff(
             limitations: spec_limits(&limits),
             what: "capture",
             focus: opts.finding.clone(),
+        },
+        &growth::XAxis {
+            work: xs.clone(),
+            ..growth::XAxis::default()
         },
     )?;
     let tied_ids = growth::tied_ids(&g, opts.finding.as_ref());
@@ -1017,7 +1029,12 @@ fn run_diff(
     if let Some(a) = growth::ambiguous_json(&ambiguous) {
         body.insert("ambiguous".into(), a);
     }
-    let needed = if !g.pass {
+    let needed = if !g.pass && ranked.iter().any(|r| rule::stood_still(&observed_of(r))) {
+        format!(
+            "no stack's live bytes grow at every step; a stack of a constant block count grew overall: {} (rerun the harness capture, which spaces its points that way, and `dla summarize` with all dump files)",
+            rule::STOOD_STILL_NEEDED
+        )
+    } else if !g.pass {
         "no stack's live bytes grow at every step: capture a point with more work and rerun with all dump files".to_owned()
     } else if let Some(f) = tied_ids.first() {
         format!(
