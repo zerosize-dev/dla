@@ -705,13 +705,21 @@ fn run_diff(
             .cmp(&delta(&a.bytes))
             .then_with(|| a.key.cmp(&b.key))
     });
+    // The captures' own x (units of work), when every capture has one and they increase: the
+    // last-over-first test is then between rates, as for any unevenly spaced captures. A run's
+    // points that are not spread evenly (a Rust harness takes its allocation stacks at 1, 2, 4
+    // and 8 times its step) would otherwise bias it.
+    let xs: Option<Vec<f64>> = captures
+        .iter()
+        .map(|c| c.x)
+        .collect::<Option<Vec<f64>>>()
+        .filter(|x| x.windows(2).all(|w| w[1] > w[0]));
+    let observed_of = |r: &Row| Observed {
+        bytes: r.bytes.clone(),
+        counts: r.blocks.clone(),
+    };
     let monotone = |r: &Row| -> bool {
-        n >= rule::MIN_DUMPS
-            && rule::gate(&Observed {
-                bytes: r.bytes.clone(),
-                counts: r.blocks.clone(),
-            })
-            .is_ok()
+        n >= rule::MIN_DUMPS && rule::gate_at(&observed_of(r), xs.as_deref()).is_ok()
     };
     let mono: Vec<&Row> = ranked.iter().copied().filter(|r| monotone(r)).collect();
 
@@ -752,6 +760,18 @@ fn run_diff(
         })
         .collect();
 
+    // The series the advice on a stood-still block is about: with a focus finding the stacks
+    // that tie to it, else the top-ranked stack.
+    let stood_still = match &opts.finding {
+        Some(f) => picked
+            .iter()
+            .zip(&resolved)
+            .filter(|(_, rs)| rs.tie.as_ref().is_some_and(|(t, _)| t == f) || rs.also.contains(f))
+            .any(|(r, _)| rule::stood_still(&observed_of(r))),
+        None => ranked
+            .first()
+            .is_some_and(|r| rule::stood_still(&observed_of(r))),
+    };
     // A growing stack that ties to nothing: the findings whose site or writer is in the same
     // Rust function are named as a hint (never a tie): `(stack site, candidates)`.
     let mut same_function: Vec<(String, Vec<FindingId>)> = Vec::new();
@@ -974,7 +994,7 @@ fn run_diff(
         .filter(|(t, r)| !t.ambiguous.is_empty() && monotone(r))
         .map(|(t, _)| (t.name.clone(), t.ambiguous.clone()))
         .collect();
-    let g = growth::write(
+    let g = growth::write_at(
         ctx,
         ledger,
         growth::Plan {
@@ -994,6 +1014,10 @@ fn run_diff(
             limitations: spec_limits(&limits),
             what: "capture",
             focus: opts.finding.clone(),
+        },
+        &growth::XAxis {
+            work: xs.clone(),
+            ..growth::XAxis::default()
         },
     )?;
     let tied_ids = growth::tied_ids(&g, opts.finding.as_ref());
@@ -1017,7 +1041,12 @@ fn run_diff(
     if let Some(a) = growth::ambiguous_json(&ambiguous) {
         body.insert("ambiguous".into(), a);
     }
-    let needed = if !g.pass {
+    let needed = if !g.pass && stood_still {
+        format!(
+            "no stack's live bytes grow at every step; a stack of a constant block count grew overall: {} (take captures whose work differs by a factor of two or more; a Rust harness's `--capture alloc` already does, 1, 2, 4 and 8 times its step; then `dla summarize` with all dump files)",
+            rule::STOOD_STILL_NEEDED
+        )
+    } else if !g.pass {
         "no stack's live bytes grow at every step: capture a point with more work and rerun with all dump files".to_owned()
     } else if let Some(f) = tied_ids.first() {
         format!(

@@ -879,6 +879,10 @@ fn series_part(
             }
         }
     }
+    // Only the series the reasons name (the largest that failed) decides what to advise.
+    let stood_still = best_failure
+        .as_ref()
+        .is_some_and(|(k, _, _)| rule::stood_still(&observed(k)));
     passed.sort_by_key(|(k, _)| std::cmp::Reverse(latest(k).map_or(0, |v| v.retained)));
 
     // Holders of Node's own modules are not tracked; when nothing else grows, say if they do.
@@ -1070,7 +1074,7 @@ fn series_part(
     if n < rule::MIN_DUMPS {
         reasons.push(format!("snapshots < {}", rule::MIN_DUMPS));
     } else if !gate_pass {
-        reasons.push("no holder grows strictly in bytes and count across all snapshots".into());
+        reasons.push("no holder grows strictly in bytes (and in count, unless its count is one constant number of blocks) across all snapshots".into());
         if !internal_growing.is_empty() {
             reasons.push(format!(
                 "the only holders that grow strictly are inside Node's own modules ({}): the growth is in the runtime, not in a variable of the project",
@@ -1116,6 +1120,10 @@ fn series_part(
                 "shape": rule::shape(g),
                 "last_over_first": (g.last_over_first * 100.0).round() / 100.0,
             });
+            // One block (or a fixed set of blocks) whose bytes grew: a buffer that is resized.
+            if g.resized {
+                v["resized"] = json!(true);
+            }
             // The holder kind observed for the column: the ledger reads it to accept a
             // corrected holder.
             if let Some(l) = latest(key) {
@@ -1165,7 +1173,7 @@ fn series_part(
     spec.coverage = complete(n as u64);
     spec.limitations = vec![
         format!(
-            "dump-series rule: at least {} snapshots, retained bytes and dominated count strictly increasing across every pair, last interval at least {:.0}% of the first (provisional, not calibrated)",
+            "dump-series rule: at least {} snapshots, retained bytes strictly increasing across every pair and dominated count too (or one constant number of blocks, a buffer that is resized), last interval at least {:.0}% of the first (provisional, not calibrated)",
             rule::MIN_DUMPS,
             rule::LAST_OVER_FIRST * 100.0
         ),
@@ -1298,6 +1306,8 @@ fn series_part(
         needed(n)
     } else if !gate_pass && !internal_growing.is_empty() {
         "the growth is held inside Node's own modules (see reasons): name the registration or API of the project that feeds it (a heap-graph holder column needs a variable of the project that keeps it), or measure it with a probe or an allocation-stack capture".to_owned()
+    } else if !gate_pass && stood_still {
+        rule::STOOD_STILL_NEEDED.to_owned()
     } else if !gate_pass {
         "growth over every interval: take another snapshot after more traffic, rerun with all snapshots".to_owned()
     } else if let Some(f) = tied_ids.first() {

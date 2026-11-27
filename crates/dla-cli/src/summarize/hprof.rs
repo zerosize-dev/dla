@@ -815,6 +815,10 @@ fn series_part(
             }
         }
     }
+    // Only the series the reasons name (the largest that failed) decides what to advise.
+    let stood_still = best_failure
+        .as_ref()
+        .is_some_and(|(k, _, _)| rule::stood_still(&observed(k)));
     passed.sort_by_key(|(k, _)| std::cmp::Reverse(latest(k).map_or(0, |h| h.retained)));
 
     // ---- candidates for the passing holders, tied to an existing finding by owner or
@@ -992,7 +996,7 @@ fn series_part(
     if n < rule::MIN_DUMPS {
         reasons.push(format!("dumps < {}", rule::MIN_DUMPS));
     } else if !gate_pass {
-        reasons.push("no holder grows strictly in bytes and count across all dumps".into());
+        reasons.push("no holder grows strictly in bytes (and in count, unless its count is one constant number of blocks) across all dumps".into());
         if let Some((k, why, _)) = &best_failure {
             reasons.push(format!("largest: {k}: {}", why.join("; ")));
         }
@@ -1037,6 +1041,10 @@ fn series_part(
                 "owner": h.map(|h| clip(&owner_of(h), 120)),
                 "last_over_first": (g.last_over_first * 100.0).round() / 100.0,
             });
+            // One block (or a fixed set of blocks) whose bytes grew: a buffer that is resized.
+            if g.resized {
+                v["resized"] = json!(true);
+            }
             // The holder kind observed for the column: the ledger reads it to accept a
             // corrected holder.
             if let Some(h) = h {
@@ -1084,7 +1092,7 @@ fn series_part(
     spec.coverage = complete(n as u64);
     spec.limitations = vec![
         format!(
-            "dump-series rule: at least {} dumps, retained bytes and dominated count strictly increasing across every pair, last interval at least {:.0}% of the first (provisional, not calibrated)",
+            "dump-series rule: at least {} dumps, retained bytes strictly increasing across every pair and dominated count too (or one constant number of blocks, a buffer that is resized), last interval at least {:.0}% of the first (provisional, not calibrated)",
             rule::MIN_DUMPS,
             rule::LAST_OVER_FIRST * 100.0
         ),
@@ -1207,6 +1215,8 @@ fn series_part(
     out.insert("discriminators".into(), json!(disc_json));
     let needed_text = if n < rule::MIN_DUMPS {
         needed(n)
+    } else if !gate_pass && stood_still {
+        rule::STOOD_STILL_NEEDED.to_owned()
     } else if !gate_pass {
         "growth over every interval: take another dump after more traffic, rerun with all dumps"
             .to_owned()

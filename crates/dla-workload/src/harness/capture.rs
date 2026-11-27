@@ -777,6 +777,48 @@ pub fn split_shim_dump(label_dir: &Path, measured: Option<u32>) -> ShimSplit {
     ShimSplit::Written
 }
 
+/// The units a Rust driver did in one process: the largest `x` of its own `checkpoint` records
+/// in `dump_text` (the cumulative unit count; the driver lowers its step when the rounds would not
+/// fit the time limit, so this can be less than `step` times the rounds). `None` when the dump
+/// holds no such record.
+pub fn driver_units(dump_text: &str) -> Option<u64> {
+    dump_text
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|v| {
+            v.get("dla_harness").is_some()
+                && v.get("runtime").and_then(|r| r.as_str()) == Some("rust")
+                && v.get("phase").and_then(|p| p.as_str()) == Some("checkpoint")
+        })
+        .filter_map(|v| v.get("x").and_then(serde_json::Value::as_u64))
+        .max()
+}
+
+/// The `x` of an allocation-stack point of a Rust driver: the units the driver did when its
+/// dump says (see [`driver_units`]), else the `expected` units (`step` times the rounds).
+pub fn alloc_point_x(dump_text: &str, expected: u64) -> u64 {
+    driver_units(dump_text).unwrap_or(expected)
+}
+
+/// Sets the `x` of the record in `<label_dir>/shim-dump.jsonl` (what the shim copied from
+/// `DLA_ITER`). Returns whether the file was rewritten.
+pub fn set_shim_x(label_dir: &Path, x: u64) -> bool {
+    let file = label_dir.join(SHIM_DUMP);
+    let Ok(text) = fs::read_to_string(&file) else {
+        return false;
+    };
+    let mut out = String::new();
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let Ok(mut v) = serde_json::from_str::<serde_json::Value>(line) else {
+            return false;
+        };
+        v["x"] = x.into();
+        out.push_str(&v.to_string());
+        out.push('\n');
+    }
+    fs::write(&file, out).is_ok()
+}
+
 /// For a native-only dump (a command-mode harness whose measured process has the shim preloaded,
 /// so the dump is the shim's own), copies the last exit record with stacks to
 /// `<label_dir>/shim-dump.jsonl`, where the summarize commands of [`shim_dump_commands`] read it.
@@ -908,6 +950,26 @@ mod tests {
             sha256: None,
             pruned: false,
         }
+    }
+
+    #[test]
+    fn the_x_of_a_rust_alloc_point_is_what_the_driver_did_not_what_was_asked() {
+        let full = "{\"dla_harness\":1,\"phase\":\"checkpoint\",\"runtime\":\"rust\",\"x\":440}\n{\"dla_harness\":1,\"phase\":\"checkpoint\",\"runtime\":\"rust\",\"x\":880}\n{\"dla_harness\":1,\"phase\":\"exit\",\"runtime\":\"native\",\"x\":1760}\n";
+        // The shim's own record (x from DLA_ITER) is not the driver's.
+        assert_eq!(alloc_point_x(full, 1760), 880);
+        // Lowered step: 4 rounds of 440 asked, 1000 units done.
+        let lowered = full.replace("880", "1000");
+        assert_eq!(alloc_point_x(&lowered, 1760), 1000);
+        assert_eq!(alloc_point_x("", 1760), 1760);
+        let d = tempfile::tempdir().unwrap();
+        fs::write(
+            d.path().join(SHIM_DUMP),
+            "{\"phase\":\"exit\",\"x\":1760}\n",
+        )
+        .unwrap();
+        assert!(set_shim_x(d.path(), 1000));
+        let t = fs::read_to_string(d.path().join(SHIM_DUMP)).unwrap();
+        assert!(t.contains("\"x\":1000"), "{t}");
     }
 
     #[test]

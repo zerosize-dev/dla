@@ -3,7 +3,8 @@
 //!
 //! Used by the diff operations (type histograms, allocation stacks, non-heap counters).
 //! The rule is the heap-dump one (`rule::gate`): at least three captures, every figure
-//! strictly increasing across every pair, the last interval at least half of the first.
+//! strictly increasing across every pair (a count may instead be the same positive number at
+//! every capture: one block that is resized), the last interval at least half of the first.
 //! A column that passes is listed with the finding it is tied to; a column with no tie is
 //! listed without one, and the ledger will not accept a confirmation that rests on it.
 
@@ -145,9 +146,29 @@ pub struct Growth {
 }
 
 /// The limitation lines of the series: what x is, and how the points were made.
-fn axis_limitations(plan: &Plan<'_>, allocated: bool, fallback: Option<&str>) -> Vec<String> {
-    let mut out = Vec::new();
+fn axis_of(allocated: bool, work: bool) -> Axis {
     if allocated {
+        Axis::AllocatedBytes
+    } else if work {
+        Axis::Iteration
+    } else {
+        Axis::Dump
+    }
+}
+
+fn axis_limitations(
+    plan: &Plan<'_>,
+    allocated: bool,
+    work: bool,
+    fallback: Option<&str>,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    if work {
+        out.push(format!(
+            "x is the units of work the process had done when the {} was taken (the run's own x), not the {} number: the gate compares the rates over the x intervals; t_ms is the time since the first {} where the inputs record one",
+            plan.what, plan.what, plan.what
+        ));
+    } else if allocated {
         out.push(format!(
             "x is the number of bytes the process had allocated in total when the {} was taken (the sum of alloc_space over its stacks), not the {} number: it is proportional to the work done at that point; t_ms is the time since the first {} where the inputs record one",
             plan.what, plan.what, plan.what
@@ -202,6 +223,9 @@ pub struct XAxis {
     /// The bytes the process had allocated when each capture was taken (strictly
     /// increasing, one per capture); `None` makes x the capture number.
     pub allocated: Option<Vec<f64>>,
+    /// The units of work the process had done when each capture was taken (strictly
+    /// increasing, one per capture; the run's own `x`); used when `allocated` is `None`.
+    pub work: Option<Vec<f64>>,
     /// Why x is the capture number where an allocated-bytes axis was wanted; written as
     /// a limitation of the series and of the evidence.
     pub fallback: Option<String>,
@@ -219,7 +243,12 @@ pub fn write_at(
     xaxis: &XAxis,
 ) -> Res<Growth> {
     let n = plan.t_ms.len();
-    let xs: Option<&[f64]> = xaxis.allocated.as_deref().filter(|x| x.len() == n);
+    let allocated: Option<&[f64]> = xaxis.allocated.as_deref().filter(|x| x.len() == n);
+    let work: Option<&[f64]> = xaxis
+        .work
+        .as_deref()
+        .filter(|x| x.len() == n && allocated.is_none());
+    let xs: Option<&[f64]> = allocated.or(work);
     // Keep the column count within the series cap.
     let mut cols = 0;
     plan.tracks.retain(|t| {
@@ -292,18 +321,15 @@ pub fn write_at(
         schema_version: 1,
         id: id.clone(),
         source,
-        axis: if xs.is_some() {
-            Axis::AllocatedBytes
-        } else {
-            Axis::Dump
-        },
+        axis: axis_of(allocated.is_some(), work.is_some()),
         warmup: 0,
         columns,
         points,
         events: Vec::new(),
         limitations: axis_limitations(
             &plan,
-            xs.is_some(),
+            allocated.is_some(),
+            work.is_some(),
             xaxis.fallback.as_deref().or(xaxis.note.as_deref()),
         ),
     };
@@ -314,6 +340,7 @@ pub fn write_at(
     let mut passed: Vec<usize> = Vec::new();
     let mut first_failure: Option<String> = None;
     let mut shapes = Vec::new();
+    let mut resized = Vec::new();
     let mut slopes = Vec::new();
     for (i, t) in plan.tracks.iter().enumerate() {
         match rule::gate_at(&t.observed(), xs) {
@@ -325,6 +352,7 @@ pub fn write_at(
                     None => json!(mean_delta(&g.byte_deltas)),
                 });
                 shapes.push(rule::shape(&g));
+                resized.push(g.resized);
             }
             Err(why) => {
                 if first_failure.is_none() && n >= rule::MIN_DUMPS {
@@ -396,6 +424,10 @@ pub fn write_at(
                 "slope": slopes[k],
                 "shape": shapes[k],
             });
+            if resized[k] {
+                // One block (or a fixed set of blocks) whose bytes grew: a buffer that is resized.
+                v["resized"] = json!(true);
+            }
             if let Some(s) = &t.site {
                 v["site"] = json!(clip(s, 160));
             }
@@ -411,7 +443,7 @@ pub fn write_at(
         .collect();
     let base = json!({
         "series": id,
-        "axis": if xs.is_some() { Axis::AllocatedBytes } else { Axis::Dump },
+        "axis": axis_of(allocated.is_some(), work.is_some()),
         "n": n,
         "gate": if gate_pass { "pass" } else { "fail" },
         "failed": plan.tracks.len() - passed.len(),
@@ -437,7 +469,7 @@ pub fn write_at(
         spec.limitations.push(why.clone());
     }
     spec.limitations.push(format!(
-        "capture-series rule: at least {} captures, every figure strictly increasing across every pair, last interval at least {:.0}% of the first (provisional, not calibrated)",
+        "capture-series rule: at least {} captures, every figure strictly increasing across every pair (a count may instead be one constant number of blocks whose bytes grow), last interval at least {:.0}% of the first (provisional, not calibrated)",
         rule::MIN_DUMPS,
         rule::LAST_OVER_FIRST * 100.0
     ));

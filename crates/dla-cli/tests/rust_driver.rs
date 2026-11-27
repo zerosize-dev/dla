@@ -452,9 +452,18 @@ fn capture_alloc_names_the_leaking_function_hints_the_finding_and_an_annotate_ti
             .starts_with("leak_one (src/lib.rs:"),
         "{sum}"
     );
-    // The stack is at the line of the allocation, the writer of the static at another line of
-    // the function: not tied, but the finding is named with the command that would tie it.
-    assert_eq!(sum["tied"], serde_json::json!([]), "{sum}");
+    // The box is allocated at one line and the writer of the static is at another line of the
+    // function: that stack is not tied, and the finding is named with the command that would tie
+    // it. The `Vec` that keeps the boxes is one block that is resized, allocated at the line of
+    // the push (the writer): it passes as one block whose bytes rise at every point and ties
+    // (before the constant-count rule it did not pass, and nothing tied until the annotation).
+    assert_eq!(sum["tied"], serde_json::json!([kept]), "{sum}");
+    assert!(
+        passed
+            .iter()
+            .any(|p| p.starts_with("stack:leak_one (src/lib.rs:7)")),
+        "{sum}"
+    );
     assert_eq!(sum["same_function"], serde_json::json!([kept]), "{sum}");
     assert!(!sum.to_string().contains("no_leak"), "{sum}");
     let next = sum["next"][0].as_str().unwrap();
@@ -470,6 +479,175 @@ fn capture_alloc_names_the_leaking_function_hints_the_finding_and_an_annotate_ti
     let again = r.ok(&cmd);
     assert_eq!(again["tied"], serde_json::json!([kept]), "{again}");
     assert!(again.get("same_function").is_none(), "{again}");
+}
+
+/// A crate whose `submit` pushes onto a static `Vec<u64>` that nothing drains: one heap block
+/// whose capacity doubles, no block per push; `batch` fills a second static `Vec<u64>` and clears
+/// it with its capacity kept (a bounded buffer).
+fn one_buffer(dir: &Path) {
+    write(
+        dir,
+        "Cargo.toml",
+        "[package]\nname = \"vecq\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    write(
+        dir,
+        "src/lib.rs",
+        "use std::sync::Mutex;\n\nstatic PENDING: Mutex<Vec<u64>> = Mutex::new(Vec::new());\n\npub fn submit(job: u64) {\n    PENDING.lock().unwrap().push(job);\n}\n",
+    );
+}
+
+fn bounded_buffer(dir: &Path) {
+    write(
+        dir,
+        "Cargo.toml",
+        "[package]\nname = \"vecq\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    write(
+        dir,
+        "src/lib.rs",
+        "use std::sync::Mutex;\n\nstatic BATCH: Mutex<Vec<u64>> = Mutex::new(Vec::new());\n\npub fn flush(job: u64) -> usize {\n    let mut b = BATCH.lock().unwrap();\n    for j in 0..1000u64 {\n        b.push(job + j);\n    }\n    let n = b.len();\n    b.clear();\n    n\n}\n",
+    );
+}
+
+impl Run {
+    /// The items of the final gate, from the full file.
+    fn final_items(&self) -> Vec<Value> {
+        // The exit code says whether anything is missing; the items are in the file.
+        self.run(&["gate", "check", "--final"]);
+        let full: Value = serde_json::from_str(
+            &fs::read_to_string(self.run_dir.join("gate/final.json")).unwrap(),
+        )
+        .unwrap();
+        full["missing"].as_array().unwrap().clone()
+    }
+}
+
+#[test]
+fn a_vec_field_that_grows_as_one_buffer_ties_leads_and_is_not_closed_as_no_growth() {
+    if !have_alloc_tools() {
+        return;
+    }
+    let r = Run::of(one_buffer);
+    let f = r.id_at("src/lib.rs:3");
+    r.ok(&["harness", "gen", "--lang", "rust", "--driver", "--next"]);
+    // 2,000 pushes per unit: the one block of the field passes 8 MB at the last point.
+    r.fill(
+        "H1",
+        "for j in 0..2000u64 {\n        vecq::submit(key + j);\n    }",
+    );
+    let out = r.ok(&[
+        "harness",
+        "run",
+        "H1",
+        "--mode",
+        "fresh",
+        "--capture",
+        "alloc",
+    ]);
+    // The points are 1, 2, 4 and 8 steps of work, each a process of its own.
+    let xs: Vec<f64> = (1..=4)
+        .map(|k| {
+            let text = fs::read_to_string(
+                r.run_dir
+                    .join(format!("harness/H1/out/p{k}-alloc/shim-dump.jsonl")),
+            )
+            .unwrap();
+            serde_json::from_str::<Value>(text.lines().next().unwrap()).unwrap()["x"]
+                .as_f64()
+                .unwrap()
+        })
+        .collect();
+    assert!(xs.windows(2).all(|w| w[1] >= 2.0 * w[0]), "{xs:?}");
+    let args = stack_diff_args(&out);
+    let cmd: Vec<&str> = args.iter().map(String::as_str).collect();
+    let sum = r.ok(&cmd);
+    // One block whose bytes rise at every point passes, at the line of the push, and ties.
+    assert_eq!(sum["gate"], "pass", "{sum}");
+    assert_eq!(sum["tied"], serde_json::json!([f]), "{sum}");
+    assert!(
+        sum["passed"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("stack:submit (src/lib.rs:6)"),
+        "{sum}"
+    );
+    // The finding has the lead: the final gate lists it with the alloc-test route, and closing
+    // it as no growth is refused (by `resolve` and by `close-rest`).
+    let item = r
+        .final_items()
+        .into_iter()
+        .find(|m| m["kind"] == "finding" && m["id"] == f.as_str())
+        .unwrap_or_else(|| panic!("no item for {f}"));
+    assert!(
+        item["fix"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("dla alloc-test H1 --finding {f}")),
+        "{item}"
+    );
+    let o = r.run(&[
+        "ledger",
+        "resolve",
+        &f,
+        "--as",
+        "unresolved",
+        "--reason",
+        "inconclusive",
+        "--remedy",
+        "x",
+    ]);
+    assert_ne!(o.code, 0, "{}", o.text);
+    assert_eq!(o.json["error"]["code"], "growth-not-measured", "{}", o.text);
+    let rest = r.ok(&["ledger", "close-rest"]);
+    assert_eq!(rest["closed"], 0, "{rest}");
+    assert!(
+        rest["left"][0]["why"]
+            .as_str()
+            .unwrap()
+            .contains("grew over every dump"),
+        "{rest}"
+    );
+}
+
+#[test]
+fn a_buffer_cleared_with_its_capacity_kept_does_not_pass_the_summary() {
+    if !have_alloc_tools() {
+        return;
+    }
+    let r = Run::of(bounded_buffer);
+    let f = r.id_at("src/lib.rs:3");
+    r.ok(&["harness", "gen", "--lang", "rust", "--driver", "--next"]);
+    r.fill("H1", "let _ = vecq::flush(key);");
+    let out = r.ok(&[
+        "harness",
+        "run",
+        "H1",
+        "--mode",
+        "fresh",
+        "--capture",
+        "alloc",
+    ]);
+    let args = stack_diff_args(&out);
+    let cmd: Vec<&str> = args.iter().map(String::as_str).collect();
+    let sum = r.ok(&cmd);
+    // The capacity is reached in the first unit and kept: the bytes of the one block are the
+    // same at every point, so nothing passes and nothing ties.
+    assert_eq!(sum["monotone"], 0, "{sum}");
+    assert_eq!(sum["gate"], "fail", "{sum}");
+    assert!(
+        sum["reasons"].to_string().contains("do not increase"),
+        "{sum}"
+    );
+    assert_eq!(sum["tied"], serde_json::json!([]), "{sum}");
+    assert!(sum["passed"].as_array().is_none_or(Vec::is_empty), "{sum}");
+    let lead = r.final_items().into_iter().any(|m| {
+        m["id"] == f.as_str()
+            && m["fix"]
+                .as_str()
+                .is_some_and(|x| x.contains(&format!("dla alloc-test H1 --finding {f}")))
+    });
+    assert!(!lead, "the decoy has no lead");
 }
 
 #[test]
@@ -725,7 +903,14 @@ fn two_findings_in_the_function_of_a_stack_are_both_named_and_no_single_command_
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let sum = r.ok(&args);
     assert_eq!(sum["gate"], "pass", "{sum}");
-    assert_eq!(sum["tied"], serde_json::json!([]), "{sum}");
+    // The `Vec` of a static is one block that is resized, allocated at the line of its push (a
+    // recorded writer of that static): it ties to that finding alone, whichever of the two
+    // buffers shows a rise at every point in the run (glibc moves or extends a large block
+    // either way). The stack of the box (the other line of the function) ties to none, and is
+    // the one both findings are named for.
+    let tied = sum["tied"].as_array().unwrap();
+    assert_eq!(tied.len(), 1, "{sum}");
+    assert!(tied[0] == a.as_str() || tied[0] == b.as_str(), "{sum}");
     let mut named: Vec<&str> = sum["same_function"]
         .as_array()
         .unwrap()

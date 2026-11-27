@@ -276,6 +276,58 @@ fn the_trend_writes_the_heap_residual_row_and_the_capture_leads_everything_node_
     }
 }
 
+/// The `captures.json` of H1 as a capture run leaves it: these `dla summarize` commands.
+fn captures_json(r: &Run, summarize: &[&str]) {
+    fs::write(
+        r.run_dir.join("harness/H1/captures.json"),
+        json!({"tool": null, "cost": {"files": 0, "bytes": 0, "ms": 0, "kinds": {}},
+               "files": [], "summarize": summarize, "limitations": []})
+        .to_string(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_taken_capture_leads_with_a_summary_that_clears_the_item_not_one_that_does_not() {
+    const STACKS: &str = "dla summarize alloc-stack-diff h/p1-alloc/a.json h/p2-alloc/a.json";
+    const HEAP: &str = "dla summarize heap-graph h/p1/heap-1.json h/p1/heap-2.json";
+    const HIST: &str = "dla summarize type-histogram-diff h/p1/a.json h/p2/a.json";
+    const NON_HEAP: &str = "dla summarize non-heap h/p1/threads.json";
+    // Only commands whose records never clear the item (a histogram, the non-heap regions): the
+    // capture fix as before, not a summary that leaves the item open and drops the capture.
+    let r = scene("python", "py.traced", STEEP);
+    captures_json(&r, &[HIST, NON_HEAP]);
+    let t = r.ok(&["trend", "S1"]);
+    assert!(
+        t["next"][0].as_str().unwrap().starts_with(CAPTURE),
+        "{}",
+        t["next"]
+    );
+    assert!(
+        t["_attention"][0]
+            .as_str()
+            .unwrap()
+            .contains("capture H1 first")
+    );
+    // The allocation-stack summary clears it, wherever it is listed; the heap summary does too.
+    for (listed, lead) in [
+        (&[HIST, NON_HEAP, STACKS][..], STACKS),
+        (&[HIST, HEAP, STACKS][..], STACKS),
+        (&[HIST, HEAP][..], HEAP),
+    ] {
+        let r = scene("python", "py.traced", STEEP);
+        captures_json(&r, listed);
+        let t = r.ok(&["trend", "S1"]);
+        assert_eq!(t["next"][0], lead, "{listed:?}: {}", t["next"]);
+        assert!(
+            t["_attention"][0]
+                .as_str()
+                .unwrap()
+                .contains("summarize the capture of H1")
+        );
+    }
+}
+
 #[test]
 fn a_series_under_the_threshold_gets_a_row_and_no_item() {
     for (runtime, heap) in [("node", "node.heap_used"), ("python", "py.traced")] {

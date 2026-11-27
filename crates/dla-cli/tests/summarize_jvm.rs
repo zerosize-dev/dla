@@ -1094,7 +1094,17 @@ fn a_via_holder_is_listed_followed_in_the_series_and_tied_by_its_owner() {
     assert_eq!(col["tie"]["rule"], "holder");
     // The holder kind observed rides on the passing column, for the ledger.
     assert_eq!(col["holder_kind"], "static/global");
-    assert_eq!(v["tied"], json!([f]));
+    // The main thread keeps 5 dominated objects at every dump and its retained bytes rise at
+    // every dump: one block that grows passes the rule since the constant-count change (before
+    // it did not), and gets a candidate of its own, listed after the holder of the finding.
+    assert_eq!(v["tied"], json!([f, "F2"]), "{v}");
+    let thread = g["result"]["passed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["column"] == "holder:thread:main")
+        .unwrap_or_else(|| panic!("{g}"));
+    assert_eq!(thread["resized"], true, "{thread}");
     // The retention-path evidence names it too.
     let r = &p.evidence("retention-path")[2];
     assert_eq!(r["result"]["via"][0]["key"], "static:shop.Waiters.gates");
@@ -1249,7 +1259,10 @@ fn a_via_holder_without_a_finding_becomes_a_candidate_with_the_declaration_site(
     let c = &v["candidates"][0];
     assert_eq!(c["owner"], "shop.Waiters.gates", "{v}");
     assert_eq!(c["site"], "src/shop/Waiters.kt:5", "{v}");
-    assert_eq!(p.findings().len(), 1);
+    // The candidate of the holder, and one for the main thread, whose retained bytes rise at a
+    // constant count of 5 dominated objects (the constant-count rule passes it).
+    assert_eq!(p.findings().len(), 2);
+    assert_eq!(v["candidates"][1]["owner"], "thread:main", "{v}");
 }
 
 #[test]

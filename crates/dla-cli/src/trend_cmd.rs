@@ -570,8 +570,10 @@ fn capture_entry(ctx: &Ctx, id: &str) -> Option<(String, String)> {
     let u = dla_core::gate::uncaptured_residuals(&view)
         .into_iter()
         .find(|u| u.series.iter().any(|s| s == id))?;
-    // The capture was taken and not summarized: its first `dla summarize` command, not the
-    // capture again (the run printed them and `captures.json` keeps them).
+    // The capture was taken and not summarized: the `dla summarize` command whose records clear
+    // the item (allocation stacks, or the heap summary: `measured_holders` counts retention paths
+    // and allocation stacks only), not the capture again and not a histogram or non-heap command
+    // that would leave the item open (the run printed them and `captures.json` keeps them).
     let taken = std::fs::read_to_string(
         dla_core::HarnessManifest::dir_in(&ctx.run_dir, &u.harness).join("captures.json"),
     )
@@ -584,9 +586,9 @@ fn capture_entry(ctx: &Ctx, id: &str) -> Option<(String, String)> {
             .iter()
             .filter_map(|c| c.as_str().map(str::to_owned))
             .collect();
-        cmds.iter()
-            .find(|c| c.starts_with("dla summarize alloc-stack-diff"))
-            .or_else(|| cmds.first())
+        ["dla summarize alloc-stack-diff", "dla summarize heap-graph"]
+            .iter()
+            .find_map(|lead| cmds.iter().find(|c| c.starts_with(lead)))
             .cloned()
     });
     if let Some(cmd) = taken {

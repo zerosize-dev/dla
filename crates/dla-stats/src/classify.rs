@@ -76,9 +76,14 @@ pub const STAIR_NOTE: &str = "grew in steps that come further apart; its flat en
 /// A gauge that grew in at least two separate steps whose rises do not shrink, over more than
 /// the noise tolerance, and whose flat end is no longer than the next step is expected to be.
 ///
-/// "Separate" means a gap of two point spacings or more between two steps: a ramp (a rise at
-/// every point, then flat, as a bounded fill does) has none. The expected next gap is the one
-/// `dla alloc-test` reads (`Steps::expected_gap`) over this series' own point spacing.
+/// "Separate" means a point that is not itself a rise lies between two consecutive steps (counted
+/// in points, not in `x`, so a ramp with a skipped sample is still a ramp): a ramp (a rise at
+/// every point, then flat, as a bounded fill does) has none. The flat end of a stair stays at its
+/// last step's level: a last reading below the highest one by more than the noise tolerance is a
+/// fall (the Spike test of `classify_fit`), not a flat end; the tolerance is used rather than one
+/// scatter of the step reading because that scatter is zero on a clean staircase and would turn a
+/// few bytes of jitter at its top into a fall. The expected next gap is the one `dla alloc-test`
+/// reads (`Steps::expected_gap`) over this series' own point spacing.
 ///
 /// It only ever rescues a column: the one that the slope gate fails (through its Sen lower bound
 /// or its half split) and that passes every other condition once those two are set aside.
@@ -95,9 +100,15 @@ fn step_growth(points: &[(f64, f64)], f: &Fit) -> bool {
     let per_point = span(points) / (points.len() - 1) as f64;
     let (first, last) = (points[0], points[points.len() - 1]);
     let max = points.iter().fold(f64::NEG_INFINITY, |m, p| m.max(p.1));
-    st.gaps().iter().any(|&g| g >= 1.5 * per_point)
+    let index = |x: f64| points.iter().position(|p| p.0 == x);
+    let separate = st
+        .xs
+        .windows(2)
+        .any(|w| matches!((index(w[0]), index(w[1])), (Some(a), Some(b)) if b >= a + 2));
+    separate
         && st.never_shrink()
         && max - first.1 > f.tol
+        && max - last.1 <= f.tol
         && last.0 - st.last_x() <= st.expected_gap(per_point)
 }
 
