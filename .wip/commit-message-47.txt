@@ -14,17 +14,22 @@ Python `bytearray`.
   a flat pair of bytes still fail.
 - The holder discriminator reads such a series as a leak; one that rose and ends flat reads
   inconclusive (a resized block is flat between resizes, and the alloc-test over a longer window
-  decides), not non-leak. A series flat from its first dump, and a count that rose and then
-  stopped, stay non-leak.
-- A failed summary whose holder kept one block that grew but stood still between two dumps says
-  so, and asks for captures whose work differs by a factor of two or more.
+  decides), not non-leak. A series flat from its first dump, one whose bytes fell at the end, and
+  a count that rose and then stopped stay non-leak.
+- A failed summary whose holder kept one block that grew, never shrank and stood still between
+  two dumps says so, and asks for captures whose work differs by a factor of two or more. Only the
+  series the summary is about decides that advice: the largest holder that failed, or the stacks
+  tied to the finding asked about, else the top stack; a small unrelated block does not.
 - A Rust harness takes its allocation stacks at 1, 2, 4 and 8 times its step (15 rounds against
   10), so a capacity that doubles is reallocated between every pair of points; the summary judges
-  the stacks against the captures' own units of work.
+  the stacks against the captures' own units of work. When the driver lowered its step to fit the
+  time limit, a point's units are the ones the driver's own records say it did, and the run says
+  so.
 - A passing, tied growth series that `dla summarize` wrote from the capture files of a driver made
-  for the finding is a lead of that finding, as a heap-dump holder already is: the final gate
-  lists it with the alloc-test, `ledger resolve` refuses to close it as "ran and showed no
-  growth", `close-rest` leaves it open, and an alloc-test that favors non-leak lifts it. A capture
+  for the finding (every capture file under that one driver) is a lead of that finding, as a
+  heap-dump holder already is: the final gate lists it with the alloc-test, `ledger resolve`
+  refuses to close it as "ran and showed no growth", `close-rest` leaves it open, and an
+  alloc-test that favors non-leak lifts it. A capture
   of a test loop, of the project's own workload or of a driver made for other findings is no lead.
 
 The trend gate's step reading of the last commit also changes:

@@ -1241,10 +1241,8 @@ fn summary_harness(
         .rev()
         .take(4)
         .find(|r| r.tool.name == growth.tool.name && !is_growth_record(r) && r.raw.is_some())?;
-    let harnesses = crate::measured_holders::capture_harnesses(Some(dir), own);
-    let [h] = harnesses.iter().collect::<Vec<_>>()[..] else {
-        return None;
-    };
+    // Every capture must lie under the one harness: a file outside any harness is not its capture.
+    let h = &crate::measured_holders::capture_harness_strict(Some(dir), own)?;
     let m = crate::harness::HarnessManifest::load(dir, h).ok()?;
     (m.is_hook_driver()
         && matches!(
@@ -3243,6 +3241,7 @@ mod tests {
         l: &mut Ledger,
         dir: &std::path::Path,
         finding: &str,
+        extra_label: Option<&str>,
     ) -> (EvidenceId, EvidenceId) {
         let mut series = crate::series::SeriesFile {
             schema_version: 1,
@@ -3263,7 +3262,8 @@ mod tests {
             serde_json::json!({"captures": (1..=3).map(|k| serde_json::json!({
                 "label": format!(".dla/R1/harness/H1/out/p{k}-alloc/shim-dump.jsonl"),
                 "x": 1000 * k, "sha256": "0"
-            })).collect::<Vec<_>>()})
+            })).chain(extra_label.map(|l| serde_json::json!({"label": l, "x": 4000, "sha256": "0"})))
+            .collect::<Vec<_>>()})
             .to_string(),
         )
         .unwrap();
@@ -3316,7 +3316,7 @@ mod tests {
         for (id, extra) in manifests {
             manifest(id, extra.clone()).save(dir.path()).unwrap();
         }
-        let (_, growth) = live_summary(&mut l, dir.path(), finding);
+        let (_, growth) = live_summary(&mut l, dir.path(), finding, None);
         let mut view = no_trend_view(l);
         view.run_dir = Some(dir.path().to_path_buf());
         (dir, view, growth)
@@ -3352,7 +3352,7 @@ mod tests {
         )
         .save(dir.path())
         .unwrap();
-        live_summary(&mut l, dir.path(), "F1");
+        live_summary(&mut l, dir.path(), "F1", None);
         close_f1(&mut l);
         let mut closed = no_trend_view(l);
         closed.run_dir = Some(dir.path().to_path_buf());
@@ -3367,11 +3367,30 @@ mod tests {
         )
         .save(dir.path())
         .unwrap();
-        live_summary(&mut l, dir.path(), "F1");
+        live_summary(&mut l, dir.path(), "F1", None);
         alloc_test(&mut l, "non-leak", "H1");
         let mut view = no_trend_view(l);
         view.run_dir = Some(dir.path().to_path_buf());
         assert_eq!(grown_f1(&view), None);
+    }
+
+    #[test]
+    fn a_summary_that_read_a_file_outside_the_harness_is_no_lead() {
+        // Three captures of H1 and one file outside any harness: not a capture of H1 alone.
+        for extra in [Some("in/elsewhere/shim-dump.jsonl"), None] {
+            let (_d, mut l) = scene();
+            let dir = tempfile::tempdir().unwrap();
+            manifest(
+                "H1",
+                serde_json::json!({"runtime": "rust", "targets": ["F1"]}),
+            )
+            .save(dir.path())
+            .unwrap();
+            live_summary(&mut l, dir.path(), "F1", extra);
+            let mut view = no_trend_view(l);
+            view.run_dir = Some(dir.path().to_path_buf());
+            assert_eq!(grown_f1(&view).is_some(), extra.is_none(), "{extra:?}");
+        }
     }
 
     #[test]

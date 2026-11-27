@@ -3977,3 +3977,14 @@ unattended run at a time and no builder beside it.
   (plateau inconclusive: anon still rising in the extension), nmt_committed/rss_file/vm_data/vm_hwm plateau.
   Answer saved u165/jvm-flake-289.txt. fmt/clippy/schema/other crates green. Task 99: give it a builder
   AFTER r8 (no builder beside an unattended run); it is a precision flake (inconclusive, never a false leak).
+
+## 2026-11-27 S4 F1-F4 back from builder
+- report u164/report2.md: F1-F4 done, dynamic dyn2.json 63+xfail, no failures, columns equal to the last run.
+- I read the diff: F4 x = max rust checkpoint x of the point's dump.jsonl (DLA_WARMUP=0 at alloc points, so equals step*rounds unless lowered); picked/resolved are parallel in shim_groups.
+- u166/check.sh: my mutations M3 (driver_units counts native exit) and M4 (strict harness skips outside label), then full suite. Background task b0tadfjvk.
+- commit-message-47.txt updated for F1-F4.
+- Next: CI on snapshot, commit on main, preview.15, release, rig, r8-fastrace alone; then task 99 builder.
+- u166 mutations: M4 caught (grown test fails). M3 (drop runtime=="rust" in driver_units) SURVIVED: the
+  phase=="checkpoint" filter alone already drops the shim's exit record (the shim writes only exit
+  records), so the runtime check is a redundant guard; accepted, no new test.
+- Drafted wip-notes/jvm-flake-brief.md for task 99 (builder after r8; scratch u167).

@@ -159,6 +159,32 @@ pub(crate) fn capture_harnesses(run_dir: Option<&Path>, rec: &EvidenceRecord) ->
         .collect()
 }
 
+/// The one harness every capture an allocation-stack summary read lies under: `None` when a
+/// capture label is outside any `harness/<H>/`, when they name several harnesses, or when the raw
+/// file lists none (unlike [`capture_harnesses`], which drops such labels).
+pub(crate) fn capture_harness_strict(
+    run_dir: Option<&Path>,
+    rec: &EvidenceRecord,
+) -> Option<String> {
+    let labels: Vec<Value> = run_dir
+        .zip(rec.raw.as_deref())
+        .and_then(|(dir, raw)| fs::read_to_string(dir.join(raw)).ok())
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v.get("captures").and_then(Value::as_array).cloned())?;
+    let mut found: Option<&str> = None;
+    for c in &labels {
+        let h = c
+            .get("label")
+            .and_then(Value::as_str)
+            .and_then(harness_of_path)?;
+        if found.is_some_and(|f| f != h) {
+            return None;
+        }
+        found = Some(h);
+    }
+    found.map(str::to_owned)
+}
+
 /// Reads whose each holder of the retention records is.
 pub fn scan(view: &RunView) -> Scan {
     scan_in(&view.ledger, view.run_dir.as_deref())

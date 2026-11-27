@@ -425,6 +425,7 @@ mod tests {
         assert!(!stood_still(&obs(&[300, 200, 100], &[1; 3])));
         // A fall is not standing still.
         assert!(!stood_still(&obs(&[100, 50, 300], &[1; 3])));
+        assert!(!stood_still(&obs(&[100, 50, 50, 300], &[1; 4])));
         assert!(!stood_still(&obs(&[100, 200, 200], &[1, 2, 2])));
     }
 

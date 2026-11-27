@@ -2641,9 +2641,19 @@ fn rust_alloc_points(
             ));
             continue;
         }
-        if capture::split_shim_dump(&paths.out.join(&label), res.pid) == capture::ShimSplit::Written
-        {
+        let label_dir = paths.out.join(&label);
+        if capture::split_shim_dump(&label_dir, res.pid) == capture::ShimSplit::Written {
             written += 1;
+            // The driver lowers its step when the rounds would not fit the time limit and still
+            // exits 0: the point's x is the units it did, not the units asked for.
+            let did = fs::read_to_string(label_dir.join("dump.jsonl"))
+                .map_or(units, |t| capture::alloc_point_x(&t, units));
+            if did != units {
+                out.limitations.push(format!(
+                    "the allocation-stack run {label} did {did} units, not the {units} asked for (the driver lowered its step to fit the time limit): its x is {did}"
+                ));
+                capture::set_shim_x(&label_dir, did);
+            }
         }
     }
     if written < 3 {
