@@ -3876,3 +3876,28 @@ unattended run at a time and no builder beside it.
   release-untested -> rule 3 too broad (conditional covers eviction, library error paths, caller
   release). Sent Q a follow-up: new RemovalClaim `on-release`; release-untested only for it;
   policy keeps conditional; drop known_gap path; N-RELEASE beside strong root too.
+- Nov 26-27: Q2 (5 review-1 defects), Q3 (5 review-2 defects), my fix (hook offers only the plain
+  blocker command: the longer two-command note clipped the queue item's driver batch out of the
+  1000-byte hook reason; Q3's parse test failed after its own late wording change), review 3 (3
+  defects: same-second time refusal vs ms stamps, stamp floor for a clock step, unknown-kind abort
+  fix) fixed by Q4. My checks: 2729 tests pass, mutations caught, local dynamic 63+xfail on
+  4fe5e94, CI 15/15 on 4fe5e94 and on 9a798f1. main = 9644e0d (round) + 7550557 (Version
+  0.9.0-preview.13), dev pushed; release.yml triggered.
+- DISK: freed scratch: stale binary copies, old dyn logs, AND u107/jetty-try/m2 (1.3 GB Maven
+  cache). The jetty key of start-run.sh needs that warm m2: refill it outside the sandbox (the
+  try build of u107) before the Jetty run. logstash m2 (u107/logstash-try/m2) and micrometer
+  gradle (u119/micrometer-try/gradle) are still there.
+- NEXT: verify release assets, refresh rig (/root/dla-real/bin/dla, plugin from tag), then reruns
+  one at a time with nothing beside them: fastrace, logstash, otel-python, otel-go (answer key
+  sections 7, 9, 1, 3); watch for --blocker user misuse. Then set B and Jetty.
+- 03:27 UTC Nov 27: r6-fastrace (.13) ended in 370 s, COMPLETE, 5 of 167 min, no leak confirmed.
+  The documented holder (F41) WAS targeted by a driver made for it (H8, no reporter) and grew
+  (live_bytes stair, 4468 B/unit), then the alloc-test (A1/E71) read live_bytes as plateau
+  (Theil-Sen extra rise 0: six flat points then the next doubling 17.4 -> 33.1 MB at 7040; the
+  stair check runs only when rise > noise) and F41 was refuted (N-WARM confirmed). os.rss said
+  growth-continues. Second cause: queue ranks tiers 1-4 only (8 of 44); close-rest closed 36 as
+  not_exercised with 162 min left; O1/O2/F21 closed inconclusive with remedies that are
+  measurements; final gate passed; hook let it stop. Kept: /root/dla-real/r6-fastrace-keep.
+  Builder S started (brief wip-notes/stair-flat-brief.md): stair read on flat extra, doubled-gap
+  Stopped rule, inconclusive with a longer window decides nothing while budget is left. No rig run
+  beside it. Family B (close-rest of tier 5/6 while budget left) NOT addressed yet.
