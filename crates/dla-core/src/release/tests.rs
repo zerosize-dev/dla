@@ -206,6 +206,7 @@ fn the_remover_line_is_counted_where_the_runtime_counts_lines() {
             dla_line_runs: 1,
             series: "S1".into(),
             sites: serde_json::from_value(json!({ "pkg/a.py:30": counts })).unwrap(),
+            unavailable: None,
         }
         .save(&dir, "H2")
         .unwrap();
@@ -469,44 +470,60 @@ fn the_same_remover_is_the_same_line_of_the_same_file() {
 }
 
 #[test]
-fn an_untested_release_is_cleared_only_by_a_decided_sibling_that_names_the_same_remover() {
-    for decided in [FindingState::Refuted, FindingState::Confirmed] {
-        let mut s = scene("python");
-        explain_on_release(&mut s.ledger);
-        let leak = alloc_test(&mut s.ledger, "leak", "H1");
-        let flat = alloc_test(&mut s.ledger, FLAT, "H1");
-        let by = if decided == FindingState::Refuted {
-            leak
-        } else {
-            flat
-        };
-        let root = s.ledger.finding(&f("F1")).unwrap().clone();
-        // F1.n2 names a.py:30 and is not decided: the release was not tested.
-        assert!(release_untested(&s.ledger, &root).is_some());
-        if decided == FindingState::Confirmed {
-            // The ledger closes the root first when the explanation sibling is confirmed.
-            s.ledger
-                .transition(
-                    &f("F1"),
-                    FindingState::Refuted,
-                    None,
-                    None,
-                    vec![by.clone()],
-                    "t",
-                )
-                .unwrap();
-        }
-        // A sibling that names another release, decided: still untested.
-        decided_release(&mut s.ledger, "a.py:99", decided, by.clone());
-        let u = release_untested(&s.ledger, &root).expect("another release decides nothing");
-        assert_eq!(u.remover, "a.py:30");
-        // A sibling of another file at the same line: still untested.
-        decided_release(&mut s.ledger, "b.py:30", decided, by.clone());
-        assert!(release_untested(&s.ledger, &root).is_some());
-        // The one that names the same line of the same file (spelled with a directory) clears it.
-        decided_release(&mut s.ledger, "src/a.py:30", decided, by);
-        assert!(release_untested(&s.ledger, &root).is_none(), "{decided}");
-    }
+fn a_refuted_sibling_clears_an_untested_release_only_when_it_names_the_same_remover() {
+    let mut s = scene("python");
+    explain_on_release(&mut s.ledger);
+    let leak = alloc_test(&mut s.ledger, "leak", "H1");
+    let root = s.ledger.finding(&f("F1")).unwrap().clone();
+    // F1.n2 names a.py:30 and is not decided: the release was not tested.
+    assert!(release_untested(&s.ledger, &root).is_some());
+    // A refuted sibling that names another release: still untested.
+    decided_release(
+        &mut s.ledger,
+        "a.py:99",
+        FindingState::Refuted,
+        leak.clone(),
+    );
+    let u = release_untested(&s.ledger, &root).expect("another release decides nothing");
+    assert_eq!(u.remover, "a.py:30");
+    // A sibling of another file at the same line: still untested.
+    decided_release(
+        &mut s.ledger,
+        "b.py:30",
+        FindingState::Refuted,
+        leak.clone(),
+    );
+    assert!(release_untested(&s.ledger, &root).is_some());
+    // The one that names the same line of the same file (spelled with a directory) clears it.
+    decided_release(&mut s.ledger, "src/a.py:30", FindingState::Refuted, leak);
+    assert!(release_untested(&s.ledger, &root).is_none());
+}
+
+#[test]
+fn a_confirmed_sibling_clears_an_untested_release_whatever_remover_it_names() {
+    let mut s = scene("python");
+    explain_on_release(&mut s.ledger);
+    let _leak = alloc_test(&mut s.ledger, "leak", "H1");
+    let flat = alloc_test(&mut s.ledger, FLAT, "H1");
+    let root = s.ledger.finding(&f("F1")).unwrap().clone();
+    assert!(release_untested(&s.ledger, &root).is_some());
+    // The ledger closes the root first when the sibling is confirmed.
+    s.ledger
+        .transition(
+            &f("F1"),
+            FindingState::Refuted,
+            None,
+            None,
+            vec![flat.clone()],
+            "t",
+        )
+        .unwrap();
+    // The explanation relies on a.py:30; the confirmed sibling names b.py:20. The family's
+    // growth was measured flat with a release called: the finding grows only while callers skip
+    // it, and the report counts it apart.
+    decided_release(&mut s.ledger, "b.py:20", FindingState::Confirmed, flat);
+    assert!(release_untested(&s.ledger, &root).is_none());
+    assert!(release_confirmed(&s.ledger, &f("F1")).is_some());
 }
 
 #[test]
@@ -588,6 +605,7 @@ fn a_python_run_without_line_counts_of_its_series_is_refused_and_a_jvm_or_native
         dla_line_runs: 1,
         series: "S2".into(),
         sites: serde_json::from_value(json!({"a.py:30": [0, 4, 8]})).unwrap(),
+        unavailable: None,
     }
     .save(dir.path(), "H1")
     .unwrap();
@@ -596,6 +614,7 @@ fn a_python_run_without_line_counts_of_its_series_is_refused_and_a_jvm_or_native
         dla_line_runs: 1,
         series: "S1".into(),
         sites: serde_json::from_value(json!({"a.py:30": [0, 4, 8]})).unwrap(),
+        unavailable: None,
     }
     .save(dir.path(), "H1")
     .unwrap();
@@ -605,6 +624,7 @@ fn a_python_run_without_line_counts_of_its_series_is_refused_and_a_jvm_or_native
         dla_line_runs: 1,
         series: "S1".into(),
         sites: serde_json::from_value(json!({"a.py:30": [null, null]})).unwrap(),
+        unavailable: None,
     }
     .save(dir.path(), "H1")
     .unwrap();
@@ -612,6 +632,32 @@ fn a_python_run_without_line_counts_of_its_series_is_refused_and_a_jvm_or_native
         decide(&view, &flat).unwrap().note.as_deref(),
         Some(NOT_SHOWN)
     );
+    // The agent said it could not count lines in this run: the record carries the note and no
+    // sites, which is not a count of 0 and not a missing record.
+    LineRuns {
+        dla_line_runs: 1,
+        series: "S1".into(),
+        sites: Default::default(),
+        unavailable: Some(format!(
+            "{}: another tool already traces this process (sys.settrace)",
+            crate::harness::LINE_COUNTS_UNAVAILABLE
+        )),
+    }
+    .save(dir.path(), "H1")
+    .unwrap();
+    assert_eq!(
+        decide(&view, &flat).unwrap().note.as_deref(),
+        Some(NOT_SHOWN)
+    );
+    assert!(matches!(
+        remover_run(
+            dir.path(),
+            &HarnessManifest::load(dir.path(), "H1").unwrap(),
+            Some("S1"),
+            "a.py:30"
+        ),
+        RemoverRun::NotShown(why) if why.contains("another tool")
+    ));
     // The JVM and native code cannot count a line at all.
     for rt in ["jvm", "native"] {
         let mut s = scene(rt);
@@ -653,4 +699,70 @@ fn the_newest_alloc_test_of_a_harness_is_the_newest_by_time_after_a_merge() {
     assert_eq!(drivers.last().unwrap().evidence, newest);
     let d = drivers_disagree(&view, &f("F1")).expect("H1 now favors non-leak, H2 leak");
     assert_eq!((d.flat.evidence, d.leak.evidence), (newest, leak_h2));
+}
+
+/// Time passes between two writes of a test, so the order of their `ts` is the order of the writes.
+fn tick() {
+    std::thread::sleep(std::time::Duration::from_millis(5));
+}
+
+#[test]
+fn a_main_alloc_test_written_while_a_slice_is_open_is_the_newest_by_time_after_the_merge() {
+    // The worker's alloc-test of H1 (leak) is recorded first, the core's of H1 (non-leak) while
+    // the slice is still open, so it is newer; the merge appends the worker's line after it. By
+    // the position of the line the worker's would be the newest and the two drivers (H1 flat,
+    // H2 leak) would look as if they agreed.
+    let mut s = scene("python");
+    let leak_h2 = alloc_test(&mut s.ledger, "leak", "H2");
+    let dir = s.dir.path().to_path_buf();
+    let mut w = Ledger::load_for(&dir, Some("w")).unwrap();
+    let old = alloc_test(&mut w, "leak", "H1");
+    assert_eq!(old.to_string(), "w/E1");
+    tick();
+    let newest = alloc_test(&mut s.ledger, FLAT, "H1");
+    w.finish_slice().unwrap();
+    crate::merge::merge(&dir).unwrap();
+    s.ledger = Ledger::load(&dir).unwrap();
+    // The merge put the worker's line after the core's, and the key still says it is older.
+    assert!(s.ledger.evidence_order(&old) < s.ledger.evidence_order(&newest));
+    assert_eq!(
+        s.ledger.evidence_in_order().last().unwrap().evidence_id,
+        newest
+    );
+    let (_d, view) = s.view();
+    let drivers = drivers_of(&view, &f("F1"));
+    let h1 = drivers.iter().find(|d| d.harness == "H1").unwrap();
+    assert_eq!(
+        (h1.evidence.clone(), h1.favors),
+        (newest.clone(), Favors::NonLeak)
+    );
+    let d = drivers_disagree(&view, &f("F1")).expect("H1 is flat now, H2 grows");
+    assert_eq!((d.flat.evidence, d.leak.evidence), (newest, leak_h2));
+}
+
+#[test]
+fn the_alloc_tests_of_two_workers_merged_in_the_opposite_order_of_their_times_stay_in_time_order() {
+    // Slices merge by worker name: `a` before `b`. `b` recorded its alloc-test of H1 (leak) first
+    // and `a` recorded its (non-leak) after it, so `a`'s is the newest although `b`'s line comes
+    // later in the merged ledger.
+    let mut s = scene("python");
+    let leak_h2 = alloc_test(&mut s.ledger, "leak", "H2");
+    let dir = s.dir.path().to_path_buf();
+    let mut a = Ledger::load_for(&dir, Some("a")).unwrap();
+    let mut b = Ledger::load_for(&dir, Some("b")).unwrap();
+    let by_b = alloc_test(&mut b, "leak", "H1");
+    tick();
+    let by_a = alloc_test(&mut a, FLAT, "H1");
+    a.finish_slice().unwrap();
+    b.finish_slice().unwrap();
+    crate::merge::merge(&dir).unwrap();
+    s.ledger = Ledger::load(&dir).unwrap();
+    assert!(s.ledger.evidence_order(&by_b) < s.ledger.evidence_order(&by_a));
+    assert!(
+        s.ledger.evidence_order(&by_b).unwrap().at > s.ledger.evidence_order(&by_a).unwrap().at,
+        "b's line is the later one in the file"
+    );
+    let (_d, view) = s.view();
+    let d = drivers_disagree(&view, &f("F1")).expect("H1 is flat now, H2 grows");
+    assert_eq!((d.flat.evidence, d.leak.evidence), (by_a, leak_h2));
 }

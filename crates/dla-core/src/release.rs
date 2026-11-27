@@ -18,7 +18,11 @@
 //!   names and tests what differs between them.
 //! * **An explanation that says the remover runs on the caller's release asks for the release
 //!   run** ([`release_untested`]): `removal: on-release` only; `conditional` asks for nothing. A
-//!   decided `N-RELEASE` sibling answers it only when it names the same remover line.
+//!   confirmed `N-RELEASE` sibling of the root answers it whatever line it names: the family's
+//!   growth was measured flat with a release called, so the finding grows only while callers skip
+//!   it, is counted apart from the leaks ([`grows_only_while_skipped`]) and is not reported as a
+//!   leak, so nothing is left to ask. A refuted sibling answers it only when it names the same
+//!   remover line: a release that did not stop the growth says nothing about another one.
 //!
 //! The ledger itself never reads a run directory, so these checks run in the command layer
 //! (`dla ledger confirm`, `refute`) and in the gate, over a [`RunView`].
@@ -189,7 +193,7 @@ fn counted_in_coverage(run_dir: &Path, harness: &str, remover: &str) -> Result<C
 /// | Runtime | Source |
 /// |---|---|
 /// | Rust, Go, Node | the `lines` of `harness/<H>/executed.json` (coverage regions, blocks, ranges), written by `dla alloc-test`; no record is [`RemoverRun::NoRecord`] |
-/// | Python | `harness/<H>/lines-<S>.json`, the agent's `line_counts` per point; no record is [`RemoverRun::NoRecord`] |
+/// | Python | `harness/<H>/lines-<S>.json`, the agent's `line_counts` per point; no record is [`RemoverRun::NoRecord`]; a record that says the agent could not count lines (`unavailable`) is [`RemoverRun::NotShown`] |
 /// | JVM, native | not counted: [`RemoverRun::NotShown`] |
 ///
 /// A record that says the tool could not count the line is [`RemoverRun::NotShown`]; a missing
@@ -227,6 +231,11 @@ pub fn remover_run(
                     manifest.id
                 ));
             };
+            // The agent said it could not count lines in this run: nothing was counted, which is
+            // not a count of 0.
+            if let Some(why) = &runs.unavailable {
+                return RemoverRun::NotShown(why.clone());
+            }
             let Some((file, line)) = split_site(remover) else {
                 return RemoverRun::NotAsked;
             };
@@ -531,9 +540,11 @@ pub struct Untested {
 }
 
 /// The explanation of `f` when it says `removal: on-release` with a remover and no `N-RELEASE`
-/// sibling of its root that names that same remover line (same line of the same file,
-/// [`same_remover`]) has been decided by a run with the release called (refuted, or confirmed
-/// which counts the finding apart). A sibling that names another release says nothing about
+/// sibling of its root has decided it. A sibling decides it when it is confirmed (whatever line
+/// it names: the family's growth was measured flat with a release called, so the finding grows
+/// only while callers skip it and is counted apart from the leaks, see
+/// [`grows_only_while_skipped`]) or refuted and names the same remover line (same line of the
+/// same file, [`same_remover`]). A refuted sibling that names another release says nothing about
 /// this one: the run called that line, not the one the explanation relies on.
 pub fn release_untested(ledger: &Ledger, f: &Finding) -> Option<Untested> {
     if f.polarity() != Polarity::Leak {
@@ -545,12 +556,16 @@ pub fn release_untested(ledger: &Ledger, f: &Finding) -> Option<Untested> {
     }
     let remover = x.remover.as_deref()?.to_owned();
     let root = f.root_id();
-    let decided = release_siblings(ledger, &root).into_iter().any(|s| {
-        matches!(s.state, FindingState::Refuted | FindingState::Confirmed)
-            && s.remover
+    let decided = release_siblings(ledger, &root)
+        .into_iter()
+        .any(|s| match s.state {
+            FindingState::Confirmed => true,
+            FindingState::Refuted => s
+                .remover
                 .as_deref()
-                .is_some_and(|r| same_remover(r, &remover))
-    });
+                .is_some_and(|r| same_remover(r, &remover)),
+            _ => false,
+        });
     if decided {
         return None;
     }
@@ -566,11 +581,11 @@ pub fn release_untested_refusal(view: &RunView, u: &Untested) -> Refusal {
     Refusal::new(
         codes::RELEASE_UNTESTED,
         format!(
-            "{} cannot be confirmed as a leak: its explanation says the holder is released by {} only when the caller calls the release, and no run called that release (no N-RELEASE sibling of {root} that names {} is decided). A caller that skips a release the API requires is misusing it, which is no leak of the library",
+            "{} cannot be confirmed as a leak: its explanation says the holder is released by {} only when the caller calls the release, and no run called that release (no N-RELEASE sibling of {root} is confirmed, and none that names {} is refuted). A caller that skips a release the API requires is misusing it, which is no leak of the library",
             u.finding, u.remover, u.remover
         ),
         format!(
-            "an N-RELEASE sibling of {root} that names {}, decided by an alloc-test with it called (refuted: the holder still grows; confirmed: the growth exists only while it is skipped, and the finding is counted apart)",
+            "an N-RELEASE sibling of {root} that names {}, decided by an alloc-test with it called (refuted: the holder still grows; confirmed: the growth exists only while it is skipped, and the finding is counted apart; a confirmed sibling that names another release decides it too, a refuted one does not)",
             u.remover
         ),
         release_route(view, &root, Some(&u.remover), None),

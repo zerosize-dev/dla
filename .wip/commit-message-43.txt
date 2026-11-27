@@ -30,16 +30,26 @@ the two drivers differ.
 - `N-RELEASE` is a new non-leak look-alike: growth only while the caller skips a release the API
   requires. Its sibling names the releasing line with `--remover`. It is decided only by an
   alloc-test on a driver made for the finding on which that line ran. Rust, Go, Node and Python
-  give a line count, and a count of 0, or a run that did not ask about the line, is refused with
-  `release-not-run`. The JVM and native code are accepted with the note "remover run not shown".
+  give a line count. A count of 0, a run that did not ask about the line, or a harness with no
+  record of its lines is refused with `release-not-run`, and the refusal names the command that
+  writes the record. The JVM, native code and a Python run whose agent could not count lines are
+  accepted with the note "remover run not shown".
   Once `N-RELEASE` is confirmed, the root is refuted by the same alloc-test. A root that was
   already confirmed keeps its state, and the report counts it apart from the leaks: "grows only
-  while callers skip the release".
+  while callers skip the release". A finding the verifier disputes is counted once, as disputed.
 - New removal kind `on-release` for `dla ledger explain`: the remover runs only when the caller
   calls the release. `dla ledger explain` now also accepts a finding that is still under test. An
   `on-release` explanation holds the confirm with `release-untested` until an `N-RELEASE` sibling
-  is decided; after a confirm, the final gate lists the same item. `conditional` asks for nothing
-  new.
+  is confirmed, or one that names the same remover line is refuted; after a confirm, the final gate
+  lists the same item. `conditional` asks for nothing new.
+- The records of a ledger are ordered by when their line was written, with the replay position
+  as the tie-break. Before, a worker's view and a merged ledger ordered them by position or by id,
+  so "the newest alloc-test of a harness" could be an older one. That happened after a merge, and
+  for a core record written while a slice was open. Ledger lines are now stamped to the
+  millisecond. A worker's final gate now sees a harness generated in the main ledger.
+- Every abort command that DLA prints runs as printed: the fix of a refused `--blocker` check, the
+  `budget-left` refusal (one command for the plain kinds and one for a refusal with its `--code`)
+  and the Stop hook, which offers the plain kinds only, to keep room for the items it lists.
 - A test of the largest descendant process no longer fails when that process exits during the
   check.
 

@@ -29,17 +29,18 @@ fn in_a_plain_ledger_the_key_is_the_line_and_the_orders_agree() {
     let second = l.add_evidence(probe()).unwrap();
     let key = |n: u32| l.evidence_order(&eid(n)).unwrap();
     // E1 to E16 are the lines 1 to 16 of the fixture; the new ones follow.
-    assert_eq!((key(1), key(16)), (1, 16));
+    assert_eq!((key(1).at, key(16).at), (1, 16));
     assert_eq!((first.seq, second.seq), (17, 18));
-    assert_eq!(key(17), 17);
-    assert_eq!(key(18), 18);
+    assert_eq!(key(17).at, 17);
+    assert_eq!(key(18).at, 18);
+    assert!(key(16) < key(17) && key(17) < key(18));
     assert_eq!(ids(&l), in_order(&l));
     // A replay of the file gives the same keys.
     let again = Ledger::load(dir.path()).unwrap();
-    assert_eq!(again.evidence_order(&eid(18)), Some(18));
+    assert_eq!(again.evidence_order(&eid(18)), Some(key(18)));
     // The finding keys count lines too: a finding's line comes after the evidence it cites.
     let f = candidate_in_slice(&mut l, "a.go:1", dla_core::finding::Holder::StaticGlobal);
-    assert_eq!(l.finding_order(&f), Some(19));
+    assert_eq!(l.finding_order(&f).map(|k| k.at), Some(19));
     assert!(l.finding_order(&fid(99)).is_none());
 }
 
@@ -58,8 +59,8 @@ fn in_a_workers_view_the_slice_comes_after_the_main_lines_it_was_started_on() {
     // slice_started is the slice's line 1: its evidence is lines 2 and 3.
     let a: dla_core::EvidenceId = "jvm/E1".parse().unwrap();
     let b: dla_core::EvidenceId = "jvm/E2".parse().unwrap();
-    assert_eq!(w.evidence_order(&a), Some(base + 2));
-    assert_eq!(w.evidence_order(&b), Some(base + 3));
+    assert_eq!(w.evidence_order(&a).map(|k| k.at), Some(base + 2));
+    assert_eq!(w.evidence_order(&b).map(|k| k.at), Some(base + 3));
     // The main line written after the slice started is not in the view at all.
     assert!(w.evidence_order(&eid(17)).is_none());
     let order = in_order(&w);
@@ -97,4 +98,56 @@ fn after_a_merge_a_main_record_written_later_is_newer_than_every_merged_one() {
     let rel = |l: &Ledger, id: &str| l.evidence_order(&id.parse().unwrap()).unwrap();
     assert!(rel(&seen, "jvm/E1") > rel(&seen, "E16"));
     assert!(rel(&main, "jvm/E1") > rel(&main, "E16"));
+}
+
+fn tick() {
+    std::thread::sleep(std::time::Duration::from_millis(5));
+}
+
+#[test]
+fn a_main_record_written_while_a_slice_is_open_is_newer_than_the_older_merged_line_after_it() {
+    let dir = new_run(&["jvm"]);
+    let mut main = Ledger::load(dir.path()).unwrap();
+    let mut w = slice(dir.path(), "jvm");
+    w.add_evidence(probe()).unwrap();
+    tick();
+    // The core writes while the slice is open: newer by time than `jvm/E1`.
+    main.add_evidence(probe()).unwrap();
+    tick();
+    w.add_evidence(probe()).unwrap();
+    w.finish_slice().unwrap();
+    merge(dir.path()).unwrap();
+    let merged = Ledger::load(dir.path()).unwrap();
+    // The merge appends the slice after the main line, so the position of `jvm/E1` is later ...
+    let key = |id: &str| merged.evidence_order(&id.parse().unwrap()).unwrap();
+    assert!(key("jvm/E1").at > key("E17").at);
+    // ... and the key still says it is older, and the worker's second record newer than both.
+    assert!(key("jvm/E1") < key("E17"));
+    assert!(key("E17") < key("jvm/E2"));
+    let order = in_order(&merged);
+    let at = |id: &str| order.iter().position(|x| x == id).unwrap();
+    assert!(at("jvm/E1") < at("E17") && at("E17") < at("jvm/E2"));
+}
+
+#[test]
+fn two_slices_merged_in_the_opposite_order_of_their_records_times_stay_in_time_order() {
+    // Slices merge by worker name: `a` first. `b` recorded first, `a` after it.
+    let dir = new_run(&["a", "b"]);
+    let mut a = slice(dir.path(), "a");
+    let mut b = slice(dir.path(), "b");
+    b.add_evidence(probe()).unwrap();
+    tick();
+    a.add_evidence(probe()).unwrap();
+    a.finish_slice().unwrap();
+    b.finish_slice().unwrap();
+    merge(dir.path()).unwrap();
+    let merged = Ledger::load(dir.path()).unwrap();
+    let key = |id: &str| merged.evidence_order(&id.parse().unwrap()).unwrap();
+    assert!(
+        key("b/E1").at > key("a/E1").at,
+        "b's line is later in the file"
+    );
+    assert!(key("b/E1") < key("a/E1"));
+    let order = in_order(&merged);
+    assert_eq!(&order[order.len() - 2..], ["b/E1", "a/E1"]);
 }

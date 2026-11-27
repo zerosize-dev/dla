@@ -870,15 +870,26 @@ fn held_item(
         })
 }
 
+/// What a held stop offers when nothing can be measured: the command that ends the run on a
+/// blocker, runnable as printed for each kind it lists. A refusal blocker also needs its `--code`;
+/// it is left to the `budget-left` refusal of `dla run abort`, which prints both forms, because
+/// the hook's text has a limit and the item texts after this note get only the room that is left.
+/// A worker runs its slice: ending the whole run is not its call, so it is offered none.
+pub(crate) fn abort_offer(worker: Option<&str>) -> String {
+    if worker.is_some() {
+        String::new()
+    } else {
+        format!(
+            " Only a blocker the run cannot pass ends it: {}.",
+            dla_core::abort_rule::ABORT_BLOCKER_COMMAND
+        )
+    }
+}
+
 /// The line that says a stop was not counted, and what to do instead.
 fn held_note(state: &RunState, worker: Option<&str>, held: &Missing) -> String {
     let (left, total) = gate::budget_over_floor(state, worker).unwrap_or((0, 0));
-    // A worker runs its slice: ending the whole run is not its call, so it is not offered one.
-    let end = if worker.is_some() {
-        String::new()
-    } else {
-        " Only a blocker the run cannot pass ends it: dla run abort --blocker <kind> --reason \"<what blocks the run>\".".to_owned()
-    };
+    let end = abort_offer(worker);
     if held.kind == "growth" {
         // The fix is the commands in order; the first is the one to run now, without its comment.
         let first = held.fix.split("   then   ").next().unwrap_or(&held.fix);

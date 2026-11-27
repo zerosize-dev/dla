@@ -363,8 +363,10 @@ pub fn run(ctx: &Ctx, project: &Path, a: AbortArgs) -> Res<Value> {
                 ),
                 "the open work done, or a blocker the run cannot pass",
                 format!(
-                    "{}   or   dla run abort --blocker <user|tool|build|environment|privilege|refusal> --reason \"<what blocks the run>\"",
-                    open.first
+                    "{}   or   {}   or   {}",
+                    open.first,
+                    abort_rule::ABORT_BLOCKER_COMMAND,
+                    abort_rule::ABORT_REFUSAL_COMMAND
                 ),
             ));
         }
@@ -507,6 +509,55 @@ mod tests {
             assert!(
                 abort_rule::check_blocker(blocker, a.reason.as_deref(), a.code.as_deref()).is_ok(),
                 "{kind}: the fix is refused again: {fix}"
+            );
+        }
+    }
+
+    /// Every command the `budget-left` refusal and the Stop hook print for ending a run on a
+    /// blocker runs as printed for every choice of the blocker: the argument parser accepts it
+    /// and `check_blocker` accepts its arguments.
+    #[test]
+    fn every_choice_of_the_printed_abort_commands_runs_as_printed() {
+        let hook = crate::gate_hooks::abort_offer(None);
+        assert!(crate::gate_hooks::abort_offer(Some("w")).is_empty());
+        let refusal_fix = format!(
+            "dla ledger add   or   {}   or   {}",
+            abort_rule::ABORT_BLOCKER_COMMAND,
+            abort_rule::ABORT_REFUSAL_COMMAND
+        );
+        let mut seen: Vec<String> = Vec::new();
+        for printed in [hook.as_str(), refusal_fix.as_str()] {
+            // The commands inside the text: each starts at `dla run abort`.
+            for part in printed.split("dla run abort").skip(1) {
+                let end = part.find("   or   ").unwrap_or(part.len());
+                let command = format!("dla run abort{}", part[..end].trim_end_matches('.'));
+                // Fill the one choice `<a|b|c>` with each alternative.
+                let alternatives: Vec<String> = match (command.find('<'), command.find('>')) {
+                    (Some(a), Some(b)) if command[a..b].contains('|') => command[a + 1..b]
+                        .split('|')
+                        .map(|alt| format!("{}{alt}{}", &command[..a], &command[b + 1..]))
+                        .collect(),
+                    _ => vec![command.clone()],
+                };
+                for c in alternatives {
+                    let words = filled(&c);
+                    let cli = crate::Cli::try_parse_from(&words)
+                        .unwrap_or_else(|e| panic!("does not parse: {c}\n{e}"));
+                    let crate::Command::Run(crate::run::RunCmd::Abort(a)) = cli.command else {
+                        panic!("not `dla run abort`: {c}");
+                    };
+                    let blocker = a.blocker.as_deref().expect("a blocker");
+                    abort_rule::check_blocker(blocker, a.reason.as_deref(), a.code.as_deref())
+                        .unwrap_or_else(|e| panic!("refused as printed: {c}\n{e:?}"));
+                    seen.push(blocker.to_owned());
+                }
+            }
+        }
+        // Every kind is offered, and the refusal with its code.
+        for kind in abort_rule::BLOCKER_KINDS {
+            assert!(
+                seen.iter().any(|k| k == kind),
+                "{kind} is never offered: {seen:?}"
             );
         }
     }

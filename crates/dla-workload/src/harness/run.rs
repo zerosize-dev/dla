@@ -936,9 +936,22 @@ impl Paths {
     }
 }
 
-/// Writes `harness/<H>/lines-<S>.json` when the records of the points carry line counts: per
-/// line, one count per point of the series. Never fails the run (the file is a reading aid).
+/// Writes `harness/<H>/lines-<S>.json` when the records of the points carry line counts, or say
+/// the agent could not count (see [`line_runs_of`]). Never fails the run (the file is a reading
+/// aid).
 fn write_line_runs(ctx: &ToolCtx, manifest: &HarnessManifest, series: &str, points: &[PointInput]) {
+    if let Some(runs) = line_runs_of(series, points) {
+        let _ = runs.save(&ctx.run_dir, &manifest.id);
+    }
+}
+
+/// The content of the lines file of a series: per line, one count per point of the series. When
+/// no point carries counts but a record says the agent could not count them (another tool traces
+/// the process, or the tracer could not be installed: a limitation that starts with
+/// [`dla_core::harness::LINE_COUNTS_UNAVAILABLE`]), the file has no sites and carries that note,
+/// so a run whose release cannot be counted is told apart from a run that left no record. `None`
+/// when the records say nothing about lines.
+fn line_runs_of(series: &str, points: &[PointInput]) -> Option<dla_core::harness::LineRuns> {
     let mut sites: std::collections::BTreeMap<String, Vec<Option<f64>>> = Default::default();
     for p in points {
         for site in p
@@ -951,7 +964,18 @@ fn write_line_runs(ctx: &ToolCtx, manifest: &HarnessManifest, series: &str, poin
         }
     }
     if sites.is_empty() {
-        return;
+        let why = points
+            .iter()
+            .filter_map(|p| p.rec.as_ref()?.dump.limitations.as_ref())
+            .find_map(|l| {
+                dla_core::harness::LineRuns::unavailable_note(l.iter().map(String::as_str))
+            })?;
+        return Some(dla_core::harness::LineRuns {
+            dla_line_runs: 1,
+            series: series.to_owned(),
+            sites,
+            unavailable: Some(why.to_owned()),
+        });
     }
     for (site, counts) in &mut sites {
         *counts = points
@@ -964,12 +988,12 @@ fn write_line_runs(ctx: &ToolCtx, manifest: &HarnessManifest, series: &str, poin
             })
             .collect();
     }
-    let _ = dla_core::harness::LineRuns {
+    Some(dla_core::harness::LineRuns {
         dla_line_runs: 1,
         series: series.to_owned(),
         sites,
-    }
-    .save(&ctx.run_dir, &manifest.id);
+        unavailable: None,
+    })
 }
 
 /// The writer lines (project-relative file, 1-based line) of the findings a harness targets or
@@ -4321,6 +4345,62 @@ mod test_hooks {
 
 #[cfg(test)]
 mod tests {
+    use crate::harness::{build::PointInput, dumps::parse_record};
+    use dla_core::harness::LINE_COUNTS_UNAVAILABLE;
+
+    fn point(mut rec: serde_json::Value) -> PointInput {
+        rec["dla_harness"] = 1.into();
+        rec["phase"] = "exit".into();
+        PointInput {
+            rec: parse_record(&rec.to_string()),
+            ..PointInput::default()
+        }
+    }
+
+    #[test]
+    fn a_run_whose_agent_could_not_count_lines_writes_a_file_that_says_so() {
+        let note = format!(
+            "{LINE_COUNTS_UNAVAILABLE}: another tool already traces this process (sys.settrace)"
+        );
+        let blind = vec![
+            point(serde_json::json!({"limitations": ["other", note]})),
+            point(serde_json::json!({"limitations": [note]})),
+        ];
+        let runs = super::line_runs_of("S1", &blind).expect("a file is written");
+        assert!(runs.sites.is_empty());
+        assert_eq!(runs.unavailable.as_deref(), Some(note.as_str()));
+        assert_eq!(runs.series, "S1");
+        // Records that say nothing about lines write nothing (a missing file stays a missing record).
+        let silent = vec![
+            point(serde_json::json!({"limitations": ["other"]})),
+            point(serde_json::json!({})),
+        ];
+        assert!(super::line_runs_of("S1", &silent).is_none());
+        // Counts win over a note of another point: the counts are the record.
+        let counted = vec![
+            point(serde_json::json!({"line_counts": {"a.py:3": 4}})),
+            point(serde_json::json!({"limitations": [note]})),
+        ];
+        let runs = super::line_runs_of("S1", &counted).unwrap();
+        assert_eq!(runs.unavailable, None);
+        assert_eq!(runs.sites["a.py:3"], vec![Some(4.0), None]);
+    }
+
+    #[test]
+    fn every_note_the_python_agent_gives_for_lines_it_could_not_count_starts_with_the_marker() {
+        let notes: Vec<&str> = crate::harness::templates::PY_AGENT
+            .lines()
+            .filter(|l| l.contains("_lines[\"note\"] = "))
+            .collect();
+        assert!(notes.len() >= 2, "{notes:?}");
+        for n in notes {
+            assert!(
+                n.contains(&format!("\"{LINE_COUNTS_UNAVAILABLE}")),
+                "an agent note that the marker does not match: {n}"
+            );
+        }
+    }
+
     #[test]
     fn a_pinned_toolchain_is_read_from_the_toml_or_the_bare_file_at_or_above_the_crate() {
         let dir = tempfile::tempdir().unwrap();

@@ -1639,9 +1639,27 @@ pub struct LineRuns {
     /// count for the line (a point that lost its sections, an agent that does not count).
     #[serde(default)]
     pub sites: BTreeMap<String, Vec<Option<f64>>>,
+    /// Why the agent could not count lines in this run (its own note, which starts with
+    /// [`LINE_COUNTS_UNAVAILABLE`]); the file then has no `sites`, and that says nothing about
+    /// whether any line ran. Files written before this field existed load without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable: Option<String>,
 }
 
+/// What every note of the Python agent that says it could not count lines starts with (its
+/// `limitations` entries "line counts unavailable: another tool already traces this process" and
+/// "line counts unavailable: sys.settrace could not be installed"). The agent has no code for it,
+/// only this lead, so it is the one stable marker; a test reads the agent's source for it.
+pub const LINE_COUNTS_UNAVAILABLE: &str = "line counts unavailable";
+
 impl LineRuns {
+    /// The note of `limitations` that says the agent could not count lines, if any.
+    pub fn unavailable_note<'a>(limitations: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+        limitations
+            .into_iter()
+            .find(|l| l.starts_with(LINE_COUNTS_UNAVAILABLE))
+    }
+
     /// Reads the file of `series`; `None` when there is none or it cannot be read.
     pub fn load(run_dir: &Path, harness: &str, series: &str) -> Option<Self> {
         let text = fs::read_to_string(line_runs_path(run_dir, harness, series)).ok()?;
@@ -1807,6 +1825,7 @@ mod tests {
                 ("a.py:2".to_owned(), vec![Some(0.0), Some(0.0), Some(0.0)]),
                 ("a.py:3".to_owned(), vec![Some(1.0), None, None]),
             ]),
+            unavailable: None,
         };
         // The warm-up point is skipped, a point with no count is skipped.
         assert_eq!(runs.span("a.py:1", 1), Some((10.0, 30.0)));

@@ -105,6 +105,15 @@ impl Blocker {
     }
 }
 
+/// The command that ends a run on a blocker of any kind but a refusal, as refusals and hooks
+/// print it: run as printed once the `<placeholder>` and the one `a|b|c` choice are filled in.
+pub const ABORT_BLOCKER_COMMAND: &str = "dla run abort --blocker <user|tool|build|environment|privilege> --reason \"<what blocks the run>\"";
+
+/// The command that ends a run on a refusal it cannot satisfy: `--blocker refusal` is refused
+/// without `--code`, so it is printed apart from [`ABORT_BLOCKER_COMMAND`].
+pub const ABORT_REFUSAL_COMMAND: &str =
+    "dla run abort --blocker refusal --code <refusal code> --reason \"<what blocks the run>\"";
+
 /// Checks the `--blocker`, `--reason` and `--code` of an abort. The error is the code and the
 /// message of the refusal and its fix: a whole `dla run abort ...` command that is accepted as
 /// printed once its `<placeholders>` and its one `a|b|c` choice are filled in.

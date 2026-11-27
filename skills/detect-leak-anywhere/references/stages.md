@@ -456,11 +456,12 @@ For each passed column tied to a candidate `F3`:
   refuted by a new alloc-test on a driver made for the finding.
 - An explanation that says `removal: on-release` with a remover (`dla ledger explain F3 --removal on-release
   --remover <file:line>`, accepted for a finding under test as well as a confirmed one) asks for the same run
-  with the release called: until an `N-RELEASE` sibling of the root that names that same remover line is
-  decided, `dla ledger confirm` is refused (`release-untested`) and a confirmed finding is listed by the final
-  gate under that name; a sibling that names another release decides nothing about this one. With the sibling
-  confirmed the report counts the finding apart ("grows only while callers skip the release"), never as a
-  confirmed leak.
+  with the release called: until an `N-RELEASE` sibling of the root has decided it, `dla ledger confirm` is
+  refused (`release-untested`) and a confirmed finding is listed by the final gate under that name. A
+  confirmed sibling decides it whatever remover it names (the growth was measured flat with a release called,
+  so the report counts the finding apart, "grows only while callers skip the release", never as a confirmed
+  leak); a refuted sibling decides it only when it names that same remover line (a release that did not stop
+  the growth says nothing about another one).
 - `dla ledger test F3 --evidence E9`, citing the harness `workload` evidence.
 - `dla alloc-test H1 --finding F3` re-runs the harness with extra points and a purge and records a
   discriminator whose `favors` is `leak`, `non-leak` or `inconclusive`. The alloc-test runs on a harness that

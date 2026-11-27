@@ -120,6 +120,7 @@ impl R {
             dla_line_runs: 1,
             series: "S1".into(),
             sites: serde_json::from_value(json!({"lib/enc.py:30": counts})).unwrap(),
+            unavailable: None,
         }
         .save(&self.run_dir, harness)
         .unwrap();
@@ -130,6 +131,7 @@ impl R {
             dla_line_runs: 1,
             series: "S1".into(),
             sites: serde_json::from_value(sites).unwrap(),
+            unavailable: None,
         }
         .save(&self.run_dir, harness)
         .unwrap();
@@ -362,6 +364,7 @@ fn only_a_run_in_which_the_release_ran_decides_n_release() {
         dla_line_runs: 1,
         series: "S1".into(),
         sites: serde_json::from_value(json!({"lib/enc.py:5": [1, 2]})).unwrap(),
+        unavailable: None,
     }
     .save(&r.run_dir, "H10")
     .unwrap();
@@ -432,6 +435,34 @@ fn a_runtime_that_cannot_count_the_line_is_accepted_with_a_note_the_report_print
         "{}",
         r.report()
     );
+}
+
+#[test]
+fn a_python_run_whose_agent_could_not_count_lines_is_noted_and_one_with_no_record_is_refused() {
+    let (r, flat, _, w10) = disagreeing("python");
+    let sib = r.add_release(&flat);
+    r.ok(&["ledger", "test", &sib, "--evidence", &w10]);
+    r.ok(&["ledger", "refute", "F1", "--evidence", &flat]);
+    // No lines file at all: nothing shows the release ran.
+    r.refused(
+        &["ledger", "confirm", &sib, "--evidence", &flat],
+        "release-not-run",
+    );
+    // The file `dla harness run` writes when the records of the run carry the agent's note that
+    // it could not count lines (another tool already traces the process).
+    LineRuns {
+        dla_line_runs: 1,
+        series: "S1".into(),
+        sites: Default::default(),
+        unavailable: Some(
+            "line counts unavailable: another tool already traces this process (sys.settrace)"
+                .into(),
+        ),
+    }
+    .save(&r.run_dir, "H10")
+    .unwrap();
+    let v = r.ok(&["ledger", "confirm", &sib, "--evidence", &flat]);
+    assert_eq!(v["note"], "remover run not shown", "{v}");
 }
 
 #[test]
@@ -648,6 +679,77 @@ fn a_sibling_that_names_another_release_does_not_lift_the_hold_of_an_explanation
     );
     r.ok(&["ledger", "refute", &same, "--evidence", &leak]);
     r.ok(&["ledger", "confirm", "F1", "--evidence", &g]);
+}
+
+/// F1 is confirmed and explained as released by `lib/enc.py:30` only when the caller calls it;
+/// a sibling of F1.n1 on `H11` names `lib/enc.py:35` instead.
+fn confirmed_with_an_on_release_explanation(r: &R) -> String {
+    let leak = r.alloc("H10", "leak");
+    r.ok(&["ledger", "refute", "F1.n1", "--evidence", &leak]);
+    let g = r.growth.clone();
+    r.ok(&["ledger", "confirm", "F1", "--evidence", &g]);
+    explain_removed(r, "on-release");
+    assert!(
+        r.final_gate()
+            .iter()
+            .any(|m| m["kind"] == "release-untested"),
+        "the release was not tested"
+    );
+    r.driver("H11");
+    leak
+}
+
+fn workload_of(r: &R, harness: &str) -> String {
+    r.evidence(
+        EvidenceKind::Workload,
+        json!({"harness": harness, "mode": "driver", "runtime": "python", "series": ["S1"]}),
+    )
+}
+
+#[test]
+fn a_confirmed_sibling_naming_another_release_clears_the_hold_and_the_report_counts_the_finding_apart()
+ {
+    let (r, _) = scene("python");
+    confirmed_with_an_on_release_explanation(&r);
+    let w = workload_of(&r, "H11");
+    let flat = r.alloc("H11", "non-leak");
+    let other = r.add_release_at(&flat, "lib/enc.py:35");
+    r.ok(&["ledger", "test", &other, "--evidence", &w]);
+    r.release_counts_at("H11", json!({"lib/enc.py:35": [0, 7, 15]}));
+    r.ok(&["ledger", "confirm", &other, "--evidence", &flat]);
+    // The gate and the report agree: the finding grows only while callers skip a release.
+    assert!(
+        !r.final_gate()
+            .iter()
+            .any(|m| m["kind"] == "release-untested"),
+        "{:?}",
+        r.final_gate()
+    );
+    let md = r.report();
+    assert!(
+        md.contains("confirmed 0, grows only while callers skip the release: 1"),
+        "{md}"
+    );
+}
+
+#[test]
+fn a_refuted_sibling_naming_another_release_keeps_the_hold_and_the_finding_stays_a_leak() {
+    let (r, _) = scene("python");
+    let leak = confirmed_with_an_on_release_explanation(&r);
+    let w = workload_of(&r, "H10");
+    let other = r.add_release_at(&leak, "lib/enc.py:35");
+    r.ok(&["ledger", "test", &other, "--evidence", &w]);
+    r.release_counts_at("H10", json!({"lib/enc.py:35": [0, 5, 9]}));
+    r.ok(&["ledger", "refute", &other, "--evidence", &leak]);
+    assert!(
+        r.final_gate()
+            .iter()
+            .any(|m| m["kind"] == "release-untested" && m["id"] == "F1"),
+        "{:?}",
+        r.final_gate()
+    );
+    let md = r.report();
+    assert!(md.contains("leak hypotheses: confirmed 1"), "{md}");
 }
 
 #[test]

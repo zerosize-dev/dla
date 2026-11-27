@@ -682,6 +682,50 @@ fn worker_mode_refuses_and_lists_the_harness_of_its_own_runtime() {
 }
 
 #[test]
+fn a_harness_generated_in_the_main_ledger_is_listed_by_the_workers_final_gate_too() {
+    // The core generates H1 (`dla harness gen` writes its record to the main ledger); the worker
+    // of the same runtime closed a finding of its own without running it. The worker's ledger
+    // view holds only its own slice lines, and the core's mode lists H1 all the same.
+    let dir = tempfile::tempdir().unwrap();
+    let o = base(dir.path())
+        .env("DLA_CONSENT_TIERS", "1,2")
+        .args(["run", "init", "--session-id", "t", "--entry", "repository"])
+        .output()
+        .unwrap();
+    let v: Value = serde_json::from_slice(&o.stdout).unwrap();
+    let r = Run {
+        run_id: v["run_id"].as_str().unwrap().to_owned(),
+        dir,
+    };
+    r.ok(&["run", "dispatch", "--workers", "jvm"]);
+    manifest(Runtime::Jvm).save(&r.run_dir()).unwrap();
+    unfilled_driver(&r, "H1");
+    gen_evidence(&r, None);
+    {
+        let main = Ledger::load(&r.run_dir()).unwrap();
+        let e = main.evidence().last().unwrap().evidence_id.clone();
+        let mut l = Ledger::load_for(&r.run_dir(), Some("jvm")).unwrap();
+        let mut nf = NewFinding::new(Origin::parse("hypothesis").unwrap(), vec![e]);
+        nf.site = Some("a/B.kt:1".into());
+        l.add_finding(nf).unwrap();
+        l.transition(
+            &"jvm/F1".parse().unwrap(),
+            dla_core::FindingState::Unresolved,
+            Some(dla_core::UnresolvedReason::NoHarness),
+            Some("x".into()),
+            vec![],
+            "t",
+        )
+        .unwrap();
+    }
+    assert_eq!(r.not_run(Some("jvm")), ["H1"]);
+    // The worker's blocker answer, recorded after the generation (in its slice, the harness is in
+    // the main ledger), clears it.
+    answer_workload_blocker(&r, Some("jvm"), "env_unavailable");
+    assert!(r.not_run(Some("jvm")).is_empty());
+}
+
+#[test]
 fn a_workers_nearer_deadline_lifts_the_rule_for_its_findings() {
     // The run has 60 minutes left; the worker has 5, so it may close without running.
     let r = scene(Runtime::Jvm, Some("jvm"));

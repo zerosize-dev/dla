@@ -1667,7 +1667,7 @@ fn an_open_queue_with_budget_over_the_floor_is_not_given_up_by_four_stop_attempt
         assert!(reason.contains(" budget minutes remain and the python queue is open. Run its next batch (dla harness gen --lang python --driver --next)"), "{reason}");
         // The next measurement first; the abort only for a blocker, never a plain one.
         assert!(
-            reason.contains("dla run abort --blocker <kind> --reason \"<what blocks the run>\""),
+            reason.contains("dla run abort --blocker <user|tool|build|environment|privilege> --reason \"<what blocks the run>\""),
             "{reason}"
         );
         assert!(!reason.contains("dla run abort --reason"), "{reason}");
@@ -1975,7 +1975,7 @@ fn growth_measured_and_not_decided_with_budget_over_the_floor_is_not_given_up_by
             "{reason}"
         );
         assert!(
-            reason.contains("dla run abort --blocker <kind> --reason \"<what blocks the run>\"")
+            reason.contains("dla run abort --blocker <user|tool|build|environment|privilege> --reason \"<what blocks the run>\"")
                 && !reason.contains("dla run abort --reason"),
             "{reason}"
         );
@@ -2166,7 +2166,7 @@ fn a_plain_abort_with_an_open_queue_and_budget_left_is_refused_and_names_the_nex
     );
     let fix = e["fix"].as_str().unwrap();
     assert!(
-        fix.starts_with("dla harness gen --lang python --driver --next   or   dla run abort --blocker <user|tool|build|environment|privilege|refusal> --reason \"<what blocks the run>\""),
+        fix.starts_with("dla harness gen --lang python --driver --next   or   dla run abort --blocker <user|tool|build|environment|privilege> --reason \"<what blocks the run>\"   or   dla run abort --blocker refusal --code <refusal code> --reason "),
         "{fix}"
     );
     // A reason alone does not make it pass, whatever it says.
@@ -2315,7 +2315,7 @@ fn a_plain_abort_with_an_undecided_growth_is_refused_and_names_its_first_command
     assert!(fix.starts_with("dla "), "{fix}");
     assert!(
         fix.contains(
-            "   or   dla run abort --blocker <user|tool|build|environment|privilege|refusal>"
+            "   or   dla run abort --blocker <user|tool|build|environment|privilege> --reason"
         ),
         "{fix}"
     );

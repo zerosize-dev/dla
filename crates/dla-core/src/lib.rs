@@ -104,7 +104,7 @@ pub use evidence::{
 pub use finding::{Finding, FindingState, Origin, UNCLASSIFIED, UnresolvedReason};
 pub use harness::{HarnessDump, HarnessManifest};
 pub use ids::{EvidenceId, FindingId, OpenItemId};
-pub use ledger::{Annotation, HolderChange, Ledger, NewFinding, OpenItemState};
+pub use ledger::{Annotation, HolderChange, Ledger, NewFinding, OpenItemState, RecordOrder};
 pub use record::{
     FindingAnnotation, FindingExplained, FindingLabeled, FindingMerged, IntegrityResealed,
     LabelSatisfied, LedgerLine, Record, RemovalClaim, Resolution, SliceDone, SliceMerged,

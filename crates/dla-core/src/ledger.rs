@@ -212,15 +212,28 @@ struct Index {
     explanations: BTreeMap<FindingId, FindingExplained>,
     /// Every `integrity_resealed` record, oldest first (schema 6).
     reseals: Vec<IntegrityResealed>,
-    /// Records committed so far: the main ledger's line count after a plain replay, and the
-    /// slice's own lines counted on top of the main lines under it in a worker slice.
+    /// Records committed so far: the tie-break of [`RecordOrder`].
     clock: u64,
     /// The chronological key of every evidence record (see [`Ledger::evidence_order`]).
-    evidence_order: BTreeMap<EvidenceId, u64>,
+    evidence_order: BTreeMap<EvidenceId, RecordOrder>,
     /// The chronological key of every `finding_added` record.
-    finding_order: BTreeMap<FindingId, u64>,
+    finding_order: BTreeMap<FindingId, RecordOrder>,
     /// The chronological key of the latest transition of a finding to `confirmed`.
-    confirmed_order: BTreeMap<FindingId, u64>,
+    confirmed_order: BTreeMap<FindingId, RecordOrder>,
+    /// Every checklist answer with its key, in replay order (`answers` keeps only the latest
+    /// per item).
+    answer_log: Vec<(RecordOrder, ChecklistAnswer)>,
+}
+
+/// The chronological key of a record: when its line was written (`ts`; a merged line keeps its
+/// worker's), and its replay position as the tie-break. Compare keys with `Ord`; the position
+/// alone is no clock, because a merge appends a slice's lines after main lines that may be newer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RecordOrder {
+    /// The `ts` of the record's line.
+    pub ts: DateTime<Utc>,
+    /// Records committed up to and including this one (the tie-break when `ts` is equal).
+    pub at: u64,
 }
 
 impl Index {
@@ -243,6 +256,7 @@ impl Index {
             evidence_order: BTreeMap::new(),
             finding_order: BTreeMap::new(),
             confirmed_order: BTreeMap::new(),
+            answer_log: Vec::new(),
         }
     }
 }
@@ -337,10 +351,10 @@ impl EvidenceLookup for Index {
         self.evidence.get(id)
     }
     fn evidence_ids(&self) -> Vec<EvidenceId> {
-        let mut ids: Vec<(u64, &EvidenceId)> = self
+        let mut ids: Vec<(Option<RecordOrder>, &EvidenceId)> = self
             .evidence
             .keys()
-            .map(|id| (self.evidence_order.get(id).copied().unwrap_or(0), id))
+            .map(|id| (self.evidence_order.get(id).copied(), id))
             .collect();
         ids.sort_by_key(|(at, _)| *at);
         ids.into_iter().map(|(_, id)| id.clone()).collect()
@@ -1606,9 +1620,9 @@ impl Index {
     }
 
     /// Applies a record that [`Index::check`] accepted. Cannot fail.
-    fn commit(&mut self, record: &Record, version: u32) {
+    fn commit(&mut self, record: &Record, version: u32, ts: DateTime<Utc>) {
         self.clock += 1;
-        let at = self.clock;
+        let at = RecordOrder { ts, at: self.clock };
         match record {
             Record::Evidence(e) => {
                 self.evidence.insert(e.evidence_id.clone(), e.clone());
@@ -1666,6 +1680,7 @@ impl Index {
             }
             Record::ChecklistAnswer(a) => {
                 self.answers.insert(a.item.clone(), a.clone());
+                self.answer_log.push((at, a.clone()));
             }
             Record::FindingAnnotated(a) => {
                 if let Some(f) = self.findings.get_mut(&a.finding) {
@@ -1844,6 +1859,14 @@ impl Pending {
             version: LEDGER_SCHEMA_VERSION,
         }
     }
+}
+
+/// The `ts` of a line written now: to the millisecond, because [`RecordOrder`] is keyed on it and
+/// a core record written while a worker's slice is open lands in the same second as the worker's
+/// (whole seconds would leave the order of the two to the position of the merged line).
+fn line_ts() -> DateTime<Utc> {
+    let now = Utc::now();
+    DateTime::from_timestamp_millis(now.timestamp_millis()).unwrap_or(now)
 }
 
 fn replay_err(path: Option<&Path>, line: u64, malformed: bool, refusal: Refusal) -> Error {
@@ -2135,7 +2158,8 @@ impl Ledger {
                     }
                     replay_err(p, n, false, r)
                 })?;
-            self.index.commit(&line.record, line.schema_version);
+            self.index
+                .commit(&line.record, line.schema_version, line.ts);
             self.lines.push(line);
         }
         Ok(())
@@ -2236,34 +2260,41 @@ impl Ledger {
     }
     /// All evidence, oldest first: by [`Ledger::evidence_order`].
     pub fn evidence_in_order(&self) -> impl Iterator<Item = &EvidenceRecord> {
-        let mut rows: Vec<(u64, &EvidenceRecord)> = self
+        let mut rows: Vec<(Option<RecordOrder>, &EvidenceRecord)> = self
             .index
             .evidence
             .iter()
-            .map(|(id, e)| (self.index.evidence_order.get(id).copied().unwrap_or(0), e))
+            .map(|(id, e)| (self.index.evidence_order.get(id).copied(), e))
             .collect();
         rows.sort_by_key(|(at, _)| *at);
         rows.into_iter().map(|(_, e)| e)
     }
-    /// The chronological key of evidence `id`: the line it was written at. Valid in a plain
-    /// ledger (its `seq`), in a merged one (the main `seq` of the line the merge or the core
-    /// wrote, so a main record recorded after a merge is newer than every merged one) and in a
-    /// worker's view (the main records the slice was started on keep their main `seq`, the
-    /// slice's own come after them: `base_len + slice seq`). A worker's view stops at the
-    /// `base_seq` its slice recorded, so main lines written while the slice was open are not in
-    /// it, and nothing in the view can sort between its two parts.
-    pub fn evidence_order(&self, id: &EvidenceId) -> Option<u64> {
+    /// The chronological key of evidence `id`: the `ts` of the line it was written at, with the
+    /// replay position as the tie-break (see [`RecordOrder`]). Valid in a plain ledger, in a
+    /// merged one (a merged line keeps its worker's `ts`, so a main record written while the
+    /// slice was open sorts by when it was written, not after the merge appended the slice) and in
+    /// a worker's view (the main lines up to the slice's `base_seq` come first in replay, and the
+    /// slice's own lines are later by `ts`; the position keeps that order when `ts` ties).
+    pub fn evidence_order(&self, id: &EvidenceId) -> Option<RecordOrder> {
         self.index.evidence_order.get(id).copied()
     }
     /// The chronological key of finding `id` (the line that added it), as
     /// [`Ledger::evidence_order`].
-    pub fn finding_order(&self, id: &FindingId) -> Option<u64> {
+    pub fn finding_order(&self, id: &FindingId) -> Option<RecordOrder> {
         self.index.finding_order.get(id).copied()
     }
     /// The chronological key of the latest transition of `id` to `confirmed`, as
     /// [`Ledger::evidence_order`]; `None` when it never was.
-    pub fn confirmed_order(&self, id: &FindingId) -> Option<u64> {
+    pub fn confirmed_order(&self, id: &FindingId) -> Option<RecordOrder> {
         self.index.confirmed_order.get(id).copied()
+    }
+    /// Every checklist answer ever recorded (the latest per item is [`Ledger::answers`]), oldest
+    /// first by its key (see [`RecordOrder`]).
+    pub fn answers_in_order(&self) -> Vec<(RecordOrder, &ChecklistAnswer)> {
+        let mut rows: Vec<(RecordOrder, &ChecklistAnswer)> =
+            self.index.answer_log.iter().map(|(k, a)| (*k, a)).collect();
+        rows.sort_by_key(|(k, _)| *k);
+        rows
     }
     /// One evidence record.
     pub fn evidence_by_id(&self, id: &EvidenceId) -> Option<&EvidenceRecord> {
@@ -2518,12 +2549,12 @@ impl Ledger {
             let line = LedgerLine {
                 schema_version: p.version,
                 seq,
-                ts: p.ts.unwrap_or_else(now_utc),
+                ts: p.ts.unwrap_or_else(line_ts),
                 worker: p.worker,
                 record: p.record,
             };
             if let Some(t) = trial.as_mut() {
-                t.commit(&line.record, line.schema_version);
+                t.commit(&line.record, line.schema_version, line.ts);
             }
             new_lines.push(line);
         }
@@ -2590,7 +2621,7 @@ impl Ledger {
             Some(t) => self.index = t,
             None => {
                 for l in &new_lines {
-                    self.index.commit(&l.record, l.schema_version);
+                    self.index.commit(&l.record, l.schema_version, l.ts);
                 }
             }
         }
@@ -2610,7 +2641,7 @@ impl Ledger {
             let mut trial = self.index.clone();
             for p in &batch {
                 trial.check(&p.record, p.version)?;
-                trial.commit(&p.record, p.version);
+                trial.commit(&p.record, p.version, p.ts.unwrap_or_else(line_ts));
             }
             self.mark_running()?;
         }
