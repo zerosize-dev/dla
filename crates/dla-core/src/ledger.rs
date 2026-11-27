@@ -2661,9 +2661,8 @@ impl Ledger {
             let mut trial = self.index.clone();
             for p in &batch {
                 trial.check(&p.record, p.version)?;
-                let ts = p
-                    .ts
-                    .unwrap_or_else(|| floored_ts(line_ts(), trial.latest_ts));
+                let ts =
+                    p.ts.unwrap_or_else(|| floored_ts(line_ts(), trial.latest_ts));
                 trial.commit(&p.record, p.version, ts);
             }
             self.mark_running()?;

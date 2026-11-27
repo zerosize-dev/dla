@@ -1085,9 +1085,7 @@ mod tests {
     #[test]
     fn a_refusal_in_the_second_of_the_finding_counts() {
         let dir = tempfile::tempdir().unwrap();
-        let line = |ts: &str| {
-            format!("{}\n", json!({"ts": ts, "worker": null, "none_fits": true}))
-        };
+        let line = |ts: &str| format!("{}\n", json!({"ts": ts, "worker": null, "none_fits": true}));
         let since = chrono::DateTime::parse_from_rfc3339("2030-01-01T12:00:00.400Z")
             .unwrap()
             .to_utc();
