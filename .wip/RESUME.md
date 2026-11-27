@@ -3947,3 +3947,10 @@ unattended run at a time and no builder beside it.
 - Snapshot ebedb11 (S2+S3+Rust-only release) CI running; u163/check.sh full suite running.
 - Next builder S4 brief: wip-notes/one-block-brief.md (part A review fixes, part B one block that grows:
   B1 rule, B2 plateau, B3 geometric points, B4 lead/close). Start only after check.sh ends.
+
+## CI on ebedb11 (S2+S3), run 45988169286
+- First attempt: 14/15 green; "clippy and test (ubuntu-latest)" failed on the known flake
+  alloc_test_jvm.rs:289 (unbound alloc-test: os.rss favors leak, plateau inconclusive; tasks 99/110,
+  same line flaked on cd80aaa). rerun_failed_jobs queued; waiter b3unnbb9g (out u163/ci-rerun).
+- If green: commit-snapshot-tree.sh ebedb11 commit-message-46.txt; push main + dev.
+- Builder S4 (a111d7574fd82a359) is in its local dynamic bench (jvm-pool-warmup FAIL seen, known flaky).
