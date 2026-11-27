@@ -19,6 +19,17 @@ skill and agents drive the investigation; the binary decides what may be recorde
 
 For the limits of what a run can establish, read [What DLA cannot see](docs/what-dla-cannot-see.md).
 
+## Found with DLA
+
+Memory leaks in open-source projects that were found with DLA and fixed upstream.
+
+- [Spring Boot Admin](https://github.com/codecentric/spring-boot-admin) server: the client that
+  talks to registered instances kept a connection pool for every instance address it had reached,
+  so each instance that went away (a restarted or rescaled pod, for example) left its pool and
+  idle connections behind. Fixed in
+  [codecentric/spring-boot-admin#5949](https://github.com/codecentric/spring-boot-admin/pull/5949),
+  merged November 2026.
+
 ## Status
 
 Pre-release, milestone M6 (archetype labels, strong findings, explanations, gates, hooks and
