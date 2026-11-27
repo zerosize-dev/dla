@@ -3988,3 +3988,9 @@ unattended run at a time and no builder beside it.
   phase=="checkpoint" filter alone already drops the shim's exit record (the shim writes only exit
   records), so the runtime check is a redundant guard; accepted, no new test.
 - Drafted wip-notes/jvm-flake-brief.md for task 99 (builder after r8; scratch u167).
+- snapshot 84bd3de (CI candidate, S4+F1-F4); CI waiter bmf0uvfnh -> u166/ci; local suite b0tadfjvk -> u166/check.log
+- u166 suite ALL GREEN: 2817 passed 0 failed (u165 2812+1 flake); fmt, clippy, build, schema ok. Waiting CI bmf0uvfnh.
+- Owner asked for a README "Found with DLA" list; first item codecentric/spring-boot-admin#5949 (merged
+  Nov 27, author ngriaznov). Committed README-only 8360432 [skip ci] on main, pushed main + dev.
+  !! The S4 commit must NOT use snapshot 84bd3de's tree (it would revert README): use snapshot
+  taken after 8360432 (tree = 84bd3de code + README), checked to differ from 84bd3de only in README/.wip.
