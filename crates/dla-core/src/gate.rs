@@ -1285,13 +1285,40 @@ pub const CAPTURE_KIND: &str = "measured_capture";
 pub const RESIDUAL_CAPTURE_KIND: &str = "residual_capture";
 
 /// True for a runtime whose harness takes `--capture` (the agents of the JVM, Node, Go and
-/// Python write captures; the others have none).
+/// Python write captures, and a Rust harness writes allocation stacks with the allocator shim;
+/// the others have none).
 pub fn supports_capture(rt: crate::runtime::Runtime) -> bool {
     use crate::runtime::Runtime;
     matches!(
         rt,
-        Runtime::Jvm | Runtime::Node | Runtime::Go | Runtime::Python
+        Runtime::Jvm | Runtime::Node | Runtime::Go | Runtime::Python | Runtime::Rust
     )
+}
+
+/// The start of every limitation line of a capture run that asked for allocation stacks and
+/// could not write them (no allocator shim in the harness, no allocation-stack process that
+/// completed, fewer than three that left stacks): `dla harness run --capture alloc` of a Rust
+/// harness records them in `harness/<H>/captures.json`, and the run that wrote one has nothing
+/// to summarize, so the harness is not held to a summarized capture after it.
+pub const ALLOC_CAPTURE_FAILED: &str = "--capture alloc";
+
+/// True when the latest capturing run of harness `h` recorded that it could not write
+/// allocation stacks: a limitation of its `captures.json` that starts with
+/// [`ALLOC_CAPTURE_FAILED`]. The crate's own `#[global_allocator]` is no such line: the shim
+/// still sees the system allocator. Read for Rust harnesses only: an agent's
+/// `--capture alloc: no file was written` can sit beside a heap dump that is still to be
+/// summarized.
+pub fn capture_wrote_no_stacks(run_dir: &std::path::Path, h: &str) -> bool {
+    let path = crate::harness::HarnessManifest::dir_in(run_dir, h).join("captures.json");
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("limitations").and_then(|l| l.as_array()).cloned())
+        .is_some_and(|l| {
+            l.iter()
+                .filter_map(|x| x.as_str())
+                .any(|x| x.starts_with(ALLOC_CAPTURE_FAILED))
+        })
 }
 
 /// The heap residual rows above their threshold, with an open item nobody resolved, of the
@@ -1302,6 +1329,8 @@ pub struct UncapturedResidual {
     pub harness: String,
     /// The mode its series was measured in, as `dla harness run --mode` spells it.
     pub mode: String,
+    /// The runtime of the harness: what `--capture` takes depends on it.
+    pub runtime: crate::runtime::Runtime,
     /// The series (`S1`) of those rows.
     pub series: Vec<String>,
     /// Their open items (`O1`).
@@ -1309,11 +1338,23 @@ pub struct UncapturedResidual {
 }
 
 impl UncapturedResidual {
+    /// The `--capture` value that names who keeps the growth: a Rust harness writes allocation
+    /// stacks only (`alloc,heap` makes it print a limitation); the others take stacks and heap.
+    pub fn capture_kinds(&self) -> &'static str {
+        if self.runtime == crate::runtime::Runtime::Rust {
+            "alloc"
+        } else {
+            "alloc,heap"
+        }
+    }
+
     /// The command that takes the capture; the `dla summarize` commands come from its output.
     pub fn fix(&self) -> String {
         format!(
-            "dla harness run {} --mode {} --capture alloc,heap, then the `dla summarize` commands it prints",
-            self.harness, self.mode
+            "dla harness run {} --mode {} --capture {}, then the `dla summarize` commands it prints",
+            self.harness,
+            self.mode,
+            self.capture_kinds()
         )
     }
 }
@@ -1371,8 +1412,12 @@ pub fn uncaptured_residuals(view: &RunView) -> Vec<UncapturedResidual> {
         let Ok(file) = crate::series::SeriesFile::load(run_dir, series) else {
             continue;
         };
-        if !file.source.runtime.is_some_and(supports_capture)
-            || scan.summarized.contains(harness)
+        let Some(runtime) = file.source.runtime.filter(|rt| supports_capture(*rt)) else {
+            continue;
+        };
+        if scan.summarized.contains(harness)
+            || (runtime == crate::runtime::Runtime::Rust
+                && capture_wrote_no_stacks(run_dir, harness))
             || residual_growth_bytes(r.residual, &file) < MIN_CAPTURE_GROWTH_BYTES
             || too_short_for_the_gate(&file)
         {
@@ -1394,6 +1439,7 @@ pub fn uncaptured_residuals(view: &RunView) -> Vec<UncapturedResidual> {
             None => out.push(UncapturedResidual {
                 harness: harness.clone(),
                 mode,
+                runtime,
                 series: vec![series.clone()],
                 items: vec![id.to_string()],
             }),

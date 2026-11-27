@@ -36,6 +36,7 @@ Capture with the harness, then read the files (`references/backends.md` has ever
 | shim `harness/H1/out/p<k>-<series>/dump.jsonl` (a plain native run prints no command for it; pass the paths by hand) | `type-histogram-diff`, `non-heap` | stack groups (ties by site, needs `addr2line`), descriptor counts (never tie) |
 | `dhat`, LeakSanitizer reports | `alloc-stack-diff` | live-at-exit or leak records by stack; tie by site |
 
+- A native harness is not held to a summarized capture for a heap residual: `--capture` writes no files for it, and the stacks come from `--tool valgrind|heaptrack`, tools a run may not have (the refusal `tool-missing` records nothing that could release the item). The residual rows still list `--tool` as the way to attribute it.
 - Memcheck XML from separate runs is a run-length series (runs of different length), not dumps of
   one process. Heaptrack text is rounded (about 1%); folded `-F` files are exact bytes without counts.
 - A definitely-lost block has no holder (nothing points at it), so attribution is by allocation site,

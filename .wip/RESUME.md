@@ -3920,3 +3920,19 @@ unattended run at a time and no builder beside it.
 - Builder S3 (task 131) brief: wip-notes/rust-capture-brief.md, scratch u162/. Running on top of S2's tree.
 - Next: verify S2+S3 together, review workflow, dynamic, CI snapshot, two commits on main
   (S2 files / S3 files), preview.15, rig refresh, r8-fastrace alone.
+
+## S3 reported (Nov 27)
+- S3 done in tree: Rust held to capture-first (fix text --capture alloc), release when captures.json
+  limitation starts with "--capture alloc" (Rust shim lines), trend leads with summarize when capture
+  taken, gap --residual names --capture alloc for Rust. Native left out (only --tool route; tool-missing
+  records nothing to release). Builder: 1295/1 flaky jvm alloc-test, dynamic 63+xfail (first run had
+  jvm-pool-warmup fail; flaky alone 2/5 pass).
+- I found: capture_wrote_no_stacks also matched agents' "--capture alloc: no file was written" (run.rs
+  record_capture_coverage) -> would release JVM/Node/Go/Python with a heap dump unsummarized. Fixed:
+  release read for Rust only; test an_agent_capture_whose_alloc_kind_wrote_no_file_does_not_release_it.
+  Check script u163/check.sh (mutation + full suite) running.
+- POINT 4 GAP (decisive for r8): after the Rust summary, a single growing block (Vec<u64> doubling:
+  count 1, bytes stepping) fails summarize/rule.rs (bytes AND count strictly rising) -> tied empty ->
+  no lead. Also 4-point stack series < 8 for trend. Workflow wf_c0c71bf3-d10 mapping the chain for all
+  runtimes (buffers: ByteArrayOutputStream, StringBuilder, bytes.Buffer, bytearray = same gap).
+- Plan: S2+S3 commit to main after CI (no release); S4 single-block growth; then preview.15 + r8.

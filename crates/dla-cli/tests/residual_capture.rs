@@ -3,7 +3,9 @@
 //! `dla ledger resolve <O> --as unresolved` is refused (`capture-not-summarized`), and both go once
 //! a retention or allocation-stack summary of that harness exists: a record whose source lies
 //! under `harness/<H>/`, or an allocation-stack record whose raw file lists capture files under
-//! it. A row whose unattributed growth over its series is under 64 KiB demands no capture.
+//! it. A row whose unattributed growth over its series is under 64 KiB demands no capture. A Rust
+//! harness is held to a capture of allocation stacks (`--capture alloc`); a capture run that
+//! recorded it could not write stacks releases it.
 
 use std::{fs, path::Path};
 
@@ -210,10 +212,171 @@ fn an_allocation_stack_summary_under_the_harness_also_clears_it() {
 
 #[test]
 fn a_runtime_without_capture_is_not_held_to_it() {
-    let r = scene("rust");
+    // A native harness has no `--capture` (its agent writes no files; the allocation stacks of
+    // C and C++ come from `--tool valgrind|heaptrack`, an external tool a run may not have, whose
+    // refusal records nothing that could release the item): not held to it.
+    let r = scene("native");
     assert!(r.capture_items(&["--final"]).is_empty());
+    assert!(r.capture_items(&["--stage", "classify"]).is_empty());
     let (code, v) = r.resolve_unresolved();
     assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn a_rust_harness_is_held_to_a_capture_of_allocation_stacks_only() {
+    let r = scene("rust");
+    for target in [&["--stage", "classify"][..], &["--final"][..]] {
+        let items = r.capture_items(target);
+        assert_eq!(items.len(), 1, "{target:?}: {:?}", r.items(target));
+        // A Rust run takes `alloc` only: `alloc,heap` makes it print a limitation.
+        assert_eq!(
+            items[0]["fix"],
+            "dla harness run H1 --mode fresh --capture alloc, then the `dla summarize` commands it prints"
+        );
+    }
+    let (code, v) = r.resolve_unresolved();
+    assert_ne!(code, 0, "{v}");
+    assert_eq!(v["error"]["code"], "capture-not-summarized", "{v}");
+    assert_eq!(
+        v["error"]["fix"],
+        "dla harness run H1 --mode fresh --capture alloc, then the `dla summarize` commands it prints",
+        "{v}"
+    );
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("could not write stacks"),
+        "the refusal says what releases the item: {v}"
+    );
+}
+
+/// An allocation-stack summary of the shim dumps of a Rust driver (`dla summarize
+/// alloc-stack-diff` on `out/p<k>-alloc/shim-dump.jsonl`): its result file is
+/// `histograms/<H>.json`, which lists the dump files it read.
+fn summarize_rust_stacks(r: &Run, h: &str) {
+    let captures: Vec<Value> = (1..=4)
+        .map(|k| {
+            json!({"label": format!(".dla/{}/harness/{h}/out/p{k}-alloc/shim-dump.jsonl", r.run_id),
+                   "x": 440.0, "pid": 600 + k, "stacks": 3, "sha256": "0"})
+        })
+        .collect();
+    fs::create_dir_all(r.run_dir().join("histograms")).unwrap();
+    fs::write(
+        r.run_dir().join(format!("histograms/{h}.json")),
+        json!({"id": h, "tool": "shim-stack-groups", "captures": captures}).to_string(),
+    )
+    .unwrap();
+    let mut l = Ledger::load(&r.run_dir()).unwrap();
+    l.add_evidence(NewEvidence {
+        source: Source::Artifact {
+            path: format!("histograms/{h}.json"),
+            sha256: "0".into(),
+        },
+        tool: Tool {
+            name: "shim-stack-groups".into(),
+            version: "1".into(),
+        },
+        authority: Authority::Live,
+        kind: EvidenceKind::AllocStack,
+        result: json!({"captures": 4}),
+        raw: Some(format!("histograms/{h}.json")),
+        coverage: EvidenceCoverage::default(),
+        limitations: vec![],
+        unknowns: vec![],
+    })
+    .unwrap();
+}
+
+/// The `captures.json` the latest capturing run of `h` wrote, with these limitations.
+fn capture_run(r: &Run, h: &str, limitations: &[&str]) {
+    let dir = r.run_dir().join("harness").join(h);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("captures.json"),
+        json!({"tool": null, "cost": {"files": 0, "bytes": 0, "ms": 0, "kinds": {}},
+               "files": [], "summarize": [], "limitations": limitations})
+        .to_string(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn an_allocation_stack_summary_of_a_rust_drivers_dump_files_clears_it() {
+    let r = scene("rust");
+    // The dump files of another harness do not count.
+    summarize_rust_stacks(&r, "H2");
+    assert_eq!(r.capture_items(&["--final"]).len(), 1);
+    assert_eq!(
+        r.resolve_unresolved().1["error"]["code"],
+        "capture-not-summarized"
+    );
+    summarize_rust_stacks(&r, "H1");
+    assert!(r.capture_items(&["--final"]).is_empty());
+    assert!(r.capture_items(&["--stage", "classify"]).is_empty());
+    let (code, v) = r.resolve_unresolved();
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn a_rust_capture_run_that_could_not_write_stacks_releases_it() {
+    // Each line `rust_alloc_points` and the command-mode copy of the shim dumps record: no shim
+    // in the agent directory, fewer than three allocation-stack runs that left stacks, no
+    // measured process that wrote a dump.
+    for line in [
+        "--capture alloc needs the allocator shim in the harness's agent directory (cc builds it at dla harness gen; this harness has none: generate it again with cc on PATH)",
+        "--capture alloc: 0 of 4 allocation-stack runs left shim stacks (dla summarize alloc-stack-diff needs 3 or more; does the program use the system allocator?)",
+        "--capture alloc: no measured process wrote allocator shim stacks (is the shim preloaded, and does the program use the system allocator?)",
+    ] {
+        let r = scene("rust");
+        assert_eq!(r.capture_items(&["--final"]).len(), 1);
+        capture_run(
+            &r,
+            "H1",
+            &[
+                "the allocation-stack run p1-alloc did not complete (log x)",
+                line,
+            ],
+        );
+        assert!(r.capture_items(&["--final"]).is_empty(), "{line}");
+        assert!(
+            r.capture_items(&["--stage", "classify"]).is_empty(),
+            "{line}"
+        );
+        let (code, v) = r.resolve_unresolved();
+        assert_eq!(code, 0, "{line}: {v}");
+    }
+    // Other lines of a capture run that wrote stacks do not release it: a crate with its own
+    // global allocator still gets the stacks of the system allocator, and a Rust run that was
+    // asked for `heap` as well took the stacks.
+    let r = scene("rust");
+    capture_run(
+        &r,
+        "H1",
+        &[
+            "the crate sets a #[global_allocator]: the shim sees the system allocator only, so the stacks may miss what that allocator serves",
+            "--capture: rust harnesses write allocation stacks (alloc) only; the other kinds were not taken",
+        ],
+    );
+    assert_eq!(r.capture_items(&["--final"]).len(), 1);
+    assert_eq!(
+        r.resolve_unresolved().1["error"]["code"],
+        "capture-not-summarized"
+    );
+}
+
+#[test]
+fn an_agent_capture_whose_alloc_kind_wrote_no_file_does_not_release_it() {
+    // An agent's `--capture alloc,heap` that wrote the heap dump and no allocation file records
+    // `--capture alloc: no file was written`: the dump is still to be summarized.
+    let r = scene("node");
+    capture_run(&r, "H1", &["--capture alloc: no file was written"]);
+    assert_eq!(r.capture_items(&["--final"]).len(), 1);
+    assert_eq!(r.capture_items(&["--stage", "classify"]).len(), 1);
+    assert_eq!(
+        r.resolve_unresolved().1["error"]["code"],
+        "capture-not-summarized"
+    );
 }
 
 /// An allocation-stack record whose result file is `allocs/A2.json`, computed from capture files

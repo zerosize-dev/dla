@@ -555,8 +555,8 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
 }
 
 /// The `--capture` kinds that attribute the residual of `region` for harnesses of `rt`, with what
-/// they show; `None` when the runtime's agent writes no capture for it (Rust and native harnesses
-/// use `--tool`). Each kind has a `dla summarize` command: heap and histogram snapshots
+/// they show; `None` when the runtime's agent writes no capture for it (a native harness uses
+/// `--tool`; a Rust harness writes allocation stacks of its heap only, with the allocator shim). Each kind has a `dla summarize` command: heap and histogram snapshots
 /// (`heap-graph`, `type-histogram-diff`), allocation stacks (`alloc-stack-diff`), and
 /// `non-heap` for threads, goroutines, tasks and resources.
 fn capture_kinds(
@@ -593,6 +593,10 @@ fn capture_kinds(
         (Runtime::Python, _) => (
             "nonheap",
             "threads, tasks and unclosed resources by creation site",
+        ),
+        (Runtime::Rust, Region::Heap) => (
+            "alloc",
+            "allocation stacks name the site that allocates the growth",
         ),
         _ => return None,
     })
@@ -671,11 +675,18 @@ mod tests {
                 assert!(ok, "{rt:?} writes no {k} capture");
             }
         }
-        // Rust and native harnesses use `--tool`: no capture advice.
-        for rt in [Runtime::Rust, Runtime::Native] {
-            s.source.runtime = Some(rt);
-            assert!(capture_advice(&s, Region::Heap).is_none());
-        }
+        // A Rust harness writes allocation stacks of its heap with the allocator shim (not an
+        // agent capture, so `supported` does not list it) and nothing else.
+        s.source.runtime = Some(Runtime::Rust);
+        assert!(
+            capture_advice(&s, Region::Heap)
+                .unwrap()
+                .starts_with("dla harness run H1 --mode fresh --capture alloc   # ")
+        );
+        assert!(capture_advice(&s, Region::OffHeap).is_none());
+        // A native harness uses `--tool`: no capture advice.
+        s.source.runtime = Some(Runtime::Native);
+        assert!(capture_advice(&s, Region::Heap).is_none());
     }
 
     #[test]
