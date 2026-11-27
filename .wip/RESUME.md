@@ -3954,3 +3954,5 @@ unattended run at a time and no builder beside it.
   same line flaked on cd80aaa). rerun_failed_jobs queued; waiter b3unnbb9g (out u163/ci-rerun).
 - If green: commit-snapshot-tree.sh ebedb11 commit-message-46.txt; push main + dev.
 - Builder S4 (a111d7574fd82a359) is in its local dynamic bench (jvm-pool-warmup FAIL seen, known flaky).
+- Re-run green (15/15). COMMITTED b98e119 on main (tree ebedb11, message 46); pushed main + dev.
+  No release. Working tree now holds only builder S4's edits (19 files vs main).
