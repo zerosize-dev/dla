@@ -46,7 +46,9 @@ the two drivers differ.
   as the tie-break. Before, a worker's view and a merged ledger ordered them by position or by id,
   so "the newest alloc-test of a harness" could be an older one. That happened after a merge, and
   for a core record written while a slice was open. Ledger lines are now stamped to the
-  millisecond. A worker's final gate now sees a harness generated in the main ledger.
+  millisecond, and a new line's stamp is never older than the newest line already in the ledger,
+  so a clock that steps back cannot reorder one writer's records. A worker's final gate and its
+  time rules now see harnesses, findings and open items recorded in the main ledger.
 - Every abort command that DLA prints runs as printed: the fix of a refused `--blocker` check, the
   `budget-left` refusal (one command for the plain kinds and one for a refusal with its `--code`)
   and the Stop hook, which offers the plain kinds only, to keep room for the items it lists.
