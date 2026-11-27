@@ -3936,3 +3936,14 @@ unattended run at a time and no builder beside it.
   no lead. Also 4-point stack series < 8 for trend. Workflow wf_c0c71bf3-d10 mapping the chain for all
   runtimes (buffers: ByteArrayOutputStream, StringBuilder, bytes.Buffer, bytearray = same gap).
 - Plan: S2+S3 commit to main after CI (no release); S4 single-block growth; then preview.15 + r8.
+- Review wf_83786f3f-1e4 of S2+S3: real (to fix in S4 part A): classify rescued ignores Spike (falls back
+  to start passes); step_growth 1.5x mean spacing lets a ramp with a skipped sample pass; capture_entry
+  falls back to histogram/non-heap summarize cmds that never clear the item. Accepted, not fixed: stale
+  captures.json release (same harness; shim missing is permanent). Doc nits rust.md:42 stages.md:135.
+- Map wf_c0c71bf3-d10: rule.rs gate/gate_at (bytes AND count strictly rising) used by every summary
+  (hprof, heapsnapshot, histogram, growth, alloc_stack, shim_groups, vgdb, non_heap); plateau() never Leak
+  for constant count and NonLeak on flat end; rust points step*k (equal capacities possible); summary
+  stack: columns give no lead, close-rest reads trend targets only.
+- Snapshot ebedb11 (S2+S3+Rust-only release) CI running; u163/check.sh full suite running.
+- Next builder S4 brief: wip-notes/one-block-brief.md (part A review fixes, part B one block that grows:
+  B1 rule, B2 plateau, B3 geometric points, B4 lead/close). Start only after check.sh ends.
