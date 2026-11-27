@@ -1611,7 +1611,7 @@ fn seed_pace(ctx: &ToolCtx, manifest: &HarnessManifest, opts: &RunOptions, mode:
         ids.sort();
         let found = ids.into_iter().rev().find_map(|(_, id)| {
             let s = SeriesFile::load(&ctx.run_dir, &id).ok()?;
-            (s.source.harness.as_deref() == Some(manifest.id.as_str())
+            (s.source.run_harness() == Some(manifest.id.as_str())
                 && s.source.mode == Some(mode)
                 && !s.points.is_empty())
             .then_some(s)
@@ -1769,7 +1769,7 @@ fn earlier_full_series(ctx: &ToolCtx, manifest: &HarnessManifest) -> bool {
         name.strip_suffix(".json")
             .and_then(|id| SeriesFile::load(&ctx.run_dir, id).ok())
             .is_some_and(|s| {
-                s.source.harness.as_deref() == Some(manifest.id.as_str())
+                s.source.run_harness() == Some(manifest.id.as_str())
                     && s.points.len().saturating_sub(s.warmup as usize) >= need
             })
     })

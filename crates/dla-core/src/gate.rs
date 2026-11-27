@@ -796,16 +796,35 @@ fn tied_findings<'a>(view: &'a RunView, t: &TrendReport, c: &ColumnTrend) -> Vec
                 .map(|f| f.id.clone()),
         );
     }
-    if !at_line
-        && let Some(ev) = evidence_for_column(view, t, c)
-        && let Ok(eid) = ev.parse::<crate::ids::EvidenceId>()
-    {
-        ids.extend(
-            view.ledger
-                .findings()
-                .filter(|f| f.supports.contains(&eid))
-                .map(|f| f.id.clone()),
-        );
+    if !at_line {
+        // The evidence `dla trend` wrote for the column (its gauge group or its counter group).
+        // A capture summary's gauge and counter columns are the bytes and the block count of the
+        // same stacks, so a finding made from either record ties both.
+        let mut evidence: Vec<String> = evidence_for_column(view, t, c).into_iter().collect();
+        if view.summary_series.contains(&t.series) {
+            for kind in [EvidenceKind::GrowthSeries, EvidenceKind::UnitCountSeries] {
+                evidence.extend(
+                    view.ledger
+                        .evidence_in_order()
+                        .filter(|e| e.kind == kind)
+                        .filter(|e| {
+                            e.result.get("trend").and_then(|v| v.as_str()) == Some(t.id.as_str())
+                        })
+                        .map(|e| e.evidence_id.to_string()),
+                );
+            }
+        }
+        for eid in evidence
+            .iter()
+            .filter_map(|e| e.parse::<crate::ids::EvidenceId>().ok())
+        {
+            ids.extend(
+                view.ledger
+                    .findings()
+                    .filter(|f| f.supports.contains(&eid))
+                    .map(|f| f.id.clone()),
+            );
+        }
     }
     // `dla alloc-test` writes a trend for its plateau and purge test and a discriminator
     // that names the trend and the columns it tested: a finding that cites that
@@ -1118,7 +1137,8 @@ fn series_harness(view: &RunView, series: Option<&str>) -> Option<HarnessId> {
     crate::series::SeriesFile::load(run_dir, series?)
         .ok()?
         .source
-        .harness
+        .run_harness()
+        .map(str::to_owned)
 }
 
 /// The residual evidence `dla gap --residual` wrote for `series` (the newest one).
@@ -1189,7 +1209,7 @@ fn total_fix(view: &RunView, t: &TrendReport, open: &[&str]) -> String {
                     .take(3)
                     .map(|c| readable_column(&c.name))
                     .collect();
-                let cmd = capture_fix(t, Some(e.as_str()), untied.len(), &names);
+                let cmd = capture_fix(view, t, Some(e.as_str()), untied.len(), &names);
                 if !adds.contains(&cmd) {
                     adds.push(cmd);
                 }
@@ -1721,7 +1741,9 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
             // after the loop. One tied only to findings without a disposition waits on
             // those findings' own items.
             if view.summary_series.contains(&t.series) {
-                if tied.is_empty() {
+                // Only growth that passed the capture rule (the summary's own gate, which `dla
+                // trend` applies to the series): a column that failed it is no growth to explain.
+                if tied.is_empty() && c.gate == GateVerdict::Pass {
                     // One action per evidence: a trend has one for its gauge columns and one
                     // for its counters.
                     let key = (
@@ -1823,17 +1845,69 @@ fn capture_accounted(view: &RunView, t: &TrendReport, evidence: Option<&str>) ->
                 f.origin.as_str() == "growth-series"
                     && f.supports.contains(&eid)
                     && view.ledger.merged_into(&f.id).is_none()
+                    && accounts_for_growth(view, f)
             })
         });
     decided || stands_for
 }
 
+/// Whether finding `f`, which was made from a capture summary's growing columns, accounts for
+/// them as it stands: it is open (its own item asks for its measurement), or decided (an
+/// alloc-test or a confirm or refute), or closed for a reason the budget or the environment
+/// gives: `time_budget`, `not_exercised` or `no_harness` once the budget is at its floor, or a
+/// blocker (`env_unavailable`, `tool_missing`, `build_fails`, `privilege_declined`). A finding
+/// closed by text alone (`inconclusive` and a remedy that is a hypothesis) accounts for
+/// nothing: growth that passed the capture rule is decided by a measurement, not by a reading
+/// of it.
+fn accounts_for_growth(view: &RunView, f: &Finding) -> bool {
+    match f.state {
+        FindingState::Candidate
+        | FindingState::UnderTest
+        | FindingState::Confirmed
+        | FindingState::Strong
+        | FindingState::Refuted => true,
+        FindingState::Unresolved | FindingState::SuspectedStaticOnly => {
+            let canonical = view
+                .ledger
+                .merged_into(&f.id)
+                .cloned()
+                .unwrap_or(f.root_id());
+            if crate::grown::alloc_tested(view, &canonical) {
+                return true;
+            }
+            match f.reason {
+                Some(
+                    UnresolvedReason::TimeBudget
+                    | UnresolvedReason::NotExercised
+                    | UnresolvedReason::NoHarness,
+                ) => budget_over_floor(&view.state, None).is_none(),
+                Some(r) => is_blocker_reason(r),
+                None => false,
+            }
+        }
+    }
+}
+
 /// The fix of a capture summary's one item: `ledger add` for its evidence. The total of the
-/// summary names the same line, so the two are one action.
-fn capture_fix(t: &TrendReport, evidence: Option<&str>, n: usize, names: &[String]) -> String {
+/// summary names the same line, so the two are one action. The evidence is one whose gate
+/// passed (the trend of a capture series is judged by the summary's own rule, so its growth
+/// record passes where the summary's did); the finding takes its site from the largest passing
+/// column.
+fn capture_fix(
+    view: &RunView,
+    t: &TrendReport,
+    evidence: Option<&str>,
+    n: usize,
+    names: &[String],
+) -> String {
+    // The harness the captures came from, when the series names it.
+    let harness = view.capture_harness.get(&t.series).map_or_else(
+        || "<the harness the captures came from>".to_owned(),
+        Clone::clone,
+    );
     match evidence {
         Some(e) => format!(
-            "dla ledger add --origin growth-series --evidence {e}   # one finding for the capture summary {}: it stands for its {n} untied growing columns, the largest {}",
+            "dla ledger add --origin growth-series --evidence {e}   # one finding for the capture summary {}, whose gate passed: it stands for its {n} untied growing columns, the largest {}, and takes the site of the largest passing column; then dla alloc-test {harness} --finding <that finding>",
             t.id,
             names.first().cloned().unwrap_or_default()
         ),
@@ -1852,6 +1926,7 @@ fn untied_of_evidence<'a>(
         .columns
         .iter()
         .filter(|c| non_flat(c) && !is_whole_process(&c.name) && !is_type_count(&c.name))
+        .filter(|c| c.gate == GateVerdict::Pass)
         .filter(|c| evidence_for_column(view, t, c).as_deref() == evidence)
         .filter(|c| tied_findings(view, t, c).is_empty())
         .collect();
@@ -1878,12 +1953,12 @@ fn capture_item(view: &RunView, cols: &[(&TrendReport, &ColumnTrend)], out: &mut
         .take(3)
         .map(|c| readable_column(&c.name))
         .collect();
-    let fix = capture_fix(t, evidence.as_deref(), sorted.len(), &names);
+    let fix = capture_fix(view, t, evidence.as_deref(), sorted.len(), &names);
     out.add(
         "trend_column",
         format!("{}:{}", t.id, sorted[0].name),
         format!(
-            "{} growing column(s) of the capture summary {} ({}) are tied to no finding; the largest: {}",
+            "{} growing column(s) of the capture summary {} ({}) passed its gate and are tied to no finding; the largest: {}",
             sorted.len(),
             t.id,
             sorted[0].shape_name(),
@@ -3406,6 +3481,7 @@ mod in_run_column_tests {
             gate: GateVerdict::Pass,
             gate_failed: vec![],
             gate_note: None,
+            resized: false,
         }
     }
 
@@ -4224,5 +4300,132 @@ mod action_rank_tests {
         let mut plain = ids[4..].to_vec();
         plain.sort();
         assert_eq!(plain, ["F8", "F9"], "{ids:?}");
+    }
+}
+
+#[cfg(test)]
+mod capture_account_tests {
+    use super::*;
+    use crate::{Ledger, NewEvidence, NewFinding, Origin, evidence::*};
+
+    /// A view whose F1 (origin `growth-series`, made from the growth record E1) is closed as
+    /// `state` and `reason` say; with `alloc_test` an alloc-test (a `plateau+purge`
+    /// discriminator) names it. `left_secs` is the budget left.
+    fn view_with(
+        state: FindingState,
+        reason: Option<UnresolvedReason>,
+        alloc_test: bool,
+        left_secs: i64,
+    ) -> (tempfile::TempDir, RunView) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut l = Ledger::create(dir.path()).unwrap();
+        let mut add = |kind: EvidenceKind, result: serde_json::Value| {
+            l.add_evidence(NewEvidence {
+                source: Source::Repo {
+                    commit: "c".into(),
+                    path: None,
+                },
+                tool: Tool {
+                    name: "t".into(),
+                    version: "1".into(),
+                },
+                authority: Authority::Dump,
+                kind,
+                result,
+                raw: None,
+                coverage: EvidenceCoverage::default(),
+                limitations: vec![],
+                unknowns: vec![],
+            })
+            .unwrap();
+        };
+        add(
+            EvidenceKind::GrowthSeries,
+            serde_json::json!({"gate": "pass"}),
+        );
+        if alloc_test {
+            add(
+                EvidenceKind::Discriminator,
+                serde_json::json!({"test": "plateau+purge", "favors": "leak",
+                    "supports": ["leak"], "finding": "F1", "harness": "H1"}),
+            );
+        }
+        l.add_finding(NewFinding::new(
+            Origin::parse("growth-series").unwrap(),
+            vec![crate::EvidenceId::new(1)],
+        ))
+        .unwrap();
+        if state != FindingState::Candidate {
+            l.transition(
+                &FindingId::new(1),
+                state,
+                reason,
+                Some("x".into()),
+                vec![],
+                "t",
+            )
+            .unwrap();
+        }
+        let mut run =
+            crate::state::RunState::init("/p", None, 3600, None, crate::state::now_utc()).unwrap();
+        run.budget.deadline = crate::state::now_utc() + chrono::Duration::seconds(left_secs);
+        (dir, RunView::new(run, l, None))
+    }
+
+    fn accounts(
+        state: FindingState,
+        reason: Option<UnresolvedReason>,
+        alloc_test: bool,
+        left_secs: i64,
+    ) -> bool {
+        let (_d, v) = view_with(state, reason, alloc_test, left_secs);
+        accounts_for_growth(&v, v.ledger.finding(&FindingId::new(1)).unwrap())
+    }
+
+    /// [`capture_accounted`] for the trend T1 of the growth record E1 that F1 was made from.
+    fn capture_accounted_by(
+        state: FindingState,
+        reason: Option<UnresolvedReason>,
+        left_secs: i64,
+    ) -> bool {
+        let (_d, v) = view_with(state, reason, false, left_secs);
+        let t = TrendReport {
+            schema_version: 1,
+            id: "T1".into(),
+            series: "S1".into(),
+            thresholds: dla_stats::GateThresholds::default(),
+            columns: vec![],
+            targets: vec![],
+        };
+        capture_accounted(&v, &t, Some("E1"))
+    }
+
+    #[test]
+    fn the_capture_is_accounted_for_by_the_finding_made_from_it_only_as_the_rule_says() {
+        use FindingState::{Candidate, Unresolved};
+        use UnresolvedReason::{Inconclusive, TimeBudget};
+        assert!(capture_accounted_by(Candidate, None, 2700));
+        assert!(!capture_accounted_by(Unresolved, Some(Inconclusive), 2700));
+        assert!(!capture_accounted_by(Unresolved, Some(TimeBudget), 2700));
+        assert!(capture_accounted_by(Unresolved, Some(TimeBudget), 30));
+    }
+
+    #[test]
+    fn a_finding_closed_by_text_alone_does_not_account_for_a_passing_capture() {
+        use FindingState::{Candidate, Unresolved};
+        use UnresolvedReason::{Inconclusive, NotExercised, TimeBudget, ToolMissing};
+        // Budget left (three quarters of an hour of an hour): only a decision accounts for it.
+        assert!(accounts(Candidate, None, false, 2700), "open: its own item");
+        assert!(!accounts(Unresolved, Some(Inconclusive), false, 2700));
+        assert!(!accounts(Unresolved, Some(NotExercised), false, 2700));
+        assert!(!accounts(Unresolved, Some(TimeBudget), false, 2700));
+        // An alloc-test of the finding decided it, whatever the reason it was closed with.
+        assert!(accounts(Unresolved, Some(Inconclusive), true, 2700));
+        // A blocker of the environment accounts for it.
+        assert!(accounts(Unresolved, Some(ToolMissing), false, 2700));
+        // At the budget floor the time reasons do: no deadlock.
+        assert!(accounts(Unresolved, Some(TimeBudget), false, 30));
+        assert!(accounts(Unresolved, Some(NotExercised), false, 30));
+        assert!(!accounts(Unresolved, Some(Inconclusive), false, 30));
     }
 }

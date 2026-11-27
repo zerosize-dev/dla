@@ -278,12 +278,12 @@ fn pick_series(tc: &ToolCtx, harness: &str, arg: Option<&str>) -> Res<SeriesFile
             ));
         }
         let s = SeriesFile::load(&tc.run_dir, id)?;
-        if s.source.harness.as_deref() != Some(harness) {
+        if s.source.run_harness() != Some(harness) {
             return Err(Failure::refuse(
                 codes::INVALID_VALUE,
                 format!(
                     "series {id} was written by {}, not by harness {harness}",
-                    s.source.harness.as_deref().unwrap_or("no harness")
+                    s.source.run_harness().unwrap_or("no harness")
                 ),
                 format!("a series of harness {harness}"),
                 format!("dla correlate {harness}"),
@@ -294,7 +294,7 @@ fn pick_series(tc: &ToolCtx, harness: &str, arg: Option<&str>) -> Res<SeriesFile
     for (_, id) in ids.iter().rev() {
         let s = SeriesFile::load(&tc.run_dir, id)?;
         if s.source.kind == SeriesSourceKind::Harness
-            && s.source.harness.as_deref() == Some(harness)
+            && s.source.run_harness() == Some(harness)
             && s.columns.iter().any(|c| c.name.starts_with(SITE_PREFIX))
         {
             return Ok(s);

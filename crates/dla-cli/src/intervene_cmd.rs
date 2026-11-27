@@ -152,10 +152,10 @@ fn find_control(tc: &ToolCtx, ledger: &Ledger, f: &Finding, h: &str) -> Result<C
         let Ok(series) = SeriesFile::load(&tc.run_dir, series_id) else {
             continue;
         };
-        if series.source.harness.as_deref() != Some(h) {
+        if series.source.run_harness() != Some(h) {
             seen.push(format!(
                 "{id} ({series_id} is of {})",
-                series.source.harness.as_deref().unwrap_or("no harness")
+                series.source.run_harness().unwrap_or("no harness")
             ));
             continue;
         }

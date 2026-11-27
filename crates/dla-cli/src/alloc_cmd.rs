@@ -501,6 +501,7 @@ fn trend_of(
                 gate,
                 gate_failed,
                 gate_note: a.gate_note.filter(|_| gate == GateVerdict::Pass),
+                resized: false,
             }
         })
         .collect();
@@ -4159,6 +4160,7 @@ mod tests {
             gate: GateVerdict::Pass,
             gate_failed: vec![],
             gate_note: None,
+            resized: false,
         };
         let trend = TrendReport {
             targets: Vec::new(),
@@ -4323,6 +4325,7 @@ mod tests {
             gate: GateVerdict::Pass,
             gate_failed: vec![],
             gate_note: None,
+            resized: false,
         }
     }
 

@@ -42,7 +42,7 @@ pub struct Inputs<'a> {
 /// The verdicts of the series, declared targets first. Empty for a series that no harness
 /// measured.
 pub fn compute(inp: &Inputs<'_>) -> Vec<TargetVerdict> {
-    let Some(h) = inp.series.source.harness.as_deref() else {
+    let Some(h) = inp.series.source.run_harness() else {
         return Vec::new();
     };
     let Ok(m) = HarnessManifest::load(inp.run_dir, h) else {
@@ -501,7 +501,7 @@ pub fn coverage_of(inp: &Inputs<'_>, f: &FindingId) -> TargetVerdict {
 
 fn coverage_verdict(inp: &Inputs<'_>, f: &FindingId) -> TargetVerdict {
     let none = |why: &str| unknown(f, why);
-    let Some(h) = inp.series.source.harness.as_deref() else {
+    let Some(h) = inp.series.source.run_harness() else {
         return none("no coverage data for this run");
     };
     let path = match inp.executed {

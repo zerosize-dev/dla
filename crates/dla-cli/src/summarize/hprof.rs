@@ -962,6 +962,7 @@ fn series_part(
         .collect();
     let mut source = SeriesSource::new(SeriesSourceKind::Dump);
     source.command = Some("dla summarize heap-graph".into());
+    source.harness = ctx.capture_harness().map(str::to_owned);
     let series = SeriesFile {
         schema_version: 1,
         id: id.clone(),
@@ -1237,7 +1238,9 @@ fn series_part(
                     ),
                 }
             }
-            None => "no passing holder is tied in the evidence: rerun with fewer holders or --finding <F>".to_owned(),
+            None => format!(
+                "no passing holder is tied in the evidence: dla ledger add --origin growth-series --evidence {growth_id} --owner <the owner of the largest passing holder> --site <file:line>, then dla alloc-test <the harness the dumps came from> on that finding; or rerun with fewer holders or --finding <F>"
+            ),
         }
     };
     out.insert("needed".into(), json!(needed_text));

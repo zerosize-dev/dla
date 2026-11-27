@@ -84,6 +84,11 @@ pub struct ColumnTrend {
     /// that come further apart: its flat end is shorter than the next step is expected to be).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate_note: Option<String>,
+    /// Set on a column of a capture series (`dla summarize`) that passed because its block count
+    /// was one constant positive number whose bytes grew at every capture: a buffer that is
+    /// resized, not added to. The count column of such a site reads `resized` here, not flat.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resized: bool,
 }
 
 impl ColumnTrend {
@@ -315,6 +320,10 @@ pub struct PassedColumn {
     /// Unit of the column, when the writer recorded it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unit: Option<Unit>,
+    /// The column of a capture series passed as one constant number of blocks whose bytes grew
+    /// at every capture (a buffer that is resized).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resized: bool,
 }
 
 /// True when the probe column `column` (`probe:<Class>.<field>`, optionally with a
@@ -613,6 +622,7 @@ mod tests {
                 gate: GateVerdict::Pass,
                 gate_failed: vec![],
                 gate_note: None,
+                resized: false,
             }],
         }
     }

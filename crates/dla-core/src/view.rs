@@ -50,8 +50,16 @@ pub struct RunView {
     /// The harnesses (`H1`) that some series names as its source (`source.harness`),
     /// built in the same pass over the series files as `gap_series`.
     pub harness_series: std::collections::BTreeSet<String>,
-    /// The harness (`H2`) each harness series (`S3`) was measured by.
+    /// The harness (`H2`) each harness series (`S3`) was measured by. A series `dla summarize`
+    /// wrote from the captures of one harness is not in it: no run of the harness wrote it (see
+    /// [`Self::capture_harness`]).
     pub series_harness: std::collections::BTreeMap<String, String>,
+    /// The harness (`H2`) whose capture files each summary series (`S3`, source kind `dump`)
+    /// was read from, when every capture lies under that one harness. It says what the series is
+    /// about (an alloc-test of the harness can decide a finding that cites the series), and it
+    /// never counts as a run of the harness: it is in neither `series_harness` nor
+    /// `harness_series`.
+    pub capture_harness: std::collections::BTreeMap<String, String>,
     /// Protected files other than `report.md` that no longer match their seal.
     pub tamper: Vec<Tamper>,
     /// True when `report.md` differs from the seal `dla` wrote at render time.
@@ -102,6 +110,7 @@ impl RunView {
             summary_series: std::collections::BTreeSet::new(),
             harness_series: std::collections::BTreeSet::new(),
             series_harness: std::collections::BTreeMap::new(),
+            capture_harness: std::collections::BTreeMap::new(),
             tamper: Vec::new(),
             report_modified: false,
             unsealed_run: false,
@@ -155,6 +164,7 @@ impl RunView {
         self.summary_series.clear();
         self.harness_series.clear();
         self.series_harness.clear();
+        self.capture_harness.clear();
         for id in &self.series_ids {
             let Ok(f) = crate::series::SeriesFile::load(run_dir, id) else {
                 continue;
@@ -165,7 +175,9 @@ impl RunView {
             if f.source.kind == crate::series::SeriesSourceKind::Dump {
                 self.summary_series.insert(id.clone());
             }
-            if let Some(h) = f.source.harness {
+            if let Some(h) = f.source.capture_harness() {
+                self.capture_harness.insert(id.clone(), h.to_owned());
+            } else if let Some(h) = f.source.harness {
                 self.series_harness.insert(id.clone(), h.clone());
                 self.harness_series.insert(h);
             }
@@ -179,6 +191,15 @@ impl RunView {
             }
         }
         self
+    }
+
+    /// The harness a series is about: the one whose run measured it, or, for a summary series,
+    /// the one whose capture files it was read from.
+    pub fn harness_of_series(&self, series: &str) -> Option<&str> {
+        self.series_harness
+            .get(series)
+            .or_else(|| self.capture_harness.get(series))
+            .map(String::as_str)
     }
 
     /// Slices that hold lines the main ledger has not merged yet.
@@ -768,4 +789,50 @@ pub fn measured(view: &RunView) -> Measured {
     m.exercised = workers > 0;
     m.harness_runs = m.harness_runs.max(workers);
     m
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn view_of(series: &[(&str, serde_json::Value)]) -> RunView {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::create(dir.path()).unwrap();
+        std::fs::create_dir_all(dir.path().join("series")).unwrap();
+        for (id, source) in series {
+            std::fs::write(
+                dir.path().join(format!("series/{id}.json")),
+                serde_json::json!({"id": id, "source": source, "axis": "n",
+                    "columns": [], "points": []})
+                .to_string(),
+            )
+            .unwrap();
+        }
+        let state = RunState::init("/p", None, 3600, None, crate::state::now_utc()).unwrap();
+        RunView::new(state, ledger, None).with_disk_facts(dir.path())
+    }
+
+    #[test]
+    fn a_summary_series_names_its_harness_without_being_a_run_of_it() {
+        let v = view_of(&[
+            (
+                "S1",
+                serde_json::json!({"kind": "harness", "harness": "H1"}),
+            ),
+            ("S2", serde_json::json!({"kind": "dump", "harness": "H4"})),
+            ("S3", serde_json::json!({"kind": "dump"})),
+        ]);
+        // What a run of a harness wrote.
+        assert_eq!(v.series_harness.get("S1").map(String::as_str), Some("H1"));
+        assert!(v.harness_series.contains("H1"));
+        // What was read from the captures of a harness: about it, never a run of it (the
+        // attempts, the runs a queue counts and the budget rules read only the first).
+        assert!(!v.series_harness.contains_key("S2"));
+        assert!(!v.harness_series.contains("H4"));
+        assert_eq!(v.capture_harness.get("S2").map(String::as_str), Some("H4"));
+        assert_eq!(v.harness_of_series("S1"), Some("H1"));
+        assert_eq!(v.harness_of_series("S2"), Some("H4"));
+        assert_eq!(v.harness_of_series("S3"), None);
+        assert!(v.summary_series.contains("S2") && v.summary_series.contains("S3"));
+    }
 }

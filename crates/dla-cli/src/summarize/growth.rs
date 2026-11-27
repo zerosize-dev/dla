@@ -141,6 +141,11 @@ pub struct Growth {
     /// Why nothing passes.
     #[allow(dead_code)]
     pub reasons: Vec<String>,
+    /// The site of the largest shown passing column that has one: the site `dla ledger add
+    /// --origin growth-series --evidence <this record>` gives the finding it makes.
+    pub site: Option<String>,
+    /// The harness every capture of the call lies under: what the series is about.
+    pub harness: Option<String>,
     /// The compact JSON for the command's output.
     pub json: Value,
 }
@@ -317,6 +322,12 @@ pub fn write_at(
     let mut source = SeriesSource::new(plan.source_kind);
     source.command = Some(plan.command.clone());
     source.runtime = plan.runtime;
+    // Captures of one harness: the series is about that harness (an alloc-test of it can decide a
+    // finding that cites the series), though no run of the harness wrote it.
+    let source_harness = (plan.source_kind == SeriesSourceKind::Dump)
+        .then(|| ctx.capture_harness().map(str::to_owned))
+        .flatten();
+    source.harness.clone_from(&source_harness);
     let series = SeriesFile {
         schema_version: 1,
         id: id.clone(),
@@ -485,6 +496,17 @@ pub fn write_at(
         .iter()
         .map(|&i| plan.tracks[i].name.clone())
         .collect();
+    // What `dla ledger add --origin growth-series --evidence <this record>` takes as the site:
+    // the shown passing column with the largest slope that has one (its rule, read back).
+    let site = priority
+        .iter()
+        .take(shown_idx.len())
+        .filter_map(|&k| {
+            let size = slopes[k].as_f64().map_or(0.0, f64::abs);
+            plan.tracks[passed[k]].site.as_ref().map(|s| (size, s))
+        })
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, s)| clip(s, 160));
     let tied: Vec<(String, FindingId)> = shown_idx
         .iter()
         .filter_map(|&i| {
@@ -507,8 +529,28 @@ pub fn write_at(
         shown,
         tied,
         reasons,
+        site,
+        harness: source_harness,
         json,
     })
+}
+
+/// The `needed` text of a summary whose growth passed its gate and ties to no finding: the
+/// command that makes the finding the growth stands on (its site is the largest passing column's),
+/// then the alloc-test that decides it. `why` is the summary's own reading of why nothing tied.
+pub fn untied_needed(g: &Growth, why: &str) -> String {
+    let site = match &g.site {
+        Some(s) => format!("the finding takes the site of the largest passing column, {s}"),
+        None => "no passing column has a site: add --site <file:line> and --owner <the holder>"
+            .to_owned(),
+    };
+    format!(
+        "the growth passed its gate and ties to no finding: dla ledger add --origin growth-series --evidence {}   ({site}); then dla alloc-test {} on that finding (the final gate and the refusal to close it print the command); {why}",
+        g.evidence.id,
+        g.harness
+            .as_deref()
+            .unwrap_or("<the harness the captures came from>"),
+    )
 }
 
 fn clip(s: &str, n: usize) -> String {

@@ -131,7 +131,7 @@ pub fn latest_trend(run_dir: &Path, harness: &str) -> Option<TrendReport> {
         let Ok(series) = SeriesFile::load(run_dir, &report.series) else {
             continue;
         };
-        if series.source.harness.as_deref() != Some(harness) {
+        if series.source.run_harness() != Some(harness) {
             continue;
         }
         if series.source.kind == SeriesSourceKind::Harness {
@@ -631,6 +631,7 @@ mod tests {
             gate: GateVerdict::Pass,
             gate_failed: vec![],
             gate_note: None,
+            resized: false,
         }
     }
 

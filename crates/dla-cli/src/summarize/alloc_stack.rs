@@ -896,7 +896,10 @@ fn run_diff_axis(
             "no passing column ties to {f} by holder, site or type: a stack ties to the finding whose owner is its root holder (static:<Class>.<field>), or, with no root path, to the finding at its first project frame or among that finding's writers"
         )
     } else {
-        "the growing stacks tie to no finding: a stack ties to the finding whose owner is its root holder, or, with no root path, to the finding at its first project frame (dla census so a holder exists there)".to_owned()
+        growth::untied_needed(
+            &g,
+            "a stack ties to the finding whose owner is its root holder, or, with no root path, to the finding at its first project frame (dla census so a holder exists there)",
+        )
     };
     body.insert("needed".into(), json!(needed));
     out.evidence.push(g.evidence);

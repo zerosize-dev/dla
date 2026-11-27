@@ -1040,6 +1040,7 @@ fn series_part(
         .collect();
     let mut source = SeriesSource::new(SeriesSourceKind::Dump);
     source.command = Some("dla summarize heap-graph".into());
+    source.harness = ctx.capture_harness().map(str::to_owned);
     let series = SeriesFile {
         schema_version: 1,
         id: id.clone(),
@@ -1323,7 +1324,9 @@ fn series_part(
             "no passing column ties to {f} by holder, site or type: a holder ties to the finding whose owner is its module path plus name (for example src.scheduler.shared); dla ledger annotate {f} --owner <that form> sets it when none is set; an owner is set once, so when it is wrong add a finding with the owner in that form at the same site (dla ledger add --origin growth-series --evidence <E> --site <the same file:line> --owner <owner>) and merge the old one into it (dla ledger duplicate <old> --of <new>)"
         )
     } else {
-        "no passing holder is tied in the evidence: dla census --lang node gives each module variable and field an owner, which a holder then ties to".to_owned()
+        format!(
+            "no passing holder is tied in the evidence: dla ledger add --origin growth-series --evidence {growth_id} --owner <the owner of the largest passing holder> --site <file:line>, then dla alloc-test <the harness the snapshots came from> on that finding; dla census --lang node gives each module variable and field an owner, which a holder then ties to"
+        )
     };
     // The holder a reader looks at first: when a native handle keeps its objects, say so
     // before the next step, and give the line that hands them to it when it is known.

@@ -159,6 +159,23 @@ pub(crate) fn capture_harnesses(run_dir: Option<&Path>, rec: &EvidenceRecord) ->
         .collect()
 }
 
+/// The one harness every label lies under (`harness/<H>/...`): `None` when a label is outside any
+/// harness, when they name several harnesses, or when there is none. The one rule for "this
+/// summary was read from the captures of one harness", for [`capture_harness_strict`] (the raw
+/// file of a record) and for `dla summarize` (the inputs of a call, which name the harness of the
+/// series it writes).
+pub fn harness_of_labels<'a>(labels: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    let mut found: Option<&str> = None;
+    for label in labels {
+        let h = harness_of_path(label)?;
+        if found.is_some_and(|f| f != h) {
+            return None;
+        }
+        found = Some(h);
+    }
+    found.map(str::to_owned)
+}
+
 /// The one harness every capture an allocation-stack summary read lies under: `None` when a
 /// capture label is outside any `harness/<H>/`, when they name several harnesses, or when the raw
 /// file lists none (unlike [`capture_harnesses`], which drops such labels).
@@ -171,18 +188,11 @@ pub(crate) fn capture_harness_strict(
         .and_then(|(dir, raw)| fs::read_to_string(dir.join(raw)).ok())
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
         .and_then(|v| v.get("captures").and_then(Value::as_array).cloned())?;
-    let mut found: Option<&str> = None;
-    for c in &labels {
-        let h = c
-            .get("label")
-            .and_then(Value::as_str)
-            .and_then(harness_of_path)?;
-        if found.is_some_and(|f| f != h) {
-            return None;
-        }
-        found = Some(h);
-    }
-    found.map(str::to_owned)
+    let names: Option<Vec<&str>> = labels
+        .iter()
+        .map(|c| c.get("label").and_then(Value::as_str))
+        .collect();
+    harness_of_labels(names?)
 }
 
 /// Reads whose each holder of the retention records is.
@@ -339,6 +349,25 @@ mod tests {
         ledger::Ledger,
     };
     use serde_json::json;
+
+    #[test]
+    fn captures_name_one_harness_only_when_every_label_lies_under_it() {
+        let one = [
+            "harness/H4/out/p1-alloc/shim-dump.jsonl",
+            "harness/H4/out/p2-alloc/shim-dump.jsonl",
+        ];
+        assert_eq!(harness_of_labels(one).as_deref(), Some("H4"));
+        // Two harnesses, a label outside any harness, and no label at all name none.
+        assert_eq!(
+            harness_of_labels(["harness/H4/out/a", "harness/H5/out/b"]),
+            None
+        );
+        assert_eq!(
+            harness_of_labels(["harness/H4/out/a", "in/b/dump.jsonl"]),
+            None
+        );
+        assert_eq!(harness_of_labels([] as [&str; 0]), None);
+    }
 
     /// A ledger with one retention record of harness H4 whose bounded result lists `result` and
     /// whose raw file in the returned directory lists `raw`.

@@ -658,9 +658,8 @@ pub fn harness_about(
     {
         return Some(HarnessAbout::Probe);
     }
-    let of_harness = |series: &str| {
-        view.series_harness.get(series).map(String::as_str) == Some(manifest.id.as_str())
-    };
+    // A series a run of the harness measured, or a summary series read from its capture files.
+    let of_harness = |series: &str| view.harness_of_series(series) == Some(manifest.id.as_str());
     for t in view.trends.iter().filter(|t| of_harness(&t.series)) {
         if let Some(c) = t.columns.iter().find(|c| column_tied_to(ledger, c, &root)) {
             return Some(HarnessAbout::Column(c.name.clone()));
@@ -1083,16 +1082,37 @@ pub fn counts_as_growth(c: &crate::trend::ColumnTrend) -> bool {
 /// `suspected_static_only` count: the others have been decided.
 pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
     let mut out: Vec<Grown> = Vec::new();
+    // The findings a dump lead already lists, for the trends of summary series below: a lead
+    // that a summarizer made from its own growth record keeps its dump route.
+    let dump_roots: BTreeSet<FindingId> = if view.capture_harness.is_empty() {
+        BTreeSet::new()
+    } else {
+        let mut v = Vec::new();
+        dump_grown(view, &mut v);
+        v.into_iter().map(|g| g.finding).collect()
+    };
     for t in &view.trends {
         if view.gap_series.contains(&t.series) {
             continue;
         }
-        let Some(harness) = view.series_harness.get(&t.series) else {
+        // The harness that measured the series, or, for a summary series, the one whose
+        // capture files it was read from.
+        let Some(harness) = view.harness_of_series(&t.series).map(str::to_owned) else {
             continue;
         };
+        let harness = &harness;
+        let from_capture = view.capture_harness.contains_key(&t.series);
         // (finding, column, kind of its growth evidence) of every column that passed and points
         // at a finding, then every target the trend gave the verdict `grew`.
         let mut pointed: Vec<(FindingId, String, crate::series::ColumnKind)> = Vec::new();
+        // The findings made from the growth records of this trend of a summary series
+        // (`dla ledger add --origin growth-series --evidence <E>`): they stand on the capture's
+        // passing columns, a column with a site or with none.
+        let standing: Vec<FindingId> = if view.summary_series.contains(&t.series) {
+            standing_on_trend(view, &t.id)
+        } else {
+            Vec::new()
+        };
         for c in t
             .columns
             .iter()
@@ -1115,6 +1135,10 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
                     .map(|f| f.id.clone())
             }) {
                 pointed.push((f, c.name.clone(), c.kind));
+            } else {
+                for f in &standing {
+                    pointed.push((f.clone(), c.name.clone(), c.kind));
+                }
             }
         }
         for v in t.targets.iter().filter(|v| v.verdict == Verdict::Grew) {
@@ -1141,7 +1165,10 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
             let Some(rf) = view.ledger.finding(&root) else {
                 continue;
             };
-            if rf.polarity() != Polarity::Leak
+            if (from_capture
+                && (dump_roots.contains(&root)
+                    || !summary_trend_lead(view, harness, &root, &t.series)))
+                || rf.polarity() != Polarity::Leak
                 || root.is_sibling()
                 || view.ledger.merged_into(&root).is_some()
                 || !matches!(
@@ -1203,9 +1230,75 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
     out
 }
 
+/// Whether the passing column of a summary series `series`, read from the captures of harness
+/// `harness`, is a lead of `root`: the rule of a live summary ([`summary_harness`]) read from the
+/// trend. The harness is a hook driver, and it is made for the finding (a declared target or an
+/// entry-path harness of it), or the finding was made from this very series (it cites a record of
+/// it: `dla ledger add --origin growth-series --evidence <E>`). A capture of a test loop, of the
+/// project's own workload or of a driver made for other findings, whose column ties to a finding
+/// by its site, measured many holders at once: it says where the growth was made, and decides
+/// nothing about the finding.
+fn summary_trend_lead(view: &RunView, harness: &str, root: &FindingId, series: &str) -> bool {
+    let Some(dir) = view.run_dir.as_deref() else {
+        return false;
+    };
+    let Ok(m) = crate::harness::HarnessManifest::load(dir, harness) else {
+        return false;
+    };
+    if !m.is_hook_driver() {
+        return false;
+    }
+    if matches!(
+        harness_about(view, &m, root),
+        Some(HarnessAbout::Target | HarnessAbout::EntryPath)
+    ) {
+        return true;
+    }
+    let family: Vec<&crate::finding::Finding> = view
+        .ledger
+        .findings()
+        .filter(|f| &f.id == root || f.parent.as_ref() == Some(root))
+        .collect();
+    family.iter().any(|f| {
+        f.supports.iter().chain(&f.contradicts).any(|e| {
+            view.ledger
+                .evidence_by_id(e)
+                .and_then(|e| e.result.get("series").and_then(|s| s.as_str()))
+                == Some(series)
+        })
+    })
+}
+
+/// The leak-side findings of origin `growth-series` that cite a growth or unit-count record of
+/// trend `trend` (`dla ledger add --origin growth-series --evidence <E>` of a capture summary's
+/// trend): the findings that stand on its passing columns.
+fn standing_on_trend(view: &RunView, trend: &str) -> Vec<FindingId> {
+    let ids: Vec<&EvidenceId> = view
+        .ledger
+        .evidence_in_order()
+        .filter(|e| {
+            matches!(
+                e.kind,
+                EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries
+            )
+        })
+        .filter(|e| e.result.get("trend").and_then(|v| v.as_str()) == Some(trend))
+        .map(|e| &e.evidence_id)
+        .collect();
+    view.ledger
+        .findings()
+        .filter(|f| {
+            f.origin.as_str() == "growth-series"
+                && !f.id.is_sibling()
+                && f.supports.iter().any(|s| ids.contains(&s))
+        })
+        .map(|f| f.id.clone())
+        .collect()
+}
+
 /// True when growth record `e` is the one of a series that `dla summarize` wrote from capture
-/// files (its series file has no harness and names the summarize command), as against a trend
-/// of a harness series.
+/// files (its series file is of source kind `dump` and names the summarize command; it may name
+/// the harness the captures came from), as against a trend of a harness series.
 fn is_summary_series(view: &RunView, e: &EvidenceRecord) -> bool {
     let (Some(dir), Some(series)) = (
         view.run_dir.as_deref(),
@@ -1214,7 +1307,7 @@ fn is_summary_series(view: &RunView, e: &EvidenceRecord) -> bool {
         return false;
     };
     crate::series::SeriesFile::load(dir, series).is_ok_and(|s| {
-        s.source.harness.is_none()
+        s.source.kind == crate::series::SeriesSourceKind::Dump
             && s.source
                 .command
                 .as_deref()
@@ -1245,10 +1338,25 @@ fn summary_harness(
     let h = &crate::measured_holders::capture_harness_strict(Some(dir), own)?;
     let m = crate::harness::HarnessManifest::load(dir, h).ok()?;
     (m.is_hook_driver()
-        && matches!(
-            harness_about(view, &m, root)?,
-            HarnessAbout::Target | HarnessAbout::EntryPath
-        ))
+        && match harness_about(view, &m, root)? {
+            HarnessAbout::Target | HarnessAbout::EntryPath => true,
+            // A finding made from this very summary (it cites a record of the summary's series:
+            // `dla ledger add --origin growth-series --evidence <E>`) is about the harness the
+            // captures came from.
+            HarnessAbout::Evidence(cited) => {
+                let series_of = |e: &EvidenceRecord| {
+                    e.result
+                        .get("series")
+                        .and_then(|s| s.as_str())
+                        .map(str::to_owned)
+                };
+                view.ledger
+                    .evidence_by_id(&cited)
+                    .and_then(series_of)
+                    .is_some_and(|s| series_of(growth).as_ref() == Some(&s))
+            }
+            _ => false,
+        })
     .then(|| h.clone())
 }
 
@@ -1339,6 +1447,16 @@ fn dump_grown(view: &RunView, out: &mut Vec<Grown>) {
         if series.as_ref().is_some_and(|s| view.gap_series.contains(s)) {
             continue;
         }
+        // The trend of a summary series (`dla trend` applies the summary's own rule to it) writes
+        // a growth record that says what the summary's record said: the summary's record makes
+        // the lead, and a later trend must not bring back a lead that a decision lifted.
+        if e.result.get("trend").is_some()
+            && series
+                .as_ref()
+                .is_some_and(|s| view.summary_series.contains(s))
+        {
+            continue;
+        }
         let mut named: Vec<(FindingId, String)> = Vec::new();
         if crate::machine::is_passing_growth(e) {
             let Some(g) = crate::trend::GrowthSummary::from_result(&e.result) else {
@@ -1357,7 +1475,28 @@ fn dump_grown(view: &RunView, out: &mut Vec<Grown>) {
                     .iter()
                     .chain(c.candidates.iter())
                     .filter_map(|f| f.parse::<FindingId>().ok())
-                    .find(|f| ledger.finding(f).is_some());
+                    .find(|f| ledger.finding(f).is_some())
+                    // A passed column that names no finding is a lead of the finding at its
+                    // site, read now: a finding added after the summary (from this very
+                    // record) is the one that stands for it.
+                    .or_else(|| {
+                        let site = c.site.as_deref()?;
+                        ledger
+                            .findings()
+                            .find(|f| !f.id.is_sibling() && finding_is_at_site(ledger, f, site))
+                            .map(|f| f.id.clone())
+                    })
+                    // Or the finding made from this very record.
+                    .or_else(|| {
+                        ledger
+                            .findings()
+                            .find(|f| {
+                                f.origin.as_str() == "growth-series"
+                                    && !f.id.is_sibling()
+                                    && f.supports.contains(&e.evidence_id)
+                            })
+                            .map(|f| f.id.clone())
+                    });
                 if let Some(f) = found {
                     named.push((f, c.column.clone()));
                 }
@@ -2083,6 +2222,130 @@ mod tests {
             .iter()
             .map(|g| g.finding.to_string())
             .collect()
+    }
+
+    /// The findings (and harnesses) `grown_unmeasured` lists for a one-column trend T1 of series
+    /// S1, a summary series (source kind `dump`) whose column `stack:x` passed. `maps` says which
+    /// harness map names `S1` (`capture`: the captures lay under H1; `run`: a run of H1 wrote
+    /// it; anything else: none); `site` gives the column its site (`a.py:1`, where F1 is);
+    /// `stands` adds a finding of origin `growth-series` made from the trend's growth record.
+    fn grown_of_summary_trend(
+        maps: &str,
+        site: bool,
+        stands: bool,
+        targets: &[&str],
+        own_workload: bool,
+    ) -> Vec<(String, String)> {
+        let (_d, mut l) = scene();
+        // The hook driver H1, which targets `targets` (or, with `own_workload`, the project's own
+        // workload run as a command: no hook driver).
+        let dir = tempfile::tempdir().unwrap();
+        let mut extra = serde_json::json!({"runtime": "rust", "targets": targets});
+        if own_workload {
+            extra["mode"] = serde_json::json!("command");
+            extra["workload"] = serde_json::json!("W1");
+        }
+        manifest("H1", extra).save(dir.path()).unwrap();
+        if stands {
+            l.add_evidence(NewEvidence {
+                source: Source::Repo {
+                    commit: "c".into(),
+                    path: None,
+                },
+                tool: Tool {
+                    name: "dla".into(),
+                    version: "1".into(),
+                },
+                authority: Authority::Dump,
+                kind: EvidenceKind::GrowthSeries,
+                result: serde_json::json!({"trend": "T1", "series": "S1", "gate": "pass"}),
+                raw: None,
+                coverage: EvidenceCoverage::default(),
+                limitations: vec![],
+                unknowns: vec![],
+            })
+            .unwrap();
+            let e = l.evidence().last().unwrap().evidence_id.clone();
+            l.add_finding(NewFinding::new(
+                Origin::parse("growth-series").unwrap(),
+                vec![e],
+            ))
+            .unwrap();
+        }
+        let state =
+            crate::state::RunState::init("/p", None, 3600, None, crate::state::now_utc()).unwrap();
+        let mut view = RunView::new(state, l, None);
+        view.run_dir = Some(dir.path().to_path_buf());
+        let col: crate::trend::ColumnTrend = serde_json::from_value(serde_json::json!({
+            "name": "stack:x", "unit": "bytes", "kind": "gauge", "region": "off-heap",
+            "site": site.then_some("a.py:1"), "n": 3, "noise": 0.0, "rise": 100.0,
+            "shape": "steady", "gate": "pass", "gate_failed": [],
+        }))
+        .unwrap();
+        view.trends = vec![crate::trend::TrendReport {
+            schema_version: 1,
+            id: "T1".into(),
+            series: "S1".into(),
+            thresholds: dla_stats::GateThresholds::default(),
+            columns: vec![col],
+            targets: vec![],
+        }];
+        view.summary_series.insert("S1".into());
+        match maps {
+            "capture" => view.capture_harness.insert("S1".into(), "H1".into()),
+            "run" => view.series_harness.insert("S1".into(), "H1".into()),
+            _ => None,
+        };
+        grown_unmeasured(&view)
+            .iter()
+            .map(|g| (g.finding.to_string(), g.harness.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn a_passed_column_of_a_summary_series_leads_to_the_finding_at_its_site_through_its_harness() {
+        // The captures lay under H1, a driver made for F1, and F1 is at the column's site: F1 is
+        // a lead on H1.
+        assert_eq!(
+            grown_of_summary_trend("capture", true, false, &["F1"], false),
+            [("F1".to_owned(), "H1".to_owned())]
+        );
+        // A series about no harness points at nothing: there is nothing to decide it on.
+        assert!(grown_of_summary_trend("", true, false, &["F1"], false).is_empty());
+        // Nor does a column at a site no finding is at.
+        assert!(grown_of_summary_trend("capture", false, false, &["F1"], false).is_empty());
+    }
+
+    #[test]
+    fn a_capture_of_a_driver_made_for_other_findings_is_no_lead_of_a_finding_its_column_ties_to() {
+        // F1 is at the site of the passed column, but H1 targets nothing of it and F1 was not made
+        // from the series: the capture says where the growth was made, and many holders were
+        // alive together. (A run of the harness is another matter: that is the trend of a series
+        // it wrote.)
+        assert!(grown_of_summary_trend("capture", true, false, &[], false).is_empty());
+        assert_eq!(
+            grown_of_summary_trend("run", true, false, &[], false),
+            [("F1".to_owned(), "H1".to_owned())]
+        );
+        // The project's own workload is no driver made for anything: not even a finding made from
+        // the series, nor one the harness declares, is a lead of a capture of it.
+        assert!(grown_of_summary_trend("capture", false, true, &[], true).is_empty());
+        assert!(grown_of_summary_trend("capture", true, false, &["F1"], true).is_empty());
+    }
+
+    #[test]
+    fn a_finding_made_from_the_growth_record_of_a_summary_series_is_a_lead_at_no_site() {
+        // Made from the series, the finding is about the harness that took the captures
+        // whichever findings the driver was made for.
+        let found = grown_of_summary_trend("capture", false, true, &[], false);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].1, "H1");
+        assert!(
+            !["F1", "F2", "F3"].contains(&found[0].0.as_str()),
+            "{found:?}"
+        );
+        // Without the finding, the same column leads nowhere.
+        assert!(grown_of_summary_trend("capture", false, false, &[], false).is_empty());
     }
 
     const SITE_COLUMN: &str = "py.blocks@a.py:1";
@@ -3372,6 +3635,96 @@ mod tests {
         let mut view = no_trend_view(l);
         view.run_dir = Some(dir.path().to_path_buf());
         assert_eq!(grown_f1(&view), None);
+    }
+
+    #[test]
+    fn a_passed_dump_column_that_names_no_finding_is_a_lead_of_the_finding_at_its_site() {
+        let (_d, mut l) = scene();
+        // The summary named nothing (no finding was at the site then); F1 is at `a.py:1`.
+        dump_ev(
+            &mut l,
+            EvidenceKind::GrowthSeries,
+            None,
+            serde_json::json!({"series": "S3", "axis": "dump", "n": 3, "gate": "pass",
+                "passed": [{"column": "holder:app.Conn.request", "site": "a.py:1"}]}),
+        );
+        let g = grown_f1(&no_trend_view(l)).expect("F1 is at the column's site");
+        assert_eq!(g.column, "holder:app.Conn.request");
+        // A site no finding is at points at nothing.
+        let (_d, mut l) = scene();
+        dump_ev(
+            &mut l,
+            EvidenceKind::GrowthSeries,
+            None,
+            serde_json::json!({"series": "S3", "axis": "dump", "n": 3, "gate": "pass",
+                "passed": [{"column": "holder:app.Conn.request", "site": "a.py:99"}]}),
+        );
+        assert_eq!(grown_f1(&no_trend_view(l)), None);
+    }
+
+    #[test]
+    fn a_later_trend_of_the_summary_series_does_not_bring_back_a_lead_a_decision_lifted() {
+        let (_d, mut l) = scene();
+        let dir = tempfile::tempdir().unwrap();
+        manifest(
+            "H1",
+            serde_json::json!({"runtime": "rust", "targets": ["F1"]}),
+        )
+        .save(dir.path())
+        .unwrap();
+        live_summary(&mut l, dir.path(), "F1", None);
+        alloc_test(&mut l, "non-leak", "H1");
+        // `dla trend S9` (the final gate asks for it) writes a growth record of authority `dump`
+        // that passes with the same column: the summary's own record is the lead's, and a trend
+        // record newer than the alloc-test does not make it again.
+        dump_ev(
+            &mut l,
+            EvidenceKind::GrowthSeries,
+            None,
+            serde_json::json!({"series": "S9", "trend": "T3", "n": 3, "gate": "pass",
+                "passed": [{"column": "stack:push (a.py:6)", "finding": "F1"}]}),
+        );
+        let mut view = no_trend_view(l);
+        view.run_dir = Some(dir.path().to_path_buf());
+        view.summary_series.insert("S9".into());
+        assert_eq!(grown_f1(&view), None);
+        // The same record of a series that is not a summary series counts, as it always did.
+        view.summary_series.clear();
+        assert!(grown_f1(&view).is_some());
+    }
+
+    #[test]
+    fn a_finding_made_from_the_live_summary_is_a_lead_though_the_driver_does_not_target_it() {
+        // F1 is not a target of H1 (its manifest targets F2) and the passed column names no
+        // finding: F1 cites the summary's own growth record, and that is what it stands on.
+        let (_d, mut l) = scene();
+        let dir = tempfile::tempdir().unwrap();
+        manifest(
+            "H1",
+            serde_json::json!({"runtime": "rust", "targets": ["F2"]}),
+        )
+        .save(dir.path())
+        .unwrap();
+        let (_, growth) = live_summary(&mut l, dir.path(), "F9", None);
+        let mut view = no_trend_view(l.clone());
+        view.run_dir = Some(dir.path().to_path_buf());
+        assert_eq!(grown_f1(&view), None);
+        // F1 made from the growth record (`dla ledger add --origin growth-series --evidence E`).
+        let mut nf = NewFinding::new(Origin::parse("growth-series").unwrap(), vec![growth]);
+        nf.site = Some("a.py:6".into());
+        let line = l.add_finding(nf).unwrap();
+        let crate::Record::FindingAdded { finding } = &line.record else {
+            panic!("a finding_added record");
+        };
+        let id = finding.id.clone();
+        let mut view = no_trend_view(l);
+        view.run_dir = Some(dir.path().to_path_buf());
+        view.capture_harness.insert("S9".into(), "H1".into());
+        let found: Vec<FindingId> = grown_unmeasured(&view)
+            .iter()
+            .map(|g| g.finding.clone())
+            .collect();
+        assert!(found.contains(&id), "{found:?}");
     }
 
     #[test]
