@@ -1169,9 +1169,11 @@ mod tests {
 
     #[test]
     fn a_staircase_whose_gaps_grow_is_not_over_before_twice_its_last_gap() {
-        // The same column cut after 6600: no step yet, 3080 since the last one (at 3520), where
-        // the gaps (440, 880, 1320) call for 2 * (1320 + 440) = 3520. Not a plateau: the window
-        // that would decide it runs past 7040.
+        // The same column cut after 6600: no step yet, 3080 since the last one (at 3520). Of the
+        // main window's rises only those at 2200 and 3520 clear two scatters (the earlier, smaller
+        // ones of the doubling lie under it), so the one gap seen is 1320, and a single gap counts
+        // as growing: the next is expected 2 * (1320 + 440) = 3520 after the last. Not a plateau:
+        // the window that would decide it runs past 7040.
         let (main, extra) = measured_vec();
         let cut = &extra[..6];
         assert_eq!(cut.last().unwrap().0, 6600.0);
@@ -1183,6 +1185,44 @@ mod tests {
         // The window that long holds the step.
         let whole = plateau(&main, &extra[..n as usize], false, 0.0, MIN_BYTE_RISE);
         assert_eq!(whole.verdict, PlateauVerdict::Continues, "{whole:?}");
+    }
+
+    /// The steps `stair` sees in `main` (the rises over two scatters of its trend).
+    fn steps_seen(main: &[Point]) -> Vec<f64> {
+        let trend = theil_sen(main, 0.05).unwrap();
+        rise_xs(main, None, STEP_SCATTERS * dla_stats::noise(main, &trend))
+    }
+
+    #[test]
+    fn steps_that_come_ever_further_apart_wait_for_twice_the_last_gap_and_closer_ones_for_the_longest()
+     {
+        // Equal steps whose gaps grow (880, then 1760): the next is expected 2 * (1760 + 440) =
+        // 4400 after the last step (at 3520), where the longest gap alone would say 1760.
+        let growing = mb(
+            1,
+            &[
+                10., 110., 110., 210., 210., 210., 210., 310., 310., 310., 310., 310.,
+            ],
+        );
+        assert_eq!(steps_seen(&growing), [880.0, 1760.0, 3520.0]);
+        let flat = |first: usize, n: usize| mb(first, &vec![310.; n]);
+        // Ends at 7480 (3960 after the step): a step may still come.
+        assert!(matches!(
+            stair(&growing, &flat(13, 5), 1.0),
+            Some(Stair::TooShort { .. })
+        ));
+        // Ends at 8360 (4840 after it): the growth stopped.
+        assert_eq!(stair(&growing, &flat(13, 7), 1.0), Some(Stair::Stopped));
+        // Gaps that shrink (1760, then 880): the longest gap is the expectation, so a window
+        // that ends 2200 after the last step (over 1760, under 2 * (880 + 440)) has stopped and
+        // one that ends 1320 after it has not.
+        let closer = mb(1, &[10., 110., 110., 110., 110., 210., 210., 310., 310.]);
+        assert_eq!(steps_seen(&closer), [880.0, 2640.0, 3520.0]);
+        assert_eq!(stair(&closer, &flat(10, 4), 1.0), Some(Stair::Stopped));
+        assert!(matches!(
+            stair(&closer, &flat(10, 2), 1.0),
+            Some(Stair::TooShort { .. })
+        ));
     }
 
     #[test]
