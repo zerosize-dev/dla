@@ -1,0 +1,41 @@
+One block whose bytes grow is growth in every summary of dumps and allocation stacks
+
+The Rust library run's leak keeps one `Vec<u64>` that grows by `push`. Its allocation stacks
+showed one live block at the push line whose bytes doubled, and `dla summarize alloc-stack-diff`
+failed it: the summaries' rule held both the bytes and the block count to rise at every pair of
+captures, and one block that is resized keeps a count of one. The same rule reads every runtime's
+dumps and stacks, so a leak into one growing block never passed any of them: a Rust `Vec`, a Go
+slice or `bytes.Buffer`, a Java `long[]`, `byte[]`, `ByteArrayOutputStream` or `StringBuilder`, a
+Python `bytearray`.
+
+- The dump-series rule passes a count that is the same positive number at every dump when the
+  bytes rise at every pair and the last interval passes its share of the first. The passed column
+  says `"resized": true`. A count that rises at some pairs and holds at others, a count of zero, and
+  a flat pair of bytes still fail.
+- The holder discriminator reads such a series as a leak; one that rose and ends flat reads
+  inconclusive (a resized block is flat between resizes, and the alloc-test over a longer window
+  decides), not non-leak. A series flat from its first dump, and a count that rose and then
+  stopped, stay non-leak.
+- A failed summary whose holder kept one block that grew but stood still between two dumps says
+  so, and asks for captures whose work differs by a factor of two or more.
+- A Rust harness takes its allocation stacks at 1, 2, 4 and 8 times its step (15 rounds against
+  10), so a capacity that doubles is reallocated between every pair of points; the summary judges
+  the stacks against the captures' own units of work.
+- A passing, tied growth series that `dla summarize` wrote from the capture files of a driver made
+  for the finding is a lead of that finding, as a heap-dump holder already is: the final gate
+  lists it with the alloc-test, `ledger resolve` refuses to close it as "ran and showed no
+  growth", `close-rest` leaves it open, and an alloc-test that favors non-leak lifts it. A capture
+  of a test loop, of the project's own workload or of a driver made for other findings is no lead.
+
+The trend gate's step reading of the last commit also changes:
+
+- A series whose last reading falls below its highest by more than the noise tolerance is a fall,
+  not a flat end, and is not rescued as a stair.
+- Two steps are separate when a point that is not a rise lies between them, counted in points, so
+  a ramp with one skipped sample is still a ramp.
+- Once a capture was taken and not summarized, the trend leads with the summary that clears the
+  item (allocation stacks or the heap graph), never another summary command.
+
+The in-run capture points of the JVM, Node, Go and Python agents keep their even spacing; with
+their default four dumps, a container that doubles can still be equal at the last pair, and the
+summary then says what to do.

@@ -3956,3 +3956,19 @@ unattended run at a time and no builder beside it.
 - Builder S4 (a111d7574fd82a359) is in its local dynamic bench (jvm-pool-warmup FAIL seen, known flaky).
 - Re-run green (15/15). COMMITTED b98e119 on main (tree ebedb11, message 46); pushed main + dev.
   No release. Working tree now holds only builder S4's edits (19 files vs main).
+
+## S4 verification (builder a111d7574fd82a359 reported; report summary in u164)
+- Clean S4 tree = snapshot 282becc (wip/progress). My mutations: M1 (B4 harness filter off) fails
+  grown::...not_made_for_the_finding_is_no_lead; M2 (plateau resized-flat branch off) fails
+  rule::plateau_reads_... . Both restored (0 MUTANT lines).
+- Full suite on S4: u165/check.sh (bptt2p7e7), log u165/check.log.
+- Review workflow wwun72qqo (3 Sonnet reviewers + <=3 verifiers each), on 282becc.
+- Open points of my own: plateau() reads a constant-count block that rose then FELL as inconclusive
+  (brief said flat); JVM thread:main passes B1 (builder's precision note).
+- Next: fix confirmed findings, local dynamic 63+xfail (builder: 62+xfail+jvm-pool-warmup flake),
+  CI snapshot, commit msg 47, bump preview.15, release, rig refresh, r8-fastrace alone.
+- Review wwun72qqo done: 8 findings, 4 confirmed (all low): F1 plateau fell->inconclusive; F2 stood_still
+  scope + shim text; F3 summary_harness strict labels; F4 Rust x when the driver lowers its step.
+  Not real: alloc-test-before-summary revives lead (intended), series load cost, A2 sub-threshold point.
+- Builder resumed with wip-notes/s4-fix-brief.md (waits for u165 ALLDONE before editing), report u164/report2.md,
+  then dynamic set (u164/dyn2.json). Commit message drafted: wip-notes/commit-message-47.txt (update for F1-F4).
