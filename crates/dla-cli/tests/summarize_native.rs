@@ -799,6 +799,55 @@ mod shim {
     }
 
     #[test]
+    fn the_stood_still_advice_is_about_the_top_stack_not_a_small_unrelated_one() {
+        if !(have("gcc") && have("nm") && have("addr2line")) {
+            return;
+        }
+        let p = Project::new();
+        let work = p.run_dir.join("harness/H1/work");
+        let Some(addr) = build(&work) else { return };
+        p.put(
+            "src/leak.c",
+            &fs::read_to_string(work.join("src/leak.c")).unwrap(),
+        );
+        let prog = work.join("prog");
+        let mut files = Vec::new();
+        // The top stack (largest rise) falls at the last point: it fails for that reason. A
+        // small other stack is one block that stood still at one pair (4096, 8192, 8192, 16384).
+        for (k, (x, big, small)) in [
+            (1000u64, 102_400u64, 4096u64),
+            (2000, 204_800, 8192),
+            (3000, 409_600, 8192),
+            (4000, 307_200, 16384),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let rel = format!(
+                ".dla/{}/harness/H1/out/p{}-alloc/shim-dump.jsonl",
+                p.run_dir.file_name().unwrap().to_string_lossy(),
+                k + 1
+            );
+            let path = p.path().join(&rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let text = dump(&prog, addr, x, big).replace(
+                "\"live_bytes\":4096,\"live_blocks\":1",
+                &format!("\"live_bytes\":{small},\"live_blocks\":1"),
+            );
+            fs::write(&path, text).unwrap();
+            files.push(rel);
+        }
+        let v = summarize(&p, "alloc-stack-diff", &files);
+        assert_eq!(v["gate"], "fail", "{v}");
+        let needed = v["needed"].as_str().unwrap();
+        assert!(!needed.contains("stood still"), "{needed}");
+        assert!(
+            needed.contains("capture a point with more work"),
+            "{needed}"
+        );
+    }
+
+    #[test]
     fn captures_at_uneven_x_are_judged_by_their_rate_over_x() {
         if !(have("gcc") && have("nm") && have("addr2line")) {
             return;

@@ -142,7 +142,7 @@ pub fn gate_at(o: &Observed, xs: Option<&[f64]>) -> Result<Growth, Vec<String>> 
 pub const STOOD_STILL_NEEDED: &str = "a holder keeps one block (the same count at every dump) whose bytes grew but stood still between two dumps: a buffer that is resized is flat between resizes, so take dumps whose work differs by a factor of two or more, so that a resize falls between every pair";
 
 /// Whether the series is one block (or a fixed set of blocks: the same positive count at every
-/// dump) whose bytes rose from the first dump to the last but did not rise at every pair: a
+/// dump) whose bytes never fell, stood equal at some pair and rose from the first dump to the last: a
 /// buffer that is resized stands still between resizes, and the dumps fell between two of them.
 pub fn stood_still(o: &Observed) -> bool {
     let (Some(bytes), Some(counts)) = (all_present(&o.bytes), all_present(&o.counts)) else {
@@ -150,8 +150,9 @@ pub fn stood_still(o: &Observed) -> bool {
     };
     bytes.len() >= MIN_DUMPS
         && constant_count(&counts)
+        && bytes.windows(2).all(|w| w[1] >= w[0])
+        && bytes.windows(2).any(|w| w[1] == w[0])
         && bytes[bytes.len() - 1] > bytes[0]
-        && bytes.windows(2).any(|w| w[1] <= w[0])
 }
 
 /// `steady` when the byte increases stay within a factor of two of each other, else `stair`
@@ -186,7 +187,7 @@ pub struct Plateau {
 /// a leak (the count too, or a count that is one constant number of blocks: a block that is
 /// resized); an increase that stopped (the last interval at most [`STOPPED_SHARE`] of the
 /// first, or zero) favors a non-leak (warm-up fill, high-water mark), except for a constant
-/// count that rose and then ends flat, which is inconclusive: one block that is resized is flat
+/// count that rose and then ends flat (a last interval of zero or a few bytes, not a fall), which is inconclusive: one block that is resized is flat
 /// between resizes, and the allocation test over a longer window says whether it stopped;
 /// anything else is inconclusive. `None` when a dump has no figure or there are fewer than
 /// three dumps.
@@ -203,7 +204,7 @@ pub fn plateau(o: &Observed) -> Option<Plateau> {
     let stopped = last <= 0 || (first > 0 && (last as f64) <= STOPPED_SHARE * first as f64);
     let resized = constant_count(&counts);
     let grew = db.iter().all(|&d| d > 0) && (resized || dc.iter().all(|&d| d > 0));
-    let (favors, supports, reason) = if stopped && resized && first > 0 {
+    let (favors, supports, reason) = if stopped && resized && first > 0 && last >= 0 {
         (
             Favors::Inconclusive,
             Vec::new(),
@@ -422,7 +423,21 @@ mod tests {
         assert!(!stood_still(&obs(&[100, 200, 300], &[1; 3])));
         assert!(!stood_still(&obs(&[500; 3], &[1; 3])));
         assert!(!stood_still(&obs(&[300, 200, 100], &[1; 3])));
+        // A fall is not standing still.
+        assert!(!stood_still(&obs(&[100, 50, 300], &[1; 3])));
         assert!(!stood_still(&obs(&[100, 200, 200], &[1, 2, 2])));
+    }
+
+    #[test]
+    fn a_constant_count_block_that_rose_and_then_fell_is_a_non_leak_not_a_flat_end() {
+        let p = plateau(&obs(&[100, 200, 150], &[1, 1, 1])).unwrap();
+        assert_eq!(
+            (p.favors, p.supports),
+            (Favors::NonLeak, vec!["N-WARM", "N-HWM"])
+        );
+        // Ended flat stays inconclusive.
+        let p = plateau(&obs(&[100, 200, 200], &[1, 1, 1])).unwrap();
+        assert_eq!(p.favors, Favors::Inconclusive);
     }
 
     #[test]

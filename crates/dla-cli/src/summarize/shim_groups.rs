@@ -760,6 +760,18 @@ fn run_diff(
         })
         .collect();
 
+    // The series the advice on a stood-still block is about: with a focus finding the stacks
+    // that tie to it, else the top-ranked stack.
+    let stood_still = match &opts.finding {
+        Some(f) => picked
+            .iter()
+            .zip(&resolved)
+            .filter(|(_, rs)| rs.tie.as_ref().is_some_and(|(t, _)| t == f) || rs.also.contains(f))
+            .any(|(r, _)| rule::stood_still(&observed_of(r))),
+        None => ranked
+            .first()
+            .is_some_and(|r| rule::stood_still(&observed_of(r))),
+    };
     // A growing stack that ties to nothing: the findings whose site or writer is in the same
     // Rust function are named as a hint (never a tie): `(stack site, candidates)`.
     let mut same_function: Vec<(String, Vec<FindingId>)> = Vec::new();
@@ -1029,9 +1041,9 @@ fn run_diff(
     if let Some(a) = growth::ambiguous_json(&ambiguous) {
         body.insert("ambiguous".into(), a);
     }
-    let needed = if !g.pass && ranked.iter().any(|r| rule::stood_still(&observed_of(r))) {
+    let needed = if !g.pass && stood_still {
         format!(
-            "no stack's live bytes grow at every step; a stack of a constant block count grew overall: {} (rerun the harness capture, which spaces its points that way, and `dla summarize` with all dump files)",
+            "no stack's live bytes grow at every step; a stack of a constant block count grew overall: {} (take captures whose work differs by a factor of two or more; a Rust harness's `--capture alloc` already does, 1, 2, 4 and 8 times its step; then `dla summarize` with all dump files)",
             rule::STOOD_STILL_NEEDED
         )
     } else if !g.pass {

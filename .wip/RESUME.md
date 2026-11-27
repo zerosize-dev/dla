@@ -3972,3 +3972,8 @@ unattended run at a time and no builder beside it.
   Not real: alloc-test-before-summary revives lead (intended), series load cost, A2 sub-threshold point.
 - Builder resumed with wip-notes/s4-fix-brief.md (waits for u165 ALLDONE before editing), report u164/report2.md,
   then dynamic set (u164/dyn2.json). Commit message drafted: wip-notes/commit-message-47.txt (update for F1-F4).
+- u165 full suite on S4 (282becc tree): 2877 passed, 1 failed outside the mutants: alloc_test_jvm.rs:289 again
+  (2 of the last 2 runs: CI ebedb11 1st attempt, local now). This time os.rss AND os.rss_anon favor leak
+  (plateau inconclusive: anon still rising in the extension), nmt_committed/rss_file/vm_data/vm_hwm plateau.
+  Answer saved u165/jvm-flake-289.txt. fmt/clippy/schema/other crates green. Task 99: give it a builder
+  AFTER r8 (no builder beside an unattended run); it is a precision flake (inconclusive, never a false leak).

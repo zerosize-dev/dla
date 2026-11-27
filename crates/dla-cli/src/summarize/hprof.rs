@@ -804,12 +804,10 @@ fn series_part(
     // ---- the dump-series rule
     let mut passed: Vec<(String, rule::Growth)> = Vec::new();
     let mut best_failure: Option<(String, Vec<String>, u64)> = None;
-    let mut stood_still = false;
     for key in &keys {
         match rule::gate(&observed(key)) {
             Ok(g) => passed.push((key.clone(), g)),
             Err(why) => {
-                stood_still |= rule::stood_still(&observed(key));
                 let size = latest(key).map_or(0, |h| h.retained);
                 if best_failure.as_ref().is_none_or(|b| size > b.2) && n >= rule::MIN_DUMPS {
                     best_failure = Some((key.clone(), why, size));
@@ -817,6 +815,10 @@ fn series_part(
             }
         }
     }
+    // Only the series the reasons name (the largest that failed) decides what to advise.
+    let stood_still = best_failure
+        .as_ref()
+        .is_some_and(|(k, _, _)| rule::stood_still(&observed(k)));
     passed.sort_by_key(|(k, _)| std::cmp::Reverse(latest(k).map_or(0, |h| h.retained)));
 
     // ---- candidates for the passing holders, tied to an existing finding by owner or
