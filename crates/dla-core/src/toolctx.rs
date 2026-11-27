@@ -103,6 +103,11 @@ fn refused_since(
     let extended = RunState::load(run_dir)
         .ok()
         .and_then(|s| s.budget.extensions.iter().map(|e| e.at).max());
+    // The refusal file is stamped to the whole second (`now_utc`), while a ledger line is
+    // stamped to the millisecond: a finding added at 12:00:00.400 and a refusal written at
+    // 12:00:00.900 (stamped 12:00:00.000) must count. Compare at the refusal file's own
+    // precision, so the finding's time is cut to the second.
+    let since = chrono::SubsecRound::trunc_subsecs(since, 0);
     let since = extended.map_or(since, |at| since.max(at));
     text.lines().any(|l| {
         let Ok(v) = serde_json::from_str::<Value>(l) else {
