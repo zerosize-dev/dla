@@ -225,6 +225,10 @@
         }
       }
     },
+    "EvidenceId": {
+      "type": "string",
+      "pattern": "^([a-z0-9-]+/)?E[1-9][0-9]*$"
+    },
     "LeftOut": {
       "description": "What the default exclusions left out of a project.",
       "type": "object",
@@ -333,6 +337,17 @@
           "description": "Slope attributed to findings.",
           "type": "number",
           "format": "double"
+        },
+        "listed": {
+          "description": "The residual evidence (`E7`) that listed this row on `open_item`: the first listing of\nthe row's series on the item, or the one where the row grew past what the item had\nrecorded. A resolution of the item covers the row only when it was made after this\nevidence. A row an older version wrote has none and is covered by any resolution.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidenceId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "open_item": {
           "description": "Open item covering an over-threshold residual.",

@@ -3095,7 +3095,7 @@ fn generate_inner(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refu
             .iter()
             .filter_map(|t| ix.setup_hold(&t.id).map(|h| (t.id.clone(), h)))
             .collect();
-        targets::add_writer_gaps(&ctx.project, &mut described, &misses, &holds);
+        targets::add_writer_gaps(&ctx.project, rt, &mut described, &misses, &holds);
     }
     if manifest.is_entry_path() {
         targets::add_entry_facts(&ctx.project, rt, &mut described);

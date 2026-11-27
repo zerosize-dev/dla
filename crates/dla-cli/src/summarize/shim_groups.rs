@@ -558,7 +558,7 @@ impl Adapter for ShimStackGroups {
 fn shim_run(ctx: &Ctx<'_>, op: Op, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
     {
         let tc = ctx.tc;
-        let mut limits: BTreeSet<String> = BTreeSet::new();
+        let mut limits: BTreeSet<String> = ctx.left_out.iter().cloned().collect();
         let mut captures: Vec<ShimCapture> = Vec::new();
         for i in inputs {
             let text = i.read_text(MAX_BYTES)?;

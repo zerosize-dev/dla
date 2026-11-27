@@ -136,6 +136,7 @@ fn scene_points(runtime: &str, residual: f64, units: f64, n: u32) -> Run {
             unit: "bytes/n".into(),
             threshold: residual / 4.0,
             open_item: Some("O1".parse().unwrap()),
+            listed: None,
         }]);
     })
     .unwrap();

@@ -670,8 +670,8 @@ fn two_drivers_with_one_setup_do_not_settle_a_guarded_writer_a_third_with_anothe
     assert!(row.get("settled_by").is_none(), "{row}");
     let focus = row["focus"].as_str().unwrap();
     assert!(
-        focus.contains("F1: H1 and H2 missed its adding lines with the same set-up")
-            && focus.contains("change `setup()` too")
+        focus.contains("H1 and H2 missed its adding lines with the same set-up")
+            && focus.contains("F1: change `setup()`: leave out what consumes or resets the state (absent, not slowed")
             && focus.contains("or resolve F1 with the reason the state cannot be reached"),
         "{row}"
     );
@@ -688,6 +688,20 @@ fn two_drivers_with_one_setup_do_not_settle_a_guarded_writer_a_third_with_anothe
         trend.text.contains("with the same set-up"),
         "{}",
         trend.text
+    ); // The entry is cut by the output bound: it opens with the action.
+    let entry = trend.json["next"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|n| n.contains("with the same set-up"))
+        .unwrap_or_else(|| panic!("{}", trend.text));
+    let head: String = entry.chars().take(160).collect();
+    assert!(
+        head.starts_with("F1: change `setup()`: leave out")
+            && head.contains("leave out")
+            && head.contains("absent"),
+        "{entry}"
     );
     // The next focus harness's block says it, beside the guard line.
     r.capture_if_the_gate_asks("H2");
@@ -697,6 +711,19 @@ fn two_drivers_with_one_setup_do_not_settle_a_guarded_writer_a_third_with_anothe
     assert!(
         block.contains("missed its adding lines with the same set-up; the guard above them (line 11: if (draining) {)"),
         "{block}"
+    );
+    // The target's first line under its own names the change and where it is made: the set-up
+    // function of this runtime's skeleton, with the consumer absent (not slowed).
+    let lines: Vec<&str> = block.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.contains("F1 at "))
+        .unwrap_or_else(|| panic!("no target line in {block}"));
+    let first = lines[at + 1];
+    assert!(
+        first.contains("F1: change `setup()`: leave out what consumes or resets the state (absent, not slowed: a slow consumer still drains it)")
+            && first.contains("`async function setup()` in dla-harness.cjs"),
+        "the first line of a held target: {first}"
     );
     // A third driver whose set-up differs and still closes the guard lets the target close.
     let h = next.json["summary"]["harness"].as_str().unwrap().to_owned();

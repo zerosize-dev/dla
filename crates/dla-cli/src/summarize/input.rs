@@ -104,6 +104,103 @@ fn head_of(path: &Path) -> Result<Vec<u8>, Error> {
     Ok(buf)
 }
 
+/// Largest dump file read to look for its exit record.
+const EXIT_SCAN_BYTES: u64 = 64 << 20;
+
+/// The label of a capture: the directory of its dump file (`p4-alloc`), else the path as shown.
+fn capture_label(i: &Input) -> String {
+    i.abs
+        .parent()
+        .and_then(|d| d.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| i.shown().to_owned())
+}
+
+/// True for the dump of an allocator-shim capture (`dump.jsonl` or `shim-dump.jsonl` of a Rust or
+/// native driver) that holds no record of the end of its process: the process still writes it, or
+/// was cut before it did. Read from the parsed lines: a dump of a managed runtime, a file that is
+/// no harness dump, or one over the size bound is never this.
+fn shim_dump_without_exit(i: &Input) -> bool {
+    if !matches!(i.name_lower().as_str(), "dump.jsonl" | "shim-dump.jsonl")
+        || i.size > EXIT_SCAN_BYTES
+    {
+        return false;
+    }
+    let Ok(bytes) = fs::read(&i.abs) else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let (dumps, _bad) = dla_core::HarnessDump::parse_lines(&text);
+    let shim = dumps.iter().any(|d| {
+        d.raw_sites.is_some()
+            || d.runtime
+                .as_deref()
+                .is_some_and(|r| r.eq_ignore_ascii_case("native") || r.eq_ignore_ascii_case("rust"))
+    });
+    shim && !dumps
+        .iter()
+        .any(|d| d.phase == dla_core::harness::DumpPhase::Exit)
+}
+
+/// The sentence for a capture that is not complete: why it is not (`why`, as a verb phrase), and
+/// what to do. The harness is the one `harness/<H>/` of the path (`rel`, else `abs`).
+pub fn unfinished_text(label: &str, rel: &str, abs: &str, why: &str) -> String {
+    let h = dla_core::measured_holders::harness_of_path(rel)
+        .or_else(|| dla_core::measured_holders::harness_of_path(abs))
+        .unwrap_or("<H>");
+    format!(
+        "capture {label} {why}: it is still being written or its process was cut; wait for `dla harness run {h}` to end (dla run status), then summarize every capture it lists"
+    )
+}
+
+/// The refusal for a heap dump or snapshot that is cut short (the parser read it up to its end and
+/// found the file incomplete): the capture is still being written, or its process was cut. The
+/// code stays `malformed-artifact`; the message says to wait for the harness, and `retake` is what
+/// to do when it has ended and the file is still cut.
+pub fn truncated_refusal(rel: &str, why: &str, retake: &str) -> Failure {
+    let label = rel.rsplit('/').next().unwrap_or(rel);
+    Failure::refuse(
+        "malformed-artifact",
+        unfinished_text(label, rel, rel, &format!("is truncated ({why})")),
+        "a complete capture: the harness that writes it has ended",
+        format!(
+            "dla run status   (wait for dla harness run <H> to end, then summarize every capture file its captures.json lists); if it has ended and the file is still cut: {retake}"
+        ),
+    )
+}
+
+/// The inputs without the shim dumps that have no exit record (a capture still being written, or
+/// whose process was cut), and one sentence per capture left out. When no input is left, the call
+/// is refused with the same sentence: a summary of a capture that is still being written says
+/// nothing about the run, and the harness must end first (`dla run status`).
+pub fn without_unfinished(inputs: Vec<Input>) -> Res<(Vec<Input>, Vec<String>)> {
+    let (kept, left): (Vec<Input>, Vec<Input>) =
+        inputs.into_iter().partition(|i| !shim_dump_without_exit(i));
+    if left.is_empty() {
+        return Ok((kept, Vec::new()));
+    }
+    let said: Vec<String> = left
+        .iter()
+        .map(|i| {
+            unfinished_text(
+                &capture_label(i),
+                &i.rel,
+                &to_slash(&i.abs),
+                "has no exit record",
+            )
+        })
+        .collect();
+    if kept.is_empty() {
+        return Err(Failure::refuse(
+            "capture-incomplete",
+            said.join("; "),
+            "dump files whose processes ended (each has an exit record)",
+            "dla run status   (wait for dla harness run <H> to end), then dla summarize <every dump file its captures.json lists>",
+        ));
+    }
+    Ok((kept, said))
+}
+
 /// Resolves one file: a path relative to the project, an absolute path, or a path relative
 /// to the run directory (`attach/P1/histo.txt`, `harness/H1/out/1234.jsonl`).
 fn locate(tc: &ToolCtx, given: &Path) -> Option<PathBuf> {

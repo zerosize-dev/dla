@@ -624,6 +624,14 @@ fn a_damaged_snapshot_is_refused_with_the_fix() {
     );
     assert_eq!(e["code"], "malformed-artifact");
     assert!(e["fix"].as_str().unwrap().contains("snapshot again"), "{e}");
+    // A cut snapshot may be one the harness is still writing: the refusal says to wait for it.
+    let msg = e["message"].as_str().unwrap();
+    assert!(
+        msg.contains("capture cut.heapsnapshot is truncated")
+            && msg.contains("still being written or its process was cut")
+            && msg.contains("wait for `dla harness run <H>` to end (dla run status)"),
+        "{e}"
+    );
     // Not a snapshot at all, named like one.
     let junk = p.put("in/junk.heapsnapshot", b"{\"hello\": [1, 2, 3]}");
     let e = refused(
@@ -1059,11 +1067,16 @@ impl Project {
     /// (its own pid directory) and lists it in `captures.json` with `x`, the way
     /// `dla harness run H1 --capture heap` does. Returns the project-relative path.
     fn capture(&self, label: &str, pid: u32, x: Option<f64>, src: &str) -> String {
-        let run_rel = format!("harness/H1/out/{label}/capture/{pid}/heap-1.heapsnapshot");
+        self.capture_of("H1", label, pid, x, src)
+    }
+
+    /// [`Self::capture`] of harness `h`.
+    fn capture_of(&self, h: &str, label: &str, pid: u32, x: Option<f64>, src: &str) -> String {
+        let run_rel = format!("harness/{h}/out/{label}/capture/{pid}/heap-1.heapsnapshot");
         let abs = self.run_dir.join(&run_rel);
         fs::create_dir_all(abs.parent().unwrap()).unwrap();
         fs::copy(self.path().join(src), &abs).unwrap();
-        let list = self.run_dir.join("harness/H1/captures.json");
+        let list = self.run_dir.join(format!("harness/{h}/captures.json"));
         let mut v: Value = fs::read_to_string(&list)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
@@ -1120,6 +1133,8 @@ fn per_point_harness_snapshots_form_a_series_over_n_and_tie_by_holder() {
     )
     .unwrap();
     assert_eq!(s["axis"], "n");
+    // Every snapshot lies under harness/H1/: the series is about that harness.
+    assert_eq!(s["source"]["harness"], "H1", "{s}");
     let xs: Vec<f64> = s["points"]
         .as_array()
         .unwrap()
@@ -1145,6 +1160,48 @@ fn per_point_harness_snapshots_form_a_series_over_n_and_tie_by_holder() {
     assert_eq!(g["result"]["series_kind"], "per-point");
     assert_eq!(g["result"]["passed"][0]["finding"], f.as_str());
     assert_eq!(g["result"]["passed"][0]["tie"]["rule"], "holder");
+}
+
+/// The `source` of the series a heap-graph call wrote.
+fn series_source(p: &Project, v: &Value) -> Value {
+    let s: Value = serde_json::from_str(
+        &fs::read_to_string(
+            p.run_dir
+                .join(format!("series/{}.json", v["series"].as_str().unwrap())),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    s["source"].clone()
+}
+
+#[test]
+fn a_snapshot_series_names_its_harness_when_every_snapshot_lies_under_one() {
+    let p = Project::with_sources();
+    let src = retry(&p);
+    // Under one harness: it is the series' `source.harness`.
+    let one = vec![
+        p.capture_of("H1", "p1-native", 10, Some(100.0), &src[0]),
+        p.capture_of("H1", "p5-native", 20, Some(500.0), &src[1]),
+        p.capture_of("H1", "p9-native", 30, Some(900.0), &src[2]),
+    ];
+    let v = heap_graph(&p, &one, &[]);
+    assert_eq!(series_source(&p, &v)["harness"], "H1", "{v}");
+    // Outside any harness (the files of `in/`): none.
+    let v = heap_graph(&p, &src, &[]);
+    assert!(series_source(&p, &v).get("harness").is_none(), "{v}");
+    // Under two harnesses: the call is refused (the captures of two harnesses are no series), so
+    // no series names either.
+    let two = [
+        p.capture_of("H1", "p1-native", 11, Some(100.0), &src[0]),
+        p.capture_of("H2", "p5-native", 21, Some(500.0), &src[1]),
+        p.capture_of("H2", "p9-native", 31, Some(900.0), &src[2]),
+    ];
+    let mut args = vec!["summarize", "heap-graph"];
+    args.extend(two.iter().map(String::as_str));
+    let (code, _, v) = run(p.path(), &args);
+    assert_eq!(code, 2, "{v}");
+    assert_eq!(v["error"]["code"], "dumps-not-comparable", "{v}");
 }
 
 #[test]

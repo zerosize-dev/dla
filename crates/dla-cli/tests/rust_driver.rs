@@ -414,6 +414,14 @@ fn capture_alloc_names_the_leaking_function_hints_the_finding_and_an_annotate_ti
         "--capture",
         "alloc",
     ]);
+    // The run record counts the capture files it wrote (the shim record of each allocation
+    // point), not 0.
+    let cost = &out["summary"]["capture"];
+    assert!(
+        cost["files"].as_u64().unwrap() >= 3 && cost["bytes"].as_u64().unwrap() > 0,
+        "the run record counts the allocation captures: {out}"
+    );
+    assert!(cost["kinds"]["alloc"][0].as_u64().unwrap() >= 3, "{out}");
     // The series of the capture run itself does not propose the capture again.
     let again = r.ok(&["trend", out["summary"]["series"][0].as_str().unwrap()]);
     assert!(

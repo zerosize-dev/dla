@@ -11,7 +11,7 @@ use crate::{
     error::Error,
     finding::Region,
     fsutil::{load_versioned, to_pretty_json, with_run_lock, write_atomic},
-    ids::OpenItemId,
+    ids::{EvidenceId, OpenItemId},
     state::{COVERAGE_FILE, RunState, Scope},
     version::Artifact,
 };
@@ -169,6 +169,12 @@ pub struct ResidualRow {
     /// Open item covering an over-threshold residual.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_item: Option<OpenItemId>,
+    /// The residual evidence (`E7`) that listed this row on `open_item`: the first listing of
+    /// the row's series on the item, or the one where the row grew past what the item had
+    /// recorded. A resolution of the item covers the row only when it was made after this
+    /// evidence. A row an older version wrote has none and is covered by any resolution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listed: Option<EvidenceId>,
 }
 
 /// A thing a runtime's tooling cannot observe.
@@ -451,6 +457,7 @@ mod tests {
             unit: "bytes/n".into(),
             threshold: 2.5,
             open_item: None,
+            listed: None,
         }
     }
 

@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use dla_core::{
-    EvidenceId, EvidenceRecord, Finding, FindingState, Measured, RunView, UNCLASSIFIED,
+    EvidenceId, EvidenceRecord, Finding, FindingState, Measured, Resolution, RunView, UNCLASSIFIED,
     coverage::{BackendStatus, CoverageManifest, ResidualRow},
     discriminator::favors_of,
     evidence::CoverageStatus,
@@ -286,7 +286,7 @@ fn header(out: &mut String, view: &RunView, st: &ReportStatus) {
         line.push_str(&clause);
     }
     let _ = writeln!(out, "{line}\n");
-    let _ = writeln!(out, "Residual: {}\n", residual_line(view.coverage.as_ref()));
+    let _ = writeln!(out, "Residual: {}\n", residual_line(view));
     let _ = writeln!(out, "Coverage: {}\n", coverage_line(view.coverage.as_ref()));
     if let Some(line) = QUEUE.with(|q| q.borrow().as_ref().and_then(|f| f.line())) {
         let _ = writeln!(out, "Queue: {line}\n");
@@ -677,8 +677,8 @@ fn plural_n(n: u64, noun: &str) -> String {
     format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
 }
 
-fn residual_line(coverage: Option<&CoverageManifest>) -> String {
-    let Some(cov) = coverage else {
+fn residual_line(view: &RunView) -> String {
+    let Some(cov) = view.coverage.as_ref() else {
         return "not measured".to_owned();
     };
     if cov.residual.is_empty() {
@@ -688,7 +688,7 @@ fn residual_line(coverage: Option<&CoverageManifest>) -> String {
         return cov
             .residual
             .iter()
-            .map(residual_row)
+            .map(|r| residual_row(view, r))
             .collect::<Vec<_>>()
             .join("; ");
     }
@@ -699,7 +699,7 @@ fn residual_line(coverage: Option<&CoverageManifest>) -> String {
     let mut parts: Vec<String> = above
         .iter()
         .take(RESIDUAL_HEADER_ROWS)
-        .map(|r| residual_row(r))
+        .map(|r| residual_row(view, r))
         .collect();
     if above.len() > RESIDUAL_HEADER_ROWS {
         parts.push(format!(
@@ -728,12 +728,15 @@ fn residual_section(out: &mut String, view: &RunView) {
     }
     out.push_str("## Residual by series\n\n");
     for r in &cov.residual {
-        let _ = writeln!(out, "- {}", residual_row(r));
+        let _ = writeln!(out, "- {}", residual_row(view, r));
     }
     out.push('\n');
 }
 
-fn residual_row(r: &ResidualRow) -> String {
+/// How long a remedy may be in a residual row before it is cut.
+const REMEDY_CLIP: usize = 120;
+
+fn residual_row(view: &RunView, r: &ResidualRow) -> String {
     let series = r
         .series
         .as_deref()
@@ -749,7 +752,34 @@ fn residual_row(r: &ResidualRow) -> String {
     if r.residual > r.threshold {
         s.push_str(" ABOVE THRESHOLD");
         if let Some(o) = &r.open_item {
-            let _ = write!(s, ", see {o}");
+            match dla_core::gate::residual_row_resolution(view, r) {
+                None => {
+                    let _ = write!(s, ", see {o}");
+                }
+                Some(res) => {
+                    let how = match res {
+                        Resolution::Unresolved { reason, remedy } => {
+                            let remedy = inline(remedy);
+                            let clipped: String = remedy.chars().take(REMEDY_CLIP).collect();
+                            let dots = if remedy.chars().count() > REMEDY_CLIP {
+                                "..."
+                            } else {
+                                ""
+                            };
+                            format!("resolved as {reason}: {clipped}{dots}")
+                        }
+                        Resolution::Hypothesis(f) => format!("resolved by {f}"),
+                    };
+                    if dla_core::gate::residual_row_covered(view, r) {
+                        let _ = write!(s, ", {o} {how}");
+                    } else {
+                        let _ = write!(
+                            s,
+                            ", NOT COVERED: {o} {how}, but this row was listed after that resolution"
+                        );
+                    }
+                }
+            }
         }
     }
     s

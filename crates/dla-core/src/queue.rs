@@ -295,8 +295,9 @@ pub fn setup_hold_sentence(id: &FindingId, harnesses: &[String], guard: Option<&
         || "the guard above them".to_owned(),
         |g| format!("the guard above them ({g})"),
     );
+    // The action comes first: an entry that the output bound cuts keeps its first 160 characters.
     format!(
-        "{id}: {who} missed its adding lines with the same set-up; {above} may need a state the set-up removes: change `setup()` too (for example, leave out what consumes or resets that state), or resolve {id} with the reason the state cannot be reached"
+        "{id}: change `setup()`: leave out what consumes or resets the state (absent, not slowed: a slow consumer still drains it); {who} missed its adding lines with the same set-up; {above} may need a state the set-up removes; or resolve {id} with the reason the state cannot be reached"
     )
 }
 
@@ -1278,7 +1279,7 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                             detail: if *thread {
                                 THREAD_REASON.into()
                             } else {
-                                "its code ran and its holder stayed flat under one driver".into()
+                                "its code ran under one driver and no run showed its holder grow (a holder with no probe is not measured by that)".into()
                             },
                             writers: Vec::new(),
                         },
@@ -2404,10 +2405,25 @@ mod tests {
         assert_eq!(held, ["H1", "H2"]);
         let text = setup_hold_sentence(&id, &held, Some("line 37: if full {"));
         assert!(
-            text.starts_with("F1: H1 and H2 missed its adding lines with the same set-up; the guard above them (line 37: if full {) may need a state the set-up removes: change `setup()` too"),
+            text.starts_with("F1: change `setup()`: leave out what consumes or resets the state (absent, not slowed: a slow consumer still drains it); H1 and H2 missed its adding lines with the same set-up; the guard above them (line 37: if full {) may need a state the set-up removes; or resolve"),
             "{text}"
         );
         assert!(text.ends_with("or resolve F1 with the reason the state cannot be reached"));
+        // One sentence, and the action is inside the first 160 characters (the output bound cuts
+        // an entry there), even for a long finding id and a long list of drivers.
+        assert!(!text.contains(". "), "{text}");
+        let long = setup_hold_sentence(
+            &FindingId::new(123),
+            &["H10".to_owned(), "H11".to_owned(), "H12".to_owned()],
+            Some("line 37: if full {"),
+        );
+        let head: String = long.chars().take(160).collect();
+        assert!(
+            head.contains("leave out")
+                && head.contains("absent")
+                && head.contains("change `setup()`"),
+            "{head}"
+        );
     }
 
     #[test]

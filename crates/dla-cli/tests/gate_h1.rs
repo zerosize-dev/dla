@@ -364,6 +364,7 @@ fn a_whole_process_column_is_never_tied_and_is_accounted_for_by_the_residual() {
         unit: "bytes/iteration".into(),
         threshold: 1.0,
         open_item: None,
+        listed: None,
     };
     dla_core::CoverageManifest::update(&r.run_dir(), |m| m.set_residual(vec![row(0.5)])).unwrap();
     let m = r.missing(&["--final"]);
@@ -431,6 +432,7 @@ fn the_jvm_non_heap_category_columns_are_never_tied_and_the_non_heap_row_account
         unit: "bytes/iteration".into(),
         threshold: 1.0,
         open_item: None,
+        listed: None,
     };
     use dla_core::finding::Region;
     // A heap row over its threshold does not decide a non-heap column: the non-heap row does,
@@ -506,6 +508,7 @@ fn once_a_series_has_a_gap_row_the_final_gate_lists_the_resolve_and_not_gap_agai
         unit: "bytes/iteration".into(),
         threshold: 1.0,
         open_item: Some("O1".parse().unwrap()),
+        listed: None,
     };
     // A row over its threshold that names no item: only `dla gap` raises one, so gap stays.
     let mut bare = row.clone();
@@ -636,6 +639,7 @@ fn a_nonheap_residual_row_with_a_harness_lists_the_alloc_test_route() {
         unit: "bytes/iteration".into(),
         threshold: 1.0,
         open_item: Some("O1".parse().unwrap()),
+        listed: None,
     };
     let fix_of = || {
         let items = r.items(&["--final"]);
@@ -768,6 +772,7 @@ fn a_type_count_column_with_no_tie_is_accounted_for_by_the_residual() {
         unit: "bytes/iteration".into(),
         threshold: 1.0,
         open_item: None,
+        listed: None,
     };
     dla_core::CoverageManifest::update(&r.run_dir(), |m| m.set_residual(vec![row(0.5)])).unwrap();
     let m = r.missing(&["--final"]);
@@ -829,6 +834,7 @@ fn an_untied_py_type_column_is_not_left_to_the_residual_rows() {
         unit: "bytes/iteration".into(),
         threshold: 1.0,
         open_item: None,
+        listed: None,
     };
     dla_core::CoverageManifest::update(&r.run_dir(), |m| m.set_residual(vec![row])).unwrap();
     let items = r.items(&["--final"]);

@@ -177,10 +177,16 @@ fn works_on_the_run(c: &Command) -> bool {
 
 impl Around {
     fn before(cli: &Cli) -> Option<Self> {
+        // The harness is part of the name: a second run of the same harness is told apart from a
+        // run of another one (see `harness_cmd::refuse_running`).
+        let harness_run;
         let name = match &cli.command {
             Command::Census(_) => "dla census",
             Command::Sweep(_) => "dla sweep",
-            Command::Harness(harness_cmd::HarnessCmd::Run(_)) => "dla harness run",
+            Command::Harness(harness_cmd::HarnessCmd::Run(r)) => {
+                harness_run = format!("dla harness run {}", r.harness_id());
+                harness_run.as_str()
+            }
             Command::Trend(_) => "dla trend",
             Command::AllocTest(_) => "dla alloc-test",
             Command::Report => "dla report",

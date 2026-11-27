@@ -259,6 +259,20 @@ pub struct RunOutput {
     pub earlier_full_series: bool,
     /// The `dla summarize` commands that read this run's captures, most useful first.
     pub capture_commands: Vec<String>,
+    /// The allocator-shim records of `--capture alloc` on a Rust harness
+    /// (`out/p<k>-alloc/shim-dump.jsonl`): capture files too, counted in the run record.
+    pub shim_dumps: Vec<ShimDumpFile>,
+}
+
+/// One `out/p<k>-alloc/shim-dump.jsonl` a Rust `--capture alloc` run wrote.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ShimDumpFile {
+    /// Run-relative path.
+    pub path: String,
+    /// The measured point (`p3-alloc`).
+    pub label: String,
+    /// Size in bytes.
+    pub bytes: u64,
 }
 
 fn failed(why: impl Into<String>, missing: impl Into<String>, fix: impl Into<String>) -> Refusal {
@@ -2644,6 +2658,12 @@ fn rust_alloc_points(
         let label_dir = paths.out.join(&label);
         if capture::split_shim_dump(&label_dir, res.pid) == capture::ShimSplit::Written {
             written += 1;
+            let shim_file = label_dir.join(capture::SHIM_DUMP);
+            out.shim_dumps.push(ShimDumpFile {
+                path: paths.rel(ctx, &shim_file),
+                label: label.clone(),
+                bytes: fs::metadata(&shim_file).map_or(0, |m| m.len()),
+            });
             // The driver lowers its step when the rounds would not fit the time limit and still
             // exits 0: the point's x is the units it did, not the units asked for.
             let did = fs::read_to_string(label_dir.join("dump.jsonl"))
@@ -3609,13 +3629,20 @@ fn capture_cost(out: &RunOutput) -> Value {
         e.1 += c.bytes;
         e.2 += c.ms.unwrap_or(0);
     }
+    // The shim records of a Rust allocation capture are capture files of kind alloc too.
+    if !out.shim_dumps.is_empty() {
+        let e = by_kind.entry("alloc").or_default();
+        e.0 += out.shim_dumps.len() as u64;
+        e.1 += out.shim_dumps.iter().map(|d| d.bytes).sum::<u64>();
+    }
     let kinds: serde_json::Map<String, Value> = by_kind
         .iter()
         .map(|(k, (n, b, ms))| ((*k).to_owned(), json!([n, b, ms])))
         .collect();
     json!({
-        "files": out.captures.len(),
-        "bytes": out.captures.iter().map(|c| c.bytes).sum::<u64>(),
+        "files": out.captures.len() + out.shim_dumps.len(),
+        "bytes": out.captures.iter().map(|c| c.bytes).sum::<u64>()
+            + out.shim_dumps.iter().map(|d| d.bytes).sum::<u64>(),
         "ms": out.captures.iter().filter_map(|c| c.ms).sum::<u64>(),
         "kinds": kinds,
     })
@@ -3627,6 +3654,7 @@ fn capture_report(out: &RunOutput, commands: &[String]) -> Value {
         "tool": out.tool.map(NativeTool::as_str),
         "cost": capture_cost(out),
         "files": out.captures,
+        "shim_dumps": out.shim_dumps,
         "summarize": commands,
         "limitations": out.limitations,
     })
