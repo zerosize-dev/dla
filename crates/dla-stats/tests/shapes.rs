@@ -300,3 +300,139 @@ fn noise_free_tiny_rise_on_a_large_level_fails_the_gate_like_the_shape_says() {
     let b = run(&series(12, |i| 1e12 + 1e5 * i as f64));
     assert_eq!(b.gate, GateVerdict::Pass, "{:?}", b.gate_failed);
 }
+
+// ---- growth in doubling steps ----
+
+/// `native.live_bytes` of a run of a Rust library whose writer fills a `Vec`: the level doubles at
+/// each step, the steps come further apart, and the column then stays flat.
+const DOUBLING: [f64; 9] = [
+    128_537_961.0,
+    254_367_081.0,
+    506_025_321.0,
+    506_025_321.0,
+    1_009_341_801.0,
+    1_009_341_801.0,
+    1_009_341_801.0,
+    1_009_341_801.0,
+    1_009_341_977.0,
+];
+
+/// Points 440 units apart from `first` (the x of point `first_i` is `440 * (first_i + 1)`).
+fn units(ys: &[f64], first_i: usize) -> Vec<(f64, f64)> {
+    ys.iter()
+        .enumerate()
+        .map(|(i, &y)| (440.0 * (first_i + i + 1) as f64, y))
+        .collect()
+}
+
+fn gate_of(points: &[(f64, f64)]) -> Analysis {
+    analyze(points, None, false, &GateThresholds::default())
+}
+
+#[test]
+fn a_column_that_doubled_in_steps_further_apart_passes_while_its_flat_end_is_shorter_than_the_next_step()
+ {
+    for (what, pts) in [
+        ("as measured, warm-up removed", units(&DOUBLING[1..], 1)),
+        ("with the warm-up point", units(&DOUBLING, 0)),
+    ] {
+        let a = gate_of(&pts);
+        assert_eq!(a.shape, TrendShape::Stair, "{what}");
+        assert_eq!(a.gate, GateVerdict::Pass, "{what}: {:?}", a.gate_failed);
+        assert!(a.gate_failed.is_empty(), "{what}");
+        let note = a.gate_note.expect(what);
+        assert!(note.contains("flat end is shorter"), "{note}");
+        assert_eq!(gate(&pts, &GateThresholds::default()).0, GateVerdict::Pass);
+    }
+}
+
+#[test]
+fn the_same_column_flat_for_longer_than_the_next_step_is_expected_keeps_its_plateau() {
+    // 2200 is the last step; 2 x (880 + 440) = 2640 is the next gap: 4840 is past it.
+    for last_x in [5280.0, 6600.0, 8800.0] {
+        let mut pts = units(&DOUBLING[1..], 1);
+        let mut x = 4400.0;
+        while x <= last_x {
+            pts.push((x, 1_009_341_977.0));
+            x += 440.0;
+        }
+        let a = gate_of(&pts);
+        assert_eq!(a.shape, TrendShape::Plateau, "to {last_x}");
+        assert_eq!(a.gate, GateVerdict::Fail, "to {last_x}");
+        assert!(a.gate_note.is_none());
+    }
+}
+
+#[test]
+fn a_bounded_fill_is_a_ramp_then_flat_not_separate_steps() {
+    // Four points up, then flat: the flat end (four spacings) is no longer than twice the gap of
+    // the rises, so only the rises being at every point keeps it from passing; and longer.
+    for ys in [
+        &[100e6, 200e6, 300e6, 400e6, 400e6, 400e6, 400e6, 400e6][..],
+        &[
+            100e6, 200e6, 300e6, 400e6, 500e6, 500e6, 500e6, 500e6, 500e6, 500e6,
+        ][..],
+    ] {
+        let a = gate_of(&units(ys, 0));
+        assert_eq!(
+            (a.shape, a.gate),
+            (TrendShape::Plateau, GateVerdict::Fail),
+            "{ys:?}"
+        );
+        assert!(a.gate_note.is_none());
+    }
+}
+
+#[test]
+fn steps_that_shrink_are_a_warm_up_then_small_growth_not_a_doubling() {
+    // One big step, then steps a tenth of its size that come further apart.
+    let ys = [
+        100e6, 900e6, 900e6, 940e6, 940e6, 940e6, 980e6, 980e6, 980e6, 980e6, 980e6, 1020e6,
+        1020e6, 1020e6, 1020e6,
+    ];
+    let a = gate_of(&units(&ys, 0));
+    assert!(a.gate_note.is_none(), "{a:?}");
+    assert_ne!(a.shape, TrendShape::Stair, "{a:?}");
+}
+
+#[test]
+fn two_steps_under_the_noise_tolerance_are_not_a_stair() {
+    // A jittery level (3% of 100 MB) with a step of 5 MB and one of 11 MB, then a flat end: the
+    // steps clear the scatter of the changes between points but the whole rise (18.6 MB) does not
+    // clear three of the scatter around the trend (18.8 MB).
+    let ys = [
+        99_777_461.9,
+        97_984_162.4,
+        94_862_891.7,
+        96_917_204.1,
+        95_777_203.0,
+        94_071_880.9,
+        104_981_269.7,
+        107_485_152.2,
+        103_319_012.5,
+        103_006_392.2,
+        118_356_651.6,
+        116_916_847.3,
+        118_073_996.7,
+        117_402_372.3,
+        116_029_351.6,
+        113_699_376.7,
+    ];
+    let a = gate_of(&units(&ys, 0));
+    assert!(a.gate_note.is_none(), "{a:?}");
+    assert_ne!(a.shape, TrendShape::Stair, "{a:?}");
+    assert_eq!(a.gate, GateVerdict::Fail, "{a:?}");
+}
+
+#[test]
+fn a_counter_keeps_its_every_delta_gate_whatever_its_steps() {
+    let a = analyze(
+        &units(&DOUBLING[1..], 1),
+        None,
+        true,
+        &GateThresholds::default(),
+    );
+    assert_eq!(a.gate, GateVerdict::Fail);
+    assert!(a.gate_note.is_none());
+    assert_ne!(a.shape, TrendShape::Stair);
+}

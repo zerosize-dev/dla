@@ -90,6 +90,7 @@ pub fn analyze_column(series: &SeriesFile, idx: usize, th: &GateThresholds) -> C
         shape: a.shape,
         gate,
         gate_failed,
+        gate_note: a.gate_note.filter(|_| gate == GateVerdict::Pass),
     }
 }
 

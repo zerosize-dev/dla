@@ -563,6 +563,7 @@ fn a_finding_with_a_trend_column_and_a_dump_growth_is_one_item() {
         shape: dla_stats::TrendShape::Steady,
         gate: dla_stats::GateVerdict::Pass,
         gate_failed: vec![],
+        gate_note: None,
     };
     dla_core::trend::TrendReport {
         schema_version: 1,

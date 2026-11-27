@@ -500,6 +500,7 @@ fn trend_of(
                 shape: a.shape,
                 gate,
                 gate_failed,
+                gate_note: a.gate_note.filter(|_| gate == GateVerdict::Pass),
             }
         })
         .collect();
@@ -4157,6 +4158,7 @@ mod tests {
             shape: dla_stats::TrendShape::Steady,
             gate: GateVerdict::Pass,
             gate_failed: vec![],
+            gate_note: None,
         };
         let trend = TrendReport {
             targets: Vec::new(),
@@ -4320,6 +4322,7 @@ mod tests {
             shape: dla_stats::TrendShape::Steady,
             gate: GateVerdict::Pass,
             gate_failed: vec![],
+            gate_note: None,
         }
     }
 

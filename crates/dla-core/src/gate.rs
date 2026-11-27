@@ -3359,6 +3359,7 @@ mod in_run_column_tests {
             shape: TrendShape::Steady,
             gate: GateVerdict::Pass,
             gate_failed: vec![],
+            gate_note: None,
         }
     }
 

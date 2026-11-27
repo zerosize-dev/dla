@@ -3910,3 +3910,13 @@ unattended run at a time and no builder beside it.
   showed no growth". Kept: /root/dla-real/r7-fastrace-keep. Builder S2 started
   (wip-notes/trend-stair-brief.md): shared stair reading in dla-stats, trend gate passes
   non-shrinking steps whose flat end is under the expected next gap. Family B still open.
+
+## r7 diagnosis (after S2 report)
+- S2 (trend stair rescue) done, uncommitted in tree; verified diff by reading; tests per builder all green.
+- r7 real cause: H4 (made for F41) heap residual 237 KB/unit unattributed -> O1. Model resolved O1
+  unresolved inconclusive before the background `--capture alloc` finished, never summarized.
+  gate::supports_capture excludes Rust (and Native) though rust_alloc_points exists (older than the rule);
+  test residual_capture::a_runtime_without_capture_is_not_held_to_it pins rust (false premise).
+- Builder S3 (task 131) brief: wip-notes/rust-capture-brief.md, scratch u162/. Running on top of S2's tree.
+- Next: verify S2+S3 together, review workflow, dynamic, CI snapshot, two commits on main
+  (S2 files / S3 files), preview.15, rig refresh, r8-fastrace alone.

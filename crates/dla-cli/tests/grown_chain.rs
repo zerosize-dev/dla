@@ -175,6 +175,7 @@ fn run_with_a_passed_column(budget: &str) -> (R, String, String) {
         shape: TrendShape::Steady,
         gate: GateVerdict::Pass,
         gate_failed: vec![],
+        gate_note: None,
     };
     TrendReport {
         schema_version: 1,
@@ -408,6 +409,7 @@ fn a_capture_summary(r: &R, n: usize, tied: bool) -> String {
             shape: TrendShape::Steady,
             gate: GateVerdict::Fail,
             gate_failed: vec![],
+            gate_note: None,
         })
         .collect();
     TrendReport {
@@ -508,6 +510,7 @@ fn a_summary_with_a_total_and_two_groups(r: &R, alloc_tested: bool) -> String {
         shape: TrendShape::Steady,
         gate: GateVerdict::Fail,
         gate_failed: vec![],
+        gate_note: None,
     };
     TrendReport {
         schema_version: 1,

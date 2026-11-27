@@ -176,6 +176,7 @@ impl Run {
             shape: TrendShape::Steady,
             gate: dla_stats::GateVerdict::Pass,
             gate_failed: vec![],
+            gate_note: None,
         });
         r.save(self.dir.path()).unwrap();
     }
