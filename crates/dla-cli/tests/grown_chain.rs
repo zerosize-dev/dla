@@ -870,6 +870,78 @@ fn a_loop_alloc_test_that_favored_leak_or_said_nothing_does_not_let_the_growth_b
     }
 }
 
+/// An inconclusive alloc-test of F2 on the hook driver H2 (made for it) that ran `ran` extra
+/// points and, when `needed` is given, named that window as the one that would decide it
+/// (written directly, as above); returns its evidence id.
+fn inconclusive_on_a_driver(r: &R, ran: u32, needed: Option<u32>) -> String {
+    save_harness(r, "H2", json!({"targets": ["F2"]}));
+    let mut result = json!({"test": "plateau+purge", "favors": "inconclusive", "supports": [],
+        "finding": "F2", "harness": "H2", "extra": ran, "column": "native.live_bytes"});
+    if let Some(n) = needed {
+        result["points_needed"] = n.into();
+    }
+    let mut l = Ledger::load(&r.run_dir).unwrap();
+    l.add_evidence(evidence(EvidenceKind::Discriminator, result))
+        .unwrap();
+    l.evidence().last().unwrap().evidence_id.to_string()
+}
+
+#[test]
+fn an_inconclusive_alloc_test_that_names_a_longer_window_holds_the_close_while_the_budget_pays_for_it()
+ {
+    let (r, _, _) = run_with_a_passed_column("3h");
+    let e = inconclusive_on_a_driver(&r, 8, Some(20));
+    let (code, v) = resolve_f2(&r, "inconclusive");
+    assert_ne!(code, 0, "{v}");
+    assert_eq!(v["error"]["code"], "growth-not-measured", "{v}");
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains(&format!(
+            "the alloc-test {e} on H2 was inconclusive: it ran 8 extra points and says 20 would decide it"
+        )),
+        "{message}"
+    );
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(
+        fix.starts_with("dla alloc-test H2 --finding F2 --extra 20"),
+        "{fix}"
+    );
+    // The gate lists it with the same first fix (and the Stop hook holds the stop on that list).
+    let missing = r.final_gate();
+    let item = missing
+        .iter()
+        .find(|m| m["id"] == "F2" && m["fix"].as_str().unwrap().starts_with("dla alloc-test H2"))
+        .unwrap_or_else(|| panic!("{missing:?}"));
+    assert_eq!(item["kind"], "finding", "{item}");
+    // The alloc-test run with that window decides it as before, whatever it favors.
+    inconclusive_on_a_driver(&r, 20, Some(20));
+    r.ok(&[
+        "ledger",
+        "resolve",
+        "F2",
+        "--as",
+        "unresolved",
+        "--reason",
+        "inconclusive",
+        "--remedy",
+        "x",
+    ]);
+}
+
+#[test]
+fn a_longer_window_does_not_hold_the_close_at_the_budget_floor_or_without_points_needed() {
+    // At the floor of the budget (5 minutes of a 5 minute budget: under 10) the old rule holds.
+    let (r, _, _) = run_with_a_passed_column("5m");
+    inconclusive_on_a_driver(&r, 8, Some(20));
+    let (code, v) = resolve_f2(&r, "inconclusive");
+    assert_eq!(code, 0, "{v}");
+    // Evidence of an older version names no window: the close is the model's to make.
+    let (r, _, _) = run_with_a_passed_column("3h");
+    inconclusive_on_a_driver(&r, 8, None);
+    let (code, v) = resolve_f2(&r, "inconclusive");
+    assert_eq!(code, 0, "{v}");
+}
+
 #[test]
 fn a_loop_alloc_test_that_favored_non_leak_lets_the_growth_be_closed() {
     let (r, _) = a_loop_measured_it("3h", "non-leak");

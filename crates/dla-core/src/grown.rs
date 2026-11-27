@@ -66,6 +66,41 @@ pub struct Grown {
     /// was inconclusive, and growth on that harness may be kept by another holder. See
     /// [`decided_by_alloc_test`].
     pub shared: Option<SharedAllocTest>,
+    /// The newest alloc-test, on a driver made for the finding, was inconclusive and names a longer
+    /// extra window that would decide it, and the budget can pay for that window: the growth is
+    /// not decided yet. See [`decided_by_alloc_test`].
+    pub longer: Option<LongerWindow>,
+}
+
+/// An inconclusive alloc-test that named the longer extra window which would decide the growth.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LongerWindow {
+    /// Its discriminator evidence.
+    pub evidence: EvidenceId,
+    /// The harness it ran on.
+    pub harness: String,
+    /// The extra points it ran.
+    pub ran: u32,
+    /// The extra points it named.
+    pub needed: u32,
+}
+
+impl LongerWindow {
+    /// The command that runs the window it named.
+    pub fn command(&self, finding: &FindingId) -> String {
+        format!(
+            "dla alloc-test {} --finding {finding} --extra {}",
+            self.harness, self.needed
+        )
+    }
+
+    /// What it said, in words.
+    pub fn text(&self) -> String {
+        format!(
+            "the alloc-test {} on {} was inconclusive: it ran {} extra points and says {} would decide it, and the budget has room for them",
+            self.evidence, self.harness, self.ran, self.needed
+        )
+    }
 }
 
 /// An alloc-test that ran on a harness not made for the finding and so did not decide its growth.
@@ -124,7 +159,12 @@ impl Grown {
         if let Some(d) = &self.dump {
             return d.commands.clone();
         }
-        let own = self.own_commands();
+        let mut own = self.own_commands();
+        // The longer window the last alloc-test named comes first (it replaces the plain alloc-test).
+        if let Some(l) = &self.longer {
+            own.retain(|c| !c.starts_with("dla alloc-test "));
+            own.insert(0, l.command(&self.finding));
+        }
         match &self.same_leak {
             Some((g, by)) => vec![format!(
                 "dla ledger duplicate {} --of {g}   ({by}: the same leak as {g}, whose alloc-test on {} favored leak; if it is a leak of its own: {})",
@@ -290,8 +330,21 @@ enum AllocVerdict {
     /// An alloc-test decided it: the lead is lifted.
     Decided,
     /// None did. `shared` is the newest alloc-test that ran on a harness about the finding but
-    /// not made for it, when that is the one that fell short.
-    Open(Option<SharedAllocTest>),
+    /// not made for it, when that is the one that fell short; `longer` the one made for it that
+    /// asked for a longer window.
+    Open {
+        shared: Option<SharedAllocTest>,
+        longer: Option<LongerWindow>,
+    },
+}
+
+impl AllocVerdict {
+    fn open() -> Self {
+        Self::Open {
+            shared: None,
+            longer: None,
+        }
+    }
 }
 
 /// Whether an alloc-test decided the growth of the leak-side root `root`, for the lead of
@@ -307,7 +360,10 @@ enum AllocVerdict {
 /// * it favors non-leak: decided, whatever the harness;
 /// * it ran on a hook driver made for the finding (`Target` or `EntryPath`): decided, whatever it
 ///   favors. Favors leak: the confirm route ([`route_to_confirm`]) and the refusal of a close
-///   take over; inconclusive: the close is the model's to make;
+///   take over; inconclusive: the close is the model's to make, except while the alloc-test
+///   names a longer extra window that would decide it (`points_needed` over the extra points it
+///   ran) and the budget is over its floor: then the lead stays, with that window as its first
+///   fix ([`LongerWindow`]);
 /// * it favors leak or is inconclusive on any other harness: not decided, the lead stays and
 ///   carries that alloc-test ([`SharedAllocTest`]). A newer one on a driver made for the
 ///   finding lifts it; a newer one on a shared harness replaces an older one made for it, so the
@@ -325,7 +381,7 @@ fn decided_by_alloc_test(view: &RunView, root: &FindingId) -> AllocVerdict {
         return if alloc_tested(view, root) {
             AllocVerdict::Decided
         } else {
-            AllocVerdict::Open(None)
+            AllocVerdict::open()
         };
     };
     // The alloc-tests of the findings merged into `root` speak for it: a merge counts the leak
@@ -348,10 +404,19 @@ fn decided_by_alloc_test(view: &RunView, root: &FindingId) -> AllocVerdict {
             Some((e, favors, m, about))
         });
     let Some((e, favors, m, about)) = newest else {
-        return AllocVerdict::Open(None);
+        return AllocVerdict::open();
     };
     let made_for_it =
         m.is_hook_driver() && matches!(about, HarnessAbout::Target | HarnessAbout::EntryPath);
+    if favors == Favors::Inconclusive
+        && made_for_it
+        && let Some(longer) = longer_window(view, e, &m.id)
+    {
+        return AllocVerdict::Open {
+            shared: None,
+            longer: Some(longer),
+        };
+    }
     if favors == Favors::NonLeak || made_for_it {
         return AllocVerdict::Decided;
     }
@@ -361,13 +426,38 @@ fn decided_by_alloc_test(view: &RunView, root: &FindingId) -> AllocVerdict {
     if crate::harness::HarnessAttempt::driver_unavailable(dir, m.runtime.as_str(), &family) {
         return AllocVerdict::Decided;
     }
-    AllocVerdict::Open(Some(SharedAllocTest {
-        evidence: e.evidence_id.clone(),
-        harness: m.id.clone(),
-        runtime: m.runtime.as_str().to_owned(),
-        favors,
-        why: not_made_for(&m, &about),
-    }))
+    AllocVerdict::Open {
+        longer: None,
+        shared: Some(SharedAllocTest {
+            evidence: e.evidence_id.clone(),
+            harness: m.id.clone(),
+            runtime: m.runtime.as_str().to_owned(),
+            favors,
+            why: not_made_for(&m, &about),
+        }),
+    }
+}
+
+/// The longer extra window that an inconclusive alloc-test `e` (on harness `harness`) names, while
+/// the budget can pay for it: its evidence records `points_needed` (the extra points that would
+/// decide its deciding column) over the `extra` points it ran, and more than the floor of the
+/// budget is left (the worker's, in a worker view; see [`crate::gate::budget_over_floor`]).
+/// Evidence with no `points_needed` (an older version wrote it) names none.
+fn longer_window(view: &RunView, e: &EvidenceRecord, harness: &str) -> Option<LongerWindow> {
+    let num = |k: &str| {
+        e.result
+            .get(k)
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+    };
+    let (needed, ran) = (num("points_needed")?, num("extra").unwrap_or(0));
+    (needed > ran && crate::gate::budget_over_floor(&view.state, view.worker.as_deref()).is_some())
+        .then(|| LongerWindow {
+            evidence: e.evidence_id.clone(),
+            harness: harness.to_owned(),
+            ran,
+            needed,
+        })
 }
 
 /// Why harness `m`, about a finding as `about` says, is not made for it (a test loop, the
@@ -1065,9 +1155,9 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
             {
                 continue;
             }
-            let shared = match decided_by_alloc_test(view, &root) {
+            let (shared, longer) = match decided_by_alloc_test(view, &root) {
                 AllocVerdict::Decided => continue,
-                AllocVerdict::Open(shared) => shared,
+                AllocVerdict::Open { shared, longer } => (shared, longer),
             };
             let want = match ckind {
                 crate::series::ColumnKind::Gauge => EvidenceKind::GrowthSeries,
@@ -1105,6 +1195,7 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
                 same_leak: same_leak_as(view, &root, harness),
                 dump: None,
                 shared,
+                longer,
             });
         }
     }
@@ -1461,6 +1552,7 @@ fn dump_grown(view: &RunView, out: &mut Vec<Grown>) {
                 commands,
             }),
             shared: None,
+            longer: None,
         });
     }
 }
@@ -1704,6 +1796,14 @@ pub fn items(view: &RunView, grown: &[Grown]) -> Vec<BlockingItem> {
                     g.finding,
                     g.state,
                     g.grew_text()
+                )
+            } else if let Some(l) = &g.longer {
+                format!(
+                    "{} is closed {} but {}, and {}",
+                    g.finding,
+                    g.state,
+                    g.grew_text(),
+                    l.text()
                 )
             } else if let Some(sh) = &g.shared {
                 format!(
@@ -2697,6 +2797,120 @@ mod tests {
                 assert_eq!((r.discriminator, r.harness.as_str()), (e, "H2"));
             }
         }
+    }
+
+    /// An alloc-test of F1 on `harness` that favored `favors`, with the `extra` points it ran and
+    /// the `points_needed` it named (none: an older evidence record).
+    fn alloc_test_extra(
+        l: &mut Ledger,
+        favors: &str,
+        harness: &str,
+        extra: u32,
+        points_needed: Option<u32>,
+    ) -> EvidenceId {
+        let mut result = serde_json::json!({"test": "plateau+purge", "favors": favors,
+            "finding": "F1", "harness": harness, "series": "S9", "column": "native.live_bytes",
+            "extra": extra});
+        if let Some(n) = points_needed {
+            result["points_needed"] = n.into();
+        }
+        add_ev(l, EvidenceKind::Discriminator, result)
+    }
+
+    #[test]
+    fn an_inconclusive_alloc_test_that_names_a_longer_window_decides_nothing_while_the_budget_pays_for_it()
+     {
+        let (_d, mut l) = scene();
+        growth(&mut l, "S2");
+        let e = alloc_test_extra(&mut l, "inconclusive", "H2", 8, Some(20));
+        let (_r, mut view) = shared_loop(l, junit_loop());
+        let g = grown_f1(&view).expect("the longer window is still to run");
+        let longer = g.longer.clone().unwrap();
+        assert_eq!(
+            (
+                longer.evidence,
+                longer.harness.as_str(),
+                longer.ran,
+                longer.needed
+            ),
+            (e, "H2", 8, 20)
+        );
+        assert_eq!(g.shared, None);
+        // Its first fix is that alloc-test with the window it named, on the harness it ran on.
+        let cmds = g.commands();
+        assert_eq!(
+            cmds[0], "dla alloc-test H2 --finding F1 --extra 20",
+            "{cmds:?}"
+        );
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| c.starts_with("dla alloc-test") && c != &cmds[0]),
+            "{cmds:?}"
+        );
+        assert!(
+            g.longer
+                .as_ref()
+                .unwrap()
+                .text()
+                .contains("20 would decide it")
+        );
+        // At or under the floor of the budget (10 minutes, 20 % of it) the old rule holds: the
+        // close is the model's to make.
+        view.state.budget.deadline = crate::state::now_utc() + chrono::Duration::seconds(300);
+        assert_eq!(grown_f1(&view), None);
+    }
+
+    #[test]
+    fn a_longer_window_that_was_run_or_never_named_leaves_the_old_rule() {
+        // An alloc-test that ran with as many extra points as the first one named: decided.
+        let (_d, mut l) = scene();
+        growth(&mut l, "S2");
+        alloc_test_extra(&mut l, "inconclusive", "H2", 8, Some(20));
+        alloc_test_extra(&mut l, "inconclusive", "H2", 20, Some(20));
+        let (_r, view) = shared_loop(l, junit_loop());
+        assert_eq!(grown_f1(&view), None);
+        // One that names a window of the points it ran (or fewer) names nothing longer.
+        let (_d, mut l) = scene();
+        growth(&mut l, "S2");
+        alloc_test_extra(&mut l, "inconclusive", "H2", 8, Some(8));
+        let (_r, view) = shared_loop(l, junit_loop());
+        assert_eq!(grown_f1(&view), None);
+        // An evidence record without `points_needed` (an older version wrote it) keeps the rule.
+        let (_d, mut l) = scene();
+        growth(&mut l, "S2");
+        alloc_test_extra(&mut l, "inconclusive", "H2", 8, None);
+        let (_r, view) = shared_loop(l, junit_loop());
+        assert_eq!(grown_f1(&view), None);
+        // Only an inconclusive result asks for more: a leak or a non-leak is not held open.
+        for favors in ["leak", "non-leak"] {
+            let (_d, mut l) = scene();
+            growth(&mut l, "S2");
+            alloc_test_extra(&mut l, favors, "H2", 8, Some(20));
+            let (_r, view) = shared_loop(l, junit_loop());
+            assert_eq!(grown_f1(&view), None, "{favors}");
+        }
+    }
+
+    #[test]
+    fn a_workers_own_deadline_ends_the_wait_for_a_longer_window() {
+        let (_d, mut l) = scene();
+        growth(&mut l, "S2");
+        alloc_test_extra(&mut l, "inconclusive", "H2", 8, Some(20));
+        let (_r, mut view) = shared_loop(l, junit_loop());
+        view.state.workers.push(crate::state::WorkerEntry {
+            name: "w1".into(),
+            runtime: "jvm".into(),
+            share_secs: 60,
+            deadline: crate::state::now_utc() + chrono::Duration::seconds(60),
+            started_at: None,
+            status: crate::state::WorkerStatus::Running,
+            slice: "ledger.w1.jsonl".into(),
+            stalled: false,
+        });
+        assert!(grown_f1(&view).is_some(), "the run's budget has room");
+        view.worker = Some("w1".into());
+        assert_eq!(grown_f1(&view), None, "the worker's deadline is near");
     }
 
     #[test]

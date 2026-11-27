@@ -385,6 +385,12 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
                     g.grew_text(),
                     g.commands().join("   then   ")
                 )
+            } else if let Some(l) = &g.longer {
+                format!(
+                    "its column grew, and {}: {}",
+                    l.text(),
+                    g.commands().join("   then   ")
+                )
             } else if let Some(sh) = &g.shared {
                 format!(
                     "its column grew, and the alloc-test {} on {} ({}, not a driver made for {}) favored {}: growth there may be kept by another holder: {}",

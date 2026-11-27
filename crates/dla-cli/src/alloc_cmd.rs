@@ -166,6 +166,9 @@ impl ColumnResult {
         if let Some(n) = &self.note {
             m.insert("note".into(), json!(n));
         }
+        if let Some(n) = self.points_needed {
+            m.insert("points_needed".into(), json!(n));
+        }
         Value::Object(m)
     }
 
@@ -379,7 +382,7 @@ fn test_column(
         .flatten();
     let note = file_note.or(stair_need.map(|n| {
         format!(
-            "the column grows in steps and its extra window is shorter than the gap between the steps of the main window, so a plateau cannot be told from a step that has not come yet: an extra window of {n} points would cover that gap"
+            "the column grows in steps and no step has come in the extra window for as long as the next gap is expected to be (steps of a growing container come ever further apart), so a plateau cannot be told from a step that has not come yet: an extra window of {n} points would run past it"
         )
     }));
     let note = note.or(rises.map(|r| {
@@ -1567,7 +1570,15 @@ fn wider_window(
     if !partial.is_empty() || decide(results, picked).0 != Favors::Inconclusive {
         return None;
     }
-    let n = results
+    let n = deciding_need(results, picked)?;
+    (n > extra && n <= limit).then_some(n)
+}
+
+/// The extra points the deciding columns (the primary one, else the voting ones) that read
+/// inconclusive name as the window that would decide them (`points_needed`, from a staircase or
+/// from the rises of the main window): the largest, when any names one.
+fn deciding_need(results: &[ColumnResult], picked: &pick::Picked) -> Option<u32> {
+    results
         .iter()
         .filter(|r| match &picked.primary {
             Some(p) => &r.name == p,
@@ -1575,8 +1586,7 @@ fn wider_window(
         })
         .filter(|r| r.favors == Favors::Inconclusive)
         .filter_map(|r| r.points_needed)
-        .max()?;
-    (n > extra && n <= limit).then_some(n)
+        .max()
 }
 
 /// Whether `n` extra points fit the time left, going by the `secs` the run of `extra` points
@@ -2126,6 +2136,14 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         .extra
         .insert("iterations".into(), json!(manifest.iterations));
     result.extra.insert("extra".into(), json!(extra));
+    // An inconclusive result that names the longer window which would decide it: the ledger keeps
+    // the finding open while the budget can pay for that window (`grown::decided_by_alloc_test`).
+    if favors == Favors::Inconclusive
+        && partial.is_empty()
+        && let Some(n) = deciding_need(&results, &picked)
+    {
+        result.extra.insert("points_needed".into(), json!(n));
+    }
     if let Some(att) = &attribution {
         for (k, v) in att {
             result.extra.insert(k.clone(), v.clone());
@@ -2382,9 +2400,10 @@ fn say_how_long_a_held_plateau_needs(
         .max();
     if let (Some((n, stair)), Some(cmd)) = (needed, next.iter_mut().find(|c| c.contains("--extra")))
     {
+        raise_extra(cmd, n);
         cmd.push_str(&if stair {
             format!(
-                "   (the column grows in steps and the extra window is shorter than the gap between them: {n} extra points would cover a gap)"
+                "   (the column grows in steps and no step has come for as long as the next gap is expected to be: {n} extra points would run past it)"
             )
         } else {
             format!(
@@ -2393,6 +2412,19 @@ fn say_how_long_a_held_plateau_needs(
         });
     }
     next
+}
+
+/// Raises the `--extra <k>` of `cmd` to `n` points when `k` is fewer, so the printed command runs
+/// the window that was named as deciding (the doubled window of `next_commands` can be shorter).
+fn raise_extra(cmd: &mut String, n: u32) {
+    const FLAG: &str = "--extra ";
+    let Some(at) = cmd.find(FLAG).map(|i| i + FLAG.len()) else {
+        return;
+    };
+    let digits = cmd[at..].chars().take_while(char::is_ascii_digit).count();
+    if cmd[at..at + digits].parse::<u32>().is_ok_and(|k| k < n) {
+        cmd.replace_range(at..at + digits, &n.to_string());
+    }
 }
 
 /// What `next_commands` needs to offer the stack capture: the column that decided, the runtime
@@ -4709,6 +4741,106 @@ mod tests {
         let (_, results) = doubling_run(&[130.0; 12]);
         let live = named(&results, "native.live_bytes");
         assert_eq!(live.plateau.verdict, PlateauVerdict::Plateau, "{live:?}");
+    }
+
+    /// The measured `Vec` column as a series: 2 warm-up points, the main window and the `extra`
+    /// points after it (440 apart), beside a flat resident size.
+    fn measured_vec_run(extra: &[f64]) -> (Favors, Vec<ColumnResult>, pick::Picked) {
+        let mut s = series(&[]);
+        s.columns = vec![col("os.rss"), col("native.live_bytes")];
+        s.columns[1].region = SeriesRegion::Heap;
+        let live: Vec<f64> = [
+            2_663_109.,
+            3_646_149.,
+            5_612_229.,
+            5_612_229.,
+            9_544_389.,
+            9_544_389.,
+            9_544_389.,
+            17_408_709.,
+        ]
+        .into_iter()
+        .chain(extra.iter().copied())
+        .collect();
+        s.points = live
+            .iter()
+            .enumerate()
+            .map(|(i, &y)| Point {
+                x: 440.0 * (i as f64 + 1.0),
+                t_ms: i as u64,
+                values: vec![Some(500e6), Some(y)],
+            })
+            .collect();
+        // No purge ran (as in the measured run): the column is judged on its plateau alone.
+        let trend = TrendReport {
+            targets: Vec::new(),
+            schema_version: TREND_SCHEMA_VERSION,
+            id: "T1".to_owned(),
+            series: "S1".to_owned(),
+            thresholds: GateThresholds::default(),
+            columns: vec![gate_passed("native.live_bytes")],
+        };
+        let ledger = Ledger::from_text("").unwrap();
+        let picked = pick::pick(&s, &ledger, None, &[], Some(&trend), "H1").unwrap();
+        let mut lim = Vec::new();
+        let results: Vec<ColumnResult> = picked
+            .tested
+            .iter()
+            .filter_map(|n| test_column(&s, n, picked.voting.contains(n), false, 6, None, &mut lim))
+            .collect();
+        let (favors, _, _) = decide(&results, &picked);
+        (favors, results, picked)
+    }
+
+    #[test]
+    fn a_staircase_cut_short_is_lengthened_to_the_window_that_covers_its_expected_gap() {
+        // Main points end at x = 3520 (the step of 17.4 MB), the extra window starts at 3960:
+        // flat until 5720, 2200 after the last step, where the gaps call for 3520.
+        let flat = [17_408_709.0; 5];
+        let (favors, results, picked) = measured_vec_run(&flat);
+        let live = named(&results, "native.live_bytes");
+        assert_eq!(
+            live.plateau.verdict,
+            PlateauVerdict::Inconclusive,
+            "{live:?}"
+        );
+        assert_eq!(favors, Favors::Inconclusive);
+        // 3960 + 440 * (n - 1) is past 3520 + 3520 = 7040.
+        let n = live.points_needed.unwrap();
+        assert_eq!(n, 9, "{live:?}");
+        assert!(3960.0 + 440.0 * f64::from(n - 1) > 7040.0);
+        // The alloc-test lengthens its window to that many points when the time fits, and the
+        // printed `--extra` says it when it does not.
+        assert_eq!(wider_window(&results, &picked, &[], 5, 40), Some(n));
+        // The evidence records it, per column and for the result (what the ledger reads to keep the
+        // finding open while the budget can pay for the window).
+        assert_eq!(live.to_json()["points_needed"], json!(n));
+        assert_eq!(deciding_need(&results, &picked), Some(n));
+        let next = say_how_long_a_held_plateau_needs(
+            vec!["dla alloc-test H1 --finding F1 --extra 6".to_owned()],
+            favors,
+            &results,
+            &picked,
+        );
+        assert!(
+            next[0].starts_with(&format!("dla alloc-test H1 --finding F1 --extra {n}   (")),
+            "{next:?}"
+        );
+        assert!(next[0].contains("expected"), "{next:?}");
+        // One that already covers it is left alone.
+        let next = say_how_long_a_held_plateau_needs(
+            vec!["dla alloc-test H1 --finding F1 --extra 20".to_owned()],
+            favors,
+            &results,
+            &picked,
+        );
+        assert!(next[0].contains("--extra 20   ("), "{next:?}");
+        // Run to that many points the step is in the window, and the column grows.
+        let mut full = flat.to_vec();
+        full.extend([17_408_709.0, 17_408_709.0, 33_137_349.0, 33_137_525.0]);
+        let (_, results, _) = measured_vec_run(&full);
+        let live = named(&results, "native.live_bytes");
+        assert_eq!(live.plateau.verdict, PlateauVerdict::Continues, "{live:?}");
     }
 
     #[test]
