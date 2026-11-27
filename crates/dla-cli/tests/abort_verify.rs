@@ -375,22 +375,16 @@ fn the_fix_of_a_refused_blocker_is_printed_as_the_rule_returns_it() {
         ),
         (
             vec!["run", "abort", "--blocker", "sleepy"],
-            "dla run abort --blocker tool|build|environment|privilege --reason \"<what blocks the run>\"",
+            "dla run abort --blocker <user|tool|build|environment|privilege> --reason \"<what blocks the run>\"   or   dla run abort --blocker refusal --code <refusal code> --reason \"<what blocks the run>\"",
         ),
     ] {
         let (code, v) = r.json(&args);
         assert_eq!(code, 2, "{args:?}: {v}");
         assert_eq!(v["error"]["fix"], fix, "{args:?}: {v}");
-        // One `--blocker`, nothing repeated or stray in front of it.
-        assert_eq!(
-            v["error"]["fix"]
-                .as_str()
-                .unwrap()
-                .matches("--blocker")
-                .count(),
-            1,
-            "{v}"
-        );
+        // One `--blocker` in each command, nothing repeated or stray in front of it.
+        for command in v["error"]["fix"].as_str().unwrap().split("   or   ") {
+            assert_eq!(command.matches("--blocker").count(), 1, "{v}");
+        }
     }
     // Nothing was aborted by the refusals.
     assert_eq!(r.state()["status"], "active");

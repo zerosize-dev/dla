@@ -214,10 +214,15 @@ struct Index {
     reseals: Vec<IntegrityResealed>,
     /// Records committed so far: the tie-break of [`RecordOrder`].
     clock: u64,
+    /// The newest `ts` of any committed line: the floor of a fresh line's stamp (see
+    /// [`floored_ts`]).
+    latest_ts: Option<DateTime<Utc>>,
     /// The chronological key of every evidence record (see [`Ledger::evidence_order`]).
     evidence_order: BTreeMap<EvidenceId, RecordOrder>,
     /// The chronological key of every `finding_added` record.
     finding_order: BTreeMap<FindingId, RecordOrder>,
+    /// The `ts` of the line that raised every open item.
+    open_item_ts: BTreeMap<OpenItemId, DateTime<Utc>>,
     /// The chronological key of the latest transition of a finding to `confirmed`.
     confirmed_order: BTreeMap<FindingId, RecordOrder>,
     /// Every checklist answer with its key, in replay order (`answers` keeps only the latest
@@ -253,8 +258,10 @@ impl Index {
             explanations: BTreeMap::new(),
             reseals: Vec::new(),
             clock: 0,
+            latest_ts: None,
             evidence_order: BTreeMap::new(),
             finding_order: BTreeMap::new(),
+            open_item_ts: BTreeMap::new(),
             confirmed_order: BTreeMap::new(),
             answer_log: Vec::new(),
         }
@@ -1622,6 +1629,7 @@ impl Index {
     /// Applies a record that [`Index::check`] accepted. Cannot fail.
     fn commit(&mut self, record: &Record, version: u32, ts: DateTime<Utc>) {
         self.clock += 1;
+        self.latest_ts = Some(self.latest_ts.map_or(ts, |t| t.max(ts)));
         let at = RecordOrder { ts, at: self.clock };
         match record {
             Record::Evidence(e) => {
@@ -1665,6 +1673,7 @@ impl Index {
                 }
             }
             Record::OpenItem(o) => {
+                self.open_item_ts.insert(o.id.clone(), ts);
                 self.open_items.insert(
                     o.id.clone(),
                     OpenItemState {
@@ -1867,6 +1876,14 @@ impl Pending {
 fn line_ts() -> DateTime<Utc> {
     let now = Utc::now();
     DateTime::from_timestamp_millis(now.timestamp_millis()).unwrap_or(now)
+}
+
+/// The `ts` of a fresh line: the clock `now`, but never below `floor` (the newest `ts` the
+/// ledger holds, or the line before in the same batch). A wall clock that steps backward (a time
+/// sync, a resumed VM) would otherwise sort a later record of one writer before an earlier one,
+/// because [`RecordOrder`] is keyed on `ts` first.
+fn floored_ts(now: DateTime<Utc>, floor: Option<DateTime<Utc>>) -> DateTime<Utc> {
+    floor.map_or(now, |f| now.max(f))
 }
 
 fn replay_err(path: Option<&Path>, line: u64, malformed: bool, refusal: Refusal) -> Error {
@@ -2543,16 +2560,19 @@ impl Ledger {
         let mut trial = (pending.len() > 1).then(|| self.index.clone());
         let first_seq = self.next_seq();
         let mut new_lines = Vec::with_capacity(pending.len());
+        // Each fresh line is at least the newest line before it, in the ledger or this batch.
+        let mut floor = self.index.latest_ts;
         for (seq, p) in (first_seq..).zip(pending) {
             let idx = trial.as_ref().unwrap_or(&self.index);
             idx.check(&p.record, p.version)?;
             let line = LedgerLine {
                 schema_version: p.version,
                 seq,
-                ts: p.ts.unwrap_or_else(line_ts),
+                ts: p.ts.unwrap_or_else(|| floored_ts(line_ts(), floor)),
                 worker: p.worker,
                 record: p.record,
             };
+            floor = Some(floor.map_or(line.ts, |f| f.max(line.ts)));
             if let Some(t) = trial.as_mut() {
                 t.commit(&line.record, line.schema_version, line.ts);
             }
@@ -2641,7 +2661,10 @@ impl Ledger {
             let mut trial = self.index.clone();
             for p in &batch {
                 trial.check(&p.record, p.version)?;
-                trial.commit(&p.record, p.version, p.ts.unwrap_or_else(line_ts));
+                let ts = p
+                    .ts
+                    .unwrap_or_else(|| floored_ts(line_ts(), trial.latest_ts));
+                trial.commit(&p.record, p.version, ts);
             }
             self.mark_running()?;
         }
@@ -2831,22 +2854,18 @@ impl Ledger {
     }
 
     /// When the line that raised finding `id` was written; `None` when it is not in this
-    /// ledger's lines.
+    /// ledger. Read from the index, so a worker's view (whose own lines are only its slice)
+    /// gives a main-ledger finding's `ts` too.
     pub fn finding_added_at(&self, id: &FindingId) -> Option<DateTime<Utc>> {
         let id = self.own_finding_id(id);
-        self.lines.iter().find_map(|l| match &l.record {
-            Record::FindingAdded { finding } if finding.id == id => Some(l.ts),
-            _ => None,
-        })
+        self.finding_order(&id).map(|k| k.ts)
     }
 
-    /// When the line that raised open item `id` was written.
+    /// When the line that raised open item `id` was written. Read from the index, so a worker's
+    /// view gives a main-ledger item's `ts` too.
     pub fn open_item_added_at(&self, id: &OpenItemId) -> Option<DateTime<Utc>> {
         let id = self.own_open_item_id(id);
-        self.lines.iter().find_map(|l| match &l.record {
-            Record::OpenItem(o) if o.id == id => Some(l.ts),
-            _ => None,
-        })
+        self.index.open_item_ts.get(&id).copied()
     }
 
     /// Raises an open item, allocating `O<n>`.
@@ -3393,5 +3412,25 @@ impl Ledger {
     pub fn confirm_warning(&self, id: &FindingId) -> Option<String> {
         let f = self.index.findings.get(id)?;
         machine::confirm_warning(f, &self.index)
+    }
+}
+
+#[cfg(test)]
+mod floor_tests {
+    use super::floored_ts;
+    use chrono::{DateTime, TimeDelta, Utc};
+
+    fn at(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().to_utc()
+    }
+
+    #[test]
+    fn a_clock_behind_the_floor_gives_the_floor_and_otherwise_the_clock() {
+        let now = at("2030-01-01T12:00:00.500Z");
+        let hour = TimeDelta::hours(1);
+        assert_eq!(floored_ts(now, Some(now + hour)), now + hour);
+        assert_eq!(floored_ts(now, Some(now)), now);
+        assert_eq!(floored_ts(now, Some(now - hour)), now);
+        assert_eq!(floored_ts(now, None), now);
     }
 }

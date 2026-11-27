@@ -428,23 +428,43 @@ mod tests {
     use super::*;
     use clap::Parser;
 
-    /// A printed fix with its `<placeholders>` and its one `a|b|c` choice filled in, split the
-    /// way a shell splits it (double quotes keep a reason together).
-    fn filled(fix: &str) -> Vec<String> {
-        let mut text = String::new();
+    /// A printed command with its `<placeholders>` filled in and split the way a shell splits
+    /// it (double quotes keep a reason together). A `|` outside `<...>` would be a pipe to a
+    /// shell, so it is refused; one `<a|b|c>` choice gives one command per alternative.
+    fn filled(fix: &str) -> Vec<Vec<String>> {
+        let mut texts = vec![String::new()];
         let mut chars = fix.chars();
+        let mut choices = 0;
         while let Some(c) = chars.next() {
+            if c == '|' {
+                panic!("a `|` outside `<...>` is a shell pipe: {fix}");
+            }
             if c != '<' {
-                text.push(c);
+                texts.iter_mut().for_each(|t| t.push(c));
                 continue;
             }
             let name: String = chars.by_ref().take_while(|c| *c != '>').collect();
-            text.push_str(if name.starts_with("refusal code") {
-                "time-left"
+            if name.contains('|') {
+                choices += 1;
+                assert_eq!(choices, 1, "more than one choice: {fix}");
+                let base = std::mem::take(&mut texts);
+                for alt in name.split('|') {
+                    assert!(!alt.is_empty(), "an empty alternative: {fix}");
+                    texts.extend(base.iter().map(|t| format!("{t}{alt}")));
+                }
             } else {
-                "the go toolchain is not installed"
-            });
+                let fill = if name.starts_with("refusal code") {
+                    "time-left"
+                } else {
+                    "the go toolchain is not installed"
+                };
+                texts.iter_mut().for_each(|t| t.push_str(fill));
+            }
         }
+        texts.iter().map(|t| shell_words(t)).collect()
+    }
+
+    fn shell_words(text: &str) -> Vec<String> {
         let (mut words, mut word, mut quoted, mut any) = (Vec::new(), String::new(), false, false);
         for c in text.chars() {
             match c {
@@ -464,15 +484,13 @@ mod tests {
         if any || !word.is_empty() {
             words.push(word);
         }
-        // The one choice `a|b|c`: the first alternative.
         words
-            .into_iter()
-            .map(|w| w.split('|').next().unwrap_or_default().to_owned())
-            .collect()
     }
 
-    /// Every fix `check_blocker` can return is a whole command, with one `--blocker`, that the
-    /// argument parser accepts once filled in, and whose arguments `check_blocker` then accepts.
+    /// Every fix `check_blocker` can return is one or more whole commands (joined by `   or   `),
+    /// each with one `--blocker`, that the argument parser accepts once filled in (every
+    /// alternative of its choice), and whose arguments `check_blocker` then accepts. The fix of
+    /// an unknown kind offers every kind.
     #[test]
     fn every_fix_of_a_failed_blocker_check_runs_as_printed() {
         let reason = Some("the capture needs a privilege the run does not have");
@@ -489,27 +507,37 @@ mod tests {
         for (kind, reason, code) in cases {
             let (_, _, fix) = abort_rule::check_blocker(kind, reason, code)
                 .expect_err(&format!("{kind} {reason:?} {code:?} is refused"));
-            assert!(
-                fix.starts_with("dla run abort "),
-                "{kind}: a whole command: {fix}"
-            );
-            assert_eq!(fix.matches("--blocker").count(), 1, "{kind}: {fix}");
-            assert!(fix.matches("--reason").count() <= 1, "{kind}: {fix}");
-            assert!(
-                fix.split_whitespace().filter(|w| w.contains('|')).count() <= 1,
-                "{fix}"
-            );
-            let words = filled(&fix);
-            let cli =
-                crate::Cli::try_parse_from(&words).unwrap_or_else(|e| panic!("{kind}: {fix}\n{e}"));
-            let crate::Command::Run(crate::run::RunCmd::Abort(a)) = cli.command else {
-                panic!("{kind}: not `dla run abort`: {fix}");
-            };
-            let blocker = a.blocker.as_deref().expect("a blocker");
-            assert!(
-                abort_rule::check_blocker(blocker, a.reason.as_deref(), a.code.as_deref()).is_ok(),
-                "{kind}: the fix is refused again: {fix}"
-            );
+            let mut offered: Vec<String> = Vec::new();
+            for command in fix.split("   or   ") {
+                assert!(
+                    command.starts_with("dla run abort "),
+                    "{kind}: a whole command: {fix}"
+                );
+                assert_eq!(command.matches("--blocker").count(), 1, "{kind}: {fix}");
+                assert!(command.matches("--reason").count() <= 1, "{kind}: {fix}");
+                for words in filled(command) {
+                    let cli = crate::Cli::try_parse_from(&words)
+                        .unwrap_or_else(|e| panic!("{kind}: {command}\n{e}"));
+                    let crate::Command::Run(crate::run::RunCmd::Abort(a)) = cli.command else {
+                        panic!("{kind}: not `dla run abort`: {command}");
+                    };
+                    let blocker = a.blocker.as_deref().expect("a blocker");
+                    assert!(
+                        abort_rule::check_blocker(blocker, a.reason.as_deref(), a.code.as_deref())
+                            .is_ok(),
+                        "{kind}: the fix is refused again: {command}"
+                    );
+                    offered.push(blocker.to_owned());
+                }
+            }
+            if kind == "sleepy" {
+                for k in abort_rule::BLOCKER_KINDS {
+                    assert!(
+                        offered.iter().any(|o| o == k),
+                        "the unknown-kind fix never offers {k}: {fix}"
+                    );
+                }
+            }
         }
     }
 
@@ -540,7 +568,7 @@ mod tests {
                     _ => vec![command.clone()],
                 };
                 for c in alternatives {
-                    let words = filled(&c);
+                    let words = filled(&c).pop().expect("one command");
                     let cli = crate::Cli::try_parse_from(&words)
                         .unwrap_or_else(|e| panic!("does not parse: {c}\n{e}"));
                     let crate::Command::Run(crate::run::RunCmd::Abort(a)) = cli.command else {

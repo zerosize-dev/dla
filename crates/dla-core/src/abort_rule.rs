@@ -130,8 +130,7 @@ pub fn check_blocker(
                 "--blocker {kind:?} is not a blocker kind (one of {})",
                 BLOCKER_KINDS.join(", ")
             ),
-            "dla run abort --blocker tool|build|environment|privilege --reason \"<what blocks the run>\""
-                .to_owned(),
+            format!("{ABORT_BLOCKER_COMMAND}   or   {ABORT_REFUSAL_COMMAND}"),
         ));
     }
     if kind != "refusal" && code.is_some() {

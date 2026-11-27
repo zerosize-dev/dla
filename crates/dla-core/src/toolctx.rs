@@ -1080,6 +1080,33 @@ mod tests {
     };
     use serde_json::json;
 
+    /// A refusal is stamped to the whole second, a ledger line to the millisecond: a refusal in
+    /// the second of a finding counts for it, one a second earlier does not.
+    #[test]
+    fn a_refusal_in_the_second_of_the_finding_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let line = |ts: &str| {
+            format!("{}\n", json!({"ts": ts, "worker": null, "none_fits": true}))
+        };
+        let since = chrono::DateTime::parse_from_rfc3339("2030-01-01T12:00:00.400Z")
+            .unwrap()
+            .to_utc();
+        fs::write(
+            dir.path().join(TIME_REFUSALS_FILE),
+            line("2030-01-01T12:00:00.000Z"),
+        )
+        .unwrap();
+        assert!(time_refused_since(dir.path(), None, since));
+        assert!(nothing_fits_since(dir.path(), None, since));
+        fs::write(
+            dir.path().join(TIME_REFUSALS_FILE),
+            line("2030-01-01T11:59:59.000Z"),
+        )
+        .unwrap();
+        assert!(!time_refused_since(dir.path(), None, since));
+        assert!(!nothing_fits_since(dir.path(), None, since));
+    }
+
     fn run(tiers: Option<Vec<u8>>) -> (tempfile::TempDir, ToolCtx) {
         let dir = tempfile::tempdir().unwrap();
         let run_dir = dir.path().join(".dla/r1");

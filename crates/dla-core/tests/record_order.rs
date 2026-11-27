@@ -151,3 +151,51 @@ fn two_slices_merged_in_the_opposite_order_of_their_records_times_stay_in_time_o
     let order = in_order(&merged);
     assert_eq!(&order[order.len() - 2..], ["b/E1", "a/E1"]);
 }
+
+/// Rewrites the `ts` of the last line of the main ledger by hand.
+fn stamp_last_line(dir: &std::path::Path, ts: chrono::DateTime<chrono::Utc>) {
+    let path = dir.join("ledger.jsonl");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let mut v: serde_json::Value = serde_json::from_str(lines.last().unwrap()).unwrap();
+    v["ts"] = serde_json::json!(ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+    *lines.last_mut().unwrap() = v.to_string();
+    std::fs::write(path, lines.join("\n") + "\n").unwrap();
+}
+
+#[test]
+fn a_fresh_line_is_never_stamped_before_the_newest_line_of_the_ledger() {
+    // The wall clock stepped back: the last line is stamped an hour ahead of now.
+    let dir = new_run(&[]);
+    let future = chrono::Utc::now() + chrono::TimeDelta::hours(1);
+    stamp_last_line(dir.path(), future);
+    let mut l = Ledger::load(dir.path()).unwrap();
+    let last = l.lines().last().unwrap().ts;
+    assert!(last >= future - chrono::TimeDelta::seconds(1));
+    let a = l.add_evidence(probe()).unwrap();
+    let b = l.add_evidence(probe()).unwrap();
+    assert!(a.ts >= last && b.ts >= a.ts, "{last} {} {}", a.ts, b.ts);
+    let (ka, kb) = (
+        l.evidence_order(&eid(17)).unwrap(),
+        l.evidence_order(&eid(18)).unwrap(),
+    );
+    assert!(l.evidence_order(&eid(16)).unwrap() < ka && ka < kb);
+    assert_eq!(&in_order(&l)[16..], ["E17", "E18"]);
+    // The same after a reload.
+    let again = Ledger::load(dir.path()).unwrap();
+    assert!(again.evidence_order(&eid(16)).unwrap() < again.evidence_order(&eid(17)).unwrap());
+}
+
+#[test]
+fn in_a_workers_view_the_time_a_main_finding_was_added_is_its_line_stamp() {
+    let dir = new_run(&["jvm"]);
+    let mut main = Ledger::load(dir.path()).unwrap();
+    let f = candidate_in_slice(&mut main, "a.go:1", dla_core::finding::Holder::StaticGlobal);
+    let added = main.lines().last().unwrap().ts;
+    assert_eq!(main.finding_added_at(&f), Some(added));
+    let mut w = slice(dir.path(), "jvm");
+    w.add_evidence(probe()).unwrap();
+    // The slice's own lines do not hold the main finding's line; its time is still known.
+    assert_eq!(w.finding_added_at(&f), Some(added));
+    assert!(w.finding_added_at(&fid(99)).is_none());
+}
