@@ -1592,7 +1592,10 @@ pub enum CaptureSaid {
 }
 
 impl UndecidedHeap {
-    /// The commands that can decide it, one per lead, else the capture that takes the snapshot.
+    /// The commands that can decide it. One alloc-test per lead. With no lead: the capture that
+    /// takes the snapshot first when none was summarized yet, then an alloc-test of the harness.
+    /// After a summarized capture (flat or blind) taking it again cannot change what it said, so
+    /// only the alloc-test is named: it is what releases the refusal.
     pub fn commands(&self) -> Vec<String> {
         if !self.leads.is_empty() {
             return self
@@ -1601,10 +1604,17 @@ impl UndecidedHeap {
                 .map(|f| format!("dla alloc-test {} --finding {f}", self.harness))
                 .collect();
         }
-        vec![format!(
-            "dla harness run {} --mode {} --capture alloc   (a driver that takes the allocator shim's snapshot after its last unit: dla harness gen again for a harness made before it)",
-            self.harness, self.mode
-        )]
+        let alloc_test = format!("dla alloc-test {}", self.harness);
+        if self.capture.is_some() {
+            return vec![alloc_test];
+        }
+        vec![
+            format!(
+                "dla harness run {} --mode {} --capture alloc   (a driver that takes the allocator shim's snapshot after its last unit: dla harness gen again for a harness made before it)",
+                self.harness, self.mode
+            ),
+            alloc_test,
+        ]
     }
 
     /// What was measured and what is left, in one sentence.

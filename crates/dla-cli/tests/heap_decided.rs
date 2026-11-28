@@ -400,6 +400,115 @@ fn without_a_lead_the_refusal_names_the_capture_with_the_snapshot() {
             && fix.contains("snapshot"),
         "{fix}"
     );
+    // The capture alone cannot release it: the alloc-test of the harness comes after it.
+    assert!(fix.ends_with("   ;   dla alloc-test H1"), "{fix}");
+}
+
+impl R {
+    /// An allocation-stack summary of the capture of H1: flat (no stack grew) or blind.
+    fn stack_summary(&self, blind: bool) {
+        let result = if blind {
+            json!({"blind": true, "blind_text": "the capture is blind: the process's own live bytes rose 2.68 MB -> 6.49 MB while the shim's total rose 2.51 MB -> 2.51 MB"})
+        } else {
+            json!({"monotone": 0})
+        };
+        let mut l = Ledger::load(&self.run_dir).unwrap();
+        l.add_evidence(NewEvidence {
+            source: Source::Artifact {
+                path: "harness/H1/out/p1-alloc/shim-dump.jsonl".into(),
+                sha256: "0".into(),
+            },
+            tool: Tool {
+                name: "shim-stack-groups".into(),
+                version: "1".into(),
+            },
+            authority: Authority::Live,
+            kind: EvidenceKind::AllocStack,
+            result,
+            raw: None,
+            coverage: EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        })
+        .unwrap();
+    }
+
+    /// The `fix` the refusal of resolving O1 names.
+    fn refusal_fix(&self) -> String {
+        let (_, v) = self.resolve_o1("inconclusive", "x");
+        assert_eq!(v["error"]["code"], "heap-growth-undecided", "{v}");
+        v["error"]["fix"].as_str().unwrap().to_owned()
+    }
+}
+
+#[test]
+fn after_a_flat_or_blind_capture_the_refusal_names_only_the_alloc_test() {
+    // Taking the capture again cannot change what it said; only an alloc-test releases the item.
+    for blind in [false, true] {
+        let r = scene("3h", Verdict::Executed);
+        r.stack_summary(blind);
+        assert_eq!(r.refusal_fix(), "dla alloc-test H1", "blind {blind}");
+    }
+}
+
+#[test]
+fn with_leads_the_refusal_names_one_alloc_test_per_lead_and_no_capture() {
+    let r = scene("3h", Verdict::GrewUntied);
+    assert_eq!(
+        r.refusal_fix(),
+        format!("dla alloc-test H1 --finding {}", r.f1)
+    );
+}
+
+#[test]
+fn an_alloc_test_with_no_finding_releases_the_item_the_refusal_named() {
+    let r = scene("3h", Verdict::Executed);
+    let fix = r.refusal_fix();
+    let last = fix.rsplit("   ;   ").next().unwrap();
+    assert_eq!(last, "dla alloc-test H1");
+    // The record `dla alloc-test H1` writes (no finding): its result names the harness.
+    let mut l = Ledger::load(&r.run_dir).unwrap();
+    l.add_evidence(NewEvidence {
+        source: Source::Repo {
+            commit: "c".into(),
+            path: None,
+        },
+        tool: Tool {
+            name: "dla-alloc-test".into(),
+            version: "1".into(),
+        },
+        authority: Authority::Test,
+        kind: EvidenceKind::Discriminator,
+        result: json!({"test": "plateau+purge", "harness": "H1", "finding": null, "favors": "inconclusive"}),
+        raw: None,
+        coverage: EvidenceCoverage::default(),
+        limitations: vec![],
+        unknowns: vec![],
+    })
+    .unwrap();
+    drop(l);
+    let (code, v) = r.resolve_o1("inconclusive", "decided by the alloc-test");
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn a_newer_blind_summary_wins_over_an_older_flat_one_in_the_refusal_and_the_gate_text() {
+    let r = scene("3h", Verdict::Executed);
+    r.stack_summary(false);
+    r.stack_summary(true);
+    let (_, v) = r.resolve_o1("inconclusive", "x");
+    assert_eq!(v["error"]["code"], "heap-growth-undecided", "{v}");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("is blind") && !msg.contains("no stack grew"),
+        "{msg}"
+    );
+    r.run(&["gate", "check", "--final"]);
+    let gate = fs::read_to_string(r.run_dir.join("gate/final.json")).unwrap();
+    assert!(
+        gate.contains("was summarized and is blind") && !gate.contains("no stack grew across it"),
+        "{gate}"
+    );
 }
 
 #[test]
