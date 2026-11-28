@@ -149,6 +149,9 @@ pub struct EntryRun {
 struct Run {
     harness: String,
     series: String,
+    /// A series `dla summarize` wrote from the captures of the harness: it has verdicts only for
+    /// targets a passed column is tied to, so it never counts as a run without growth.
+    capture: bool,
     entry: bool,
     /// A hook driver that is not an entry-path harness (no test loop, no fixed command).
     hook: bool,
@@ -339,14 +342,32 @@ impl Triggers {
         for r in &view.trends {
             latest.insert(r.series.as_str(), r);
         }
-        for (series, h) in &view.series_harness {
+        // The series of a harness' own runs, then the capture series `dla summarize` wrote from
+        // its captures: a capture series is read for what grew in it, and is no run of the
+        // harness (it measured no flat holder and ran no line).
+        let measured = view.series_harness.iter().map(|(s, h)| (s, h, false));
+        let captured = view.capture_harness.iter().map(|(s, h)| (s, h, true));
+        for (series, h, capture) in measured.chain(captured) {
             let Some(m) = manifests.get(h) else { continue };
-            t.ran.insert(h.clone());
-            let rec = crate::harness::run_record_of(run_dir, h, series);
+            if !capture {
+                t.ran.insert(h.clone());
+            }
+            let mut rec = crate::harness::run_record_of(run_dir, h, series);
+            // No run wrote a capture series, so it has no run record: it takes the record of
+            // the harness's own run (what a caller varies, the driver digest), or the trigger
+            // would read "varies: not recorded" for a harness that has recorded it.
+            if capture && rec.is_none() {
+                rec = view
+                    .series_harness
+                    .iter()
+                    .filter(|(_, sh)| *sh == h)
+                    .find_map(|(s, _)| crate::harness::run_record_of(run_dir, h, s));
+            }
             let report = latest.get(series.as_str());
             t.runs.push(Run {
                 harness: h.clone(),
                 series: series.clone(),
+                capture,
                 entry: m.is_entry_path(),
                 hook: m.is_hook_driver() && !m.is_entry_path(),
                 own_workload: !m.is_hook_driver() && !m.is_entry_path(),
@@ -754,7 +775,7 @@ impl Triggers {
     fn without_growth(&self, id: &FindingId) -> Vec<&Run> {
         self.runs
             .iter()
-            .filter(|r| r.entry && r.read && r.fresh && r.declared.contains(id))
+            .filter(|r| !r.capture && r.entry && r.read && r.fresh && r.declared.contains(id))
             .filter(|r| r.verdicts.get(id) != Some(&Verdict::Grew))
             .collect()
     }

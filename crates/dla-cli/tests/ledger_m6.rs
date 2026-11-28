@@ -2304,3 +2304,114 @@ fn duplicate_refuses_a_finding_against_itself_and_an_unknown_one() {
     let r = refused(&e, &[], &["ledger", "duplicate", "F1", "--of", "F77"]);
     assert_eq!(r["code"], "unknown-finding", "{r}");
 }
+
+// ------------------------------------------------- verify against a measured plateau
+
+/// Adds an alloc-test record on F1 with one live heap column (E6) and returns its id.
+fn add_alloc_test(e: &Env, favors: &str, verdict: &str) -> String {
+    let mut l = reload(e);
+    let line = l
+        .add_evidence(evidence(
+            EvidenceKind::Discriminator,
+            Authority::Test,
+            "dla",
+            "x",
+            "s6",
+            json!({"test": "plateau+purge", "favors": favors, "supports": [], "finding": "F1",
+            "columns": [{"name": "native.live_bytes", "favors": favors,
+                "plateau": {"verdict": verdict, "extra_rise": 573000.0, "extra_slope": 186.0}}]}),
+        ))
+        .unwrap();
+    write_ledger(e, &l);
+    let dla_core::Record::Evidence(r) = &line.record else {
+        unreachable!("add_evidence appends an evidence record");
+    };
+    r.evidence_id.to_string()
+}
+
+fn verify_as(e: &Env, label: &str, mechanism: &str) -> (i32, Value) {
+    let bundle = bundle_for(e, "F1");
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/archetypes.toml"),
+        e.data.path().join("archetypes.toml"),
+    )
+    .unwrap();
+    run_with(
+        e,
+        &[],
+        &[
+            "ledger",
+            "verify",
+            "F1",
+            "--site",
+            "a.go:1",
+            "--holder",
+            "static/global",
+            "--mechanism",
+            mechanism,
+            "--label",
+            label,
+            "--bundle",
+            &bundle,
+        ],
+    )
+}
+
+#[test]
+fn a_level_stops_reading_is_refused_when_the_alloc_test_measured_the_growth_going_on() {
+    let e = env();
+    let id = add_alloc_test(&e, "leak", "growth-continues");
+    for label in ["N-HWM", "N-WARM"] {
+        let (code, v) = verify_as(
+            &e,
+            label,
+            "reads as non-leak: the buffer is a high-water mark",
+        );
+        assert_eq!(code, 2, "{v}");
+        let err = &v["error"];
+        assert_eq!(err["code"], "verify-contradicts-measurement", "{v}");
+        let text = format!("{} {} {}", err["message"], err["missing"], err["fix"]);
+        for want in [
+            &id,
+            "native.live_bytes",
+            "573000",
+            "186",
+            label,
+            "bounds or empties",
+        ] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+    }
+    // Nothing was recorded.
+    assert!(reload(&e).open_items().next().is_none());
+}
+
+#[test]
+fn the_refusal_is_released_by_naming_the_evidence_or_by_another_reading() {
+    let e = env();
+    let id = add_alloc_test(&e, "leak", "growth-continues");
+    // Another label is unchanged.
+    let (code, v) = verify_as(&e, "L-COLLECT", "the table keeps every entry");
+    assert_eq!(code, 0, "{v}");
+    let (code, v) = verify_as(&e, "N-INTENT", "reads as non-leak: kept on purpose");
+    assert_eq!(code, 0, "{v}");
+    // A mechanism that names another id does not release it; one that names this id does.
+    let (code, v) = verify_as(&e, "N-HWM", "reads as non-leak: see E3200, E60");
+    assert_eq!(code, 2, "{v}");
+    let text = format!("reads as non-leak: the drain at a.go:9 empties it; {id} stopped early");
+    let (code, v) = verify_as(&e, "N-HWM", &text);
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn an_alloc_test_that_favors_non_leak_or_a_plateau_does_not_refuse() {
+    for (favors, verdict) in [("non-leak", "growth-continues"), ("leak", "plateau")] {
+        let e = env();
+        add_alloc_test(&e, favors, verdict);
+        let (code, v) = verify_as(&e, "N-HWM", "reads as non-leak: a high-water mark");
+        assert_eq!(code, 0, "{favors} {verdict}: {v}");
+    }
+    let e = env();
+    let (code, v) = verify_as(&e, "N-WARM", "reads as non-leak: no alloc-test in this run");
+    assert_eq!(code, 0, "{v}");
+}

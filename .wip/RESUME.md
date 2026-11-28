@@ -4130,3 +4130,22 @@ unattended run at a time and no builder beside it.
   Z3 verifier N-HWM against its own bundle's alloc-test (growth-continues); bundle excerpts are only stack
      frames (max 4), the conditional remover/consumer code never shown.
 - Verifier baseline: vrun.py r10-v17-{1,2,3} on r10-vbase with plugin/bin preview.17 (task bg3lnx2z1).
+
+## 2026-11-28 12:15 round Z built (Z1-Z3), checked on the real run; Z4 started
+- Workflow wf_afd7e4ca-0b4: 3 builders + 3 reviewers + verify + fix; 2 confirmed review findings fixed (Z1 units read
+  back from the driver's checkpoints; Z2 capture run takes the harness run record for varies). I replaced an API
+  name of the evidence project in a verdicts.rs test (stack:push_overflow), reran mutation M5 myself (caught),
+  fixed the Z1 VERIFY row to 5 cells, added real checks to the Z1/Z2 rows.
+- Real checks (binary /root/dla-real/bin-z/dla = working tree build):
+  Z1: r10 H4 rerun (dla harness run H4 --mode fresh in r10-fastrace): coverage taken again at 3520 units, writer
+      lines 38/49/55 = 2877/959/960 (were 0/0/0), note in run-S16.json; trend S16: F41 executed (was writer_not_executed).
+  Z2: copy u182/z2 (r10-vbase with H2/H3/H5/H6/H7 manifests restored from keep): trend S11 -> T16 F41 grew
+      ("grew across the 4 captures of H5 (stair, +188 B/unit)"); report Trigger "not checked (no entry-path harness was
+      run for it)"; run status blocking [trigger F41: dla harness gen --lang rust --driver --entry F41], complete false.
+  Z3: verify N-HWM refused verify-contradicts-measurement with E32 numbers; with E32 cited -> ok.
+- Verifier reruns (restored base, bundle 8d625f42 = original): preview.17: N-HWM, N-HWM, N-INTENT; Z rules: N-SCALE,
+  N-SCALE, L-COLLECT. All non-leak readings assume "the collector thread drains the ring"; coverage of H4/H5 shows
+  handle_commands never ran (producer fns ran). Bundle has no drivers or ran list -> Z4 (brief wip-notes/z4-brief.md,
+  workflow wf_51d85194-d3a / task w0x3lf1lb): harnesses/<H>/driver + ran.txt + verifier rule.
+- Disk 1.4 GB: target/debug 10.2 GB (stale 08h/09h hash dirs) cannot be deleted by me (safety check); full local
+  suite skipped (no room); CI runs it. Plugin copy /root/dla-real/plugin-z, bin /root/dla-real/bin-z.

@@ -370,7 +370,10 @@ under the run directory and need tier 1.
   - `unmeasured`: two such runs, but at least one verdict is not `constant` (nothing read the holder's
     size there: `executed`, `unknown`...). That is no evidence either way: the report says "not checked".
     After one such run the item's fix asks for a size reading (a probe of the holder) and a rerun first.
-  - `unchecked`: it grew only in drivers that are not entry-path.
+  - `unchecked`: it grew only in drivers that are not entry-path. A capture series that `dla summarize`
+    wrote from the captures of a harness counts as growth in that harness when a passed column of it is
+    tied to the finding (the trend gives the target `grew`); it says nothing for a target no passed
+    column is tied to.
   While the queue was on and more than the floor of the budget is left, a confirmed or strong leak-side
   finding that is `unchecked` gives an item of kind `trigger` in `dla run status`, the final gate and the
   stop hook, right after the queue items; its fix is the `--entry` command with every unchecked finding
@@ -619,7 +622,10 @@ test files that ran and measures nothing per file). The verifier states a site, 
 mechanism in words, decides from them whether the owner would call this a defect, picks an ID or
 UNCLASSIFIED and runs `dla ledger verify`. A verifier that reads the finding as bounded, intended or
 proportional to load records the matching `N-*` ID; the ledger accepts it, the label disagrees and the open
-item carries its mechanism, which starts `reads as non-leak:`. A different site, holder or
+item carries its mechanism, which starts `reads as non-leak:`. `N-WARM` and `N-HWM` say the level stops: when
+an alloc-test on the finding measured a live heap column that favors leak and kept growing over its extra window,
+`dla ledger verify` refuses them (`verify-contradicts-measurement`) unless the mechanism names that evidence id
+and the line that bounds or empties the holder. A different site, holder or
 ID opens an open item that shows both mechanisms; resolve it by reading the code. A run that is not
 verified prints `Verified: no` for each confirmed finding and still reports.
 

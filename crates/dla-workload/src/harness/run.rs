@@ -2534,6 +2534,7 @@ fn go_cover_point(
     };
     let long_profile = paths.cov.join(format!("{label}-long.out.tmp"));
     let _ = fs::remove_file(&long_profile);
+    let _ = fs::remove_file(long_pe.dump_path());
     let log = paths.logs.join(format!("{label}-long.log"));
     let Some((long, long_rel)) = go_cover_process(ctx, &long_pe, &long_profile, left, Some(&log))?
     else {
@@ -2561,8 +2562,18 @@ fn go_cover_point(
     match failed {
         None => {
             fs::rename(&long_profile, &profile).map_err(|e| io_refusal(&profile, e))?;
-            run.limitations
-                .push(longer_cover_note(&label, units, &missed, manifest.step));
+            let did = longer_cover_units(
+                fs::read_to_string(long_pe.dump_path()).ok().as_deref(),
+                "go",
+                units,
+            );
+            run.limitations.push(longer_cover_note(
+                &label,
+                did,
+                units,
+                &missed,
+                manifest.step,
+            ));
         }
         Some(why) => {
             let _ = fs::remove_file(&long_profile);
@@ -2664,12 +2675,27 @@ fn longer_cover(
     (!missed.is_empty()).then_some(missed)
 }
 
-/// The note a coverage run that was taken again leaves in the run record.
-fn longer_cover_note(label: &str, units: u64, missed: &[String], step: u64) -> String {
-    format!(
-        "the coverage of {label} was taken again at {units} units: a writer line of {} had not run in one step of {step} (a writer that starts after a threshold, such as a full buffer)",
+/// The units the longer coverage run did: what the driver's own `checkpoint` records say (the
+/// driver lowers its step to fit the time limit and still exits 0), else the `asked` units.
+fn longer_cover_units(dump_text: Option<&str>, runtime: &str, asked: u64) -> u64 {
+    dump_text
+        .and_then(|t| capture::checkpoint_units(t, runtime))
+        .unwrap_or(asked)
+}
+
+/// The note a coverage run that was taken again leaves in the run record. `did` is the units the
+/// process did, `asked` the units it was asked for; they differ when the driver lowered its step.
+fn longer_cover_note(label: &str, did: u64, asked: u64, missed: &[String], step: u64) -> String {
+    let mut note = format!(
+        "the coverage of {label} was taken again at {did} units: a writer line of {} had not run in one step of {step} (a writer that starts after a threshold, such as a full buffer)",
         missed.join(", ")
-    )
+    );
+    if did != asked {
+        note.push_str(&format!(
+            "; the driver did {did} units, not the {asked} asked (a driver lowers its step to fit the time limit)"
+        ));
+    }
+    note
 }
 
 /// Process counts of the allocation-stack points of a Rust driver.
@@ -3099,7 +3125,6 @@ fn rust_cover_point(
     if let Some(missed) = longer_cover(&writer_groups(ctx, manifest), &counted, rounds) {
         let long_units = manifest.step.saturating_mul(u64::from(rounds));
         let left = timeout.saturating_sub(Duration::from_millis(wall_ms));
-        let again = longer_cover_note(&label, long_units, &missed, manifest.step);
         let log = paths.logs.join(format!("{label}-long.log"));
         let log_rel = paths.rel(ctx, &log);
         if left < Duration::from_secs(1) {
@@ -3116,6 +3141,8 @@ fn rust_cover_point(
             };
             let mut notes: Vec<String> = Vec::new();
             run.logs.push(log_rel.clone());
+            // The first process left its dump here: the units read back must be the longer run's.
+            let _ = fs::remove_file(long.dump_path());
             let (again_doc, _) =
                 rust_cover_process(ctx, paths, &long, &tools, &exe, left, &log, &mut notes)?;
             match again_doc {
@@ -3123,8 +3150,18 @@ fn rust_cover_point(
                     run.limitations.append(&mut notes);
                     counted = lines::rust_line_counts(&d, &paths.work, &wanted);
                     doc = d;
-                    units = long_units;
-                    run.limitations.push(again);
+                    units = longer_cover_units(
+                        fs::read_to_string(long.dump_path()).ok().as_deref(),
+                        "rust",
+                        long_units,
+                    );
+                    run.limitations.push(longer_cover_note(
+                        &label,
+                        units,
+                        long_units,
+                        &missed,
+                        manifest.step,
+                    ));
                 }
                 None => {
                     run.limitations.push(format!(
@@ -4795,6 +4832,96 @@ mod tests {
     }
 
     use super::*;
+
+    fn counted(entries: &[(&str, u32, Option<u64>)]) -> Vec<Value> {
+        entries
+            .iter()
+            .map(|(f, l, c)| json!({"file": f, "line": l, "count": c}))
+            .collect()
+    }
+
+    fn group(id: &str, lines: &[(&str, u32)]) -> (String, Vec<lines::Wanted>) {
+        (
+            id.to_owned(),
+            lines.iter().map(|(f, l)| ((*f).to_owned(), *l)).collect(),
+        )
+    }
+
+    #[test]
+    fn a_coverage_run_is_taken_again_when_every_writer_line_of_a_target_counted_zero() {
+        let groups = [group("F1", &[("a.rs", 5)]), group("F2", &[("a.rs", 9)])];
+        let c = counted(&[("a.rs", 5, Some(0)), ("a.rs", 9, Some(30))]);
+        assert_eq!(longer_cover(&groups, &c, 8), Some(vec!["F1".to_owned()]));
+        // Every writer line ran: no second process.
+        let ran = counted(&[("a.rs", 5, Some(2)), ("a.rs", 9, Some(30))]);
+        assert_eq!(longer_cover(&groups, &ran, 8), None);
+        // One writer line of a target ran: the target ran.
+        let two = [group("F1", &[("a.rs", 5), ("a.rs", 6)])];
+        let c = counted(&[("a.rs", 5, Some(0)), ("a.rs", 6, Some(1))]);
+        assert_eq!(longer_cover(&two, &c, 8), None);
+        let c = counted(&[("a.rs", 5, Some(0)), ("a.rs", 6, Some(0))]);
+        assert_eq!(longer_cover(&two, &c, 8), Some(vec!["F1".to_owned()]));
+    }
+
+    #[test]
+    fn a_line_that_could_not_be_counted_is_not_a_zero_and_no_lines_run_nothing_again() {
+        let groups = [group("F1", &[("a.rs", 5)])];
+        assert_eq!(
+            longer_cover(&groups, &counted(&[("a.rs", 5, None)]), 8),
+            None
+        );
+        // A line the record does not list is unknown too.
+        assert_eq!(longer_cover(&groups, &[], 8), None);
+        assert_eq!(
+            longer_cover(&[], &counted(&[("a.rs", 5, Some(0))]), 8),
+            None
+        );
+    }
+
+    #[test]
+    fn a_series_of_one_round_is_not_run_again_at_its_own_length() {
+        let groups = [group("F1", &[("a.rs", 5)])];
+        let c = counted(&[("a.rs", 5, Some(0))]);
+        assert_eq!(longer_cover(&groups, &c, 1), None);
+        assert_eq!(longer_cover(&groups, &c, 0), None);
+        assert!(longer_cover(&groups, &c, 2).is_some());
+    }
+
+    #[test]
+    fn the_note_of_a_longer_coverage_run_says_the_units_the_finding_and_why() {
+        let note = longer_cover_note("p1-fresh-cover", 3960, 3960, &["F41".to_owned()], 440);
+        assert_eq!(
+            note,
+            "the coverage of p1-fresh-cover was taken again at 3960 units: a writer line of F41 had not run in one step of 440 (a writer that starts after a threshold, such as a full buffer)"
+        );
+    }
+
+    #[test]
+    fn the_units_of_a_longer_coverage_run_are_what_the_driver_did_not_what_was_asked() {
+        let dump = |x: u64| {
+            format!(
+                "{{\"dla_harness\":1,\"phase\":\"checkpoint\",\"runtime\":\"rust\",\"x\":440}}\n{{\"dla_harness\":1,\"phase\":\"checkpoint\",\"runtime\":\"rust\",\"x\":{x}}}\n"
+            )
+        };
+        assert_eq!(longer_cover_units(Some(&dump(3960)), "rust", 3960), 3960);
+        // The driver lowered its step to fit the time left: it did 1500 of the 3960 units.
+        assert_eq!(longer_cover_units(Some(&dump(1500)), "rust", 3960), 1500);
+        // A Go driver's records are read for Go only.
+        assert_eq!(longer_cover_units(Some(&dump(1500)), "go", 3960), 3960);
+        // No dump: the asked units.
+        assert_eq!(longer_cover_units(None, "rust", 3960), 3960);
+        assert_eq!(longer_cover_units(Some(""), "rust", 3960), 3960);
+    }
+
+    #[test]
+    fn the_note_of_a_longer_coverage_run_says_when_the_driver_did_fewer_units() {
+        let note = longer_cover_note("p1-fresh-cover", 1500, 3960, &["F41".to_owned()], 440);
+        assert!(
+            note.contains("taken again at 1500 units")
+                && note.contains("the driver did 1500 units, not the 3960 asked"),
+            "{note}"
+        );
+    }
 
     #[test]
     fn the_attention_lines_lead_with_a_detector_hit_a_short_series_and_missing_coverage() {
