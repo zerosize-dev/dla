@@ -295,3 +295,34 @@ fn a_row_under_its_threshold_needs_no_item() {
     assert!(r.ledger_item_texts().is_empty());
     assert!(r.residual_items().is_empty(), "{:?}", r.items());
 }
+
+/// A worker raises its items under its own prefix (`rust/O1`) while the rows keep the plain id:
+/// the rows are matched to the item all the same, so a second reading of the same series is the
+/// same row (kept, not added), and a row of another series that falls under its threshold leaves
+/// the item open while the first row is still above.
+#[test]
+fn a_workers_rows_are_matched_to_its_prefixed_items() {
+    let r = Run::new();
+    r.ok(&["run", "dispatch", "--workers", "rust,python"]);
+    r.series("S1", 2_000_000.0);
+    let v = r.ok(&["--worker", "rust", "gap", "S1", "--residual"]);
+    assert_eq!(
+        v["open_items"]["opened"].as_array().unwrap().len(),
+        1,
+        "{v}"
+    );
+    let v = r.ok(&["--worker", "rust", "gap", "S1", "--residual"]);
+    assert_eq!(v["open_items"]["added"], json!([]), "the same row: {v}");
+    assert_eq!(v["open_items"]["kept"].as_array().unwrap().len(), 1, "{v}");
+    r.series("S2", 3_000_000.0);
+    let v = r.ok(&["--worker", "rust", "gap", "S2", "--residual"]);
+    assert_eq!(v["open_items"]["added"].as_array().unwrap().len(), 1, "{v}");
+    r.series("S2", 0.0);
+    let v = r.ok(&["--worker", "rust", "gap", "S2", "--residual"]);
+    assert!(
+        v["limitations"].to_string().contains(
+            "stays open: a row of another series listed on it is still above its threshold"
+        ),
+        "{v}"
+    );
+}

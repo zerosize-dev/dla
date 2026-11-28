@@ -389,9 +389,17 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
     let unit = unit_of(src.axis);
     let ev_id: EvidenceId = ledger.next_evidence_id();
     // The rows an earlier `dla gap --residual` listed, on the series of this call and others.
+    // A row keeps the plain id (`O1`) of an item a worker raised as `<worker>/O1`: rows are
+    // compared by the id the ledger holds the item under.
     let prior: Vec<ResidualRow> = CoverageManifest::load(&tc.run_dir)?
         .map(|m| m.residual)
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .into_iter()
+        .map(|mut r| {
+            r.open_item = r.open_item.map(|o| ledger.own_open_item_id(&o));
+            r
+        })
+        .collect();
     let on_item = |id: &OpenItemId| -> Vec<&ResidualRow> {
         prior
             .iter()

@@ -277,7 +277,7 @@ fn refuse_running(ctx: &Ctx, harness: &str) -> Res<()> {
         ),
         format!("{harness} not running"),
         format!(
-            "wait for it to end (dla run status; while kill -0 {} 2>/dev/null; do sleep 5; done), or cut it with `dla run stop` and run {harness} again",
+            "wait for it to end (dla run status; while kill -0 {} 2>/dev/null; do sleep 5; done), or cut its harness process with `dla run stop` and run {harness} again once that command has ended",
             p.pid
         ),
     ))

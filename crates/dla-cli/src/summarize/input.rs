@@ -116,14 +116,16 @@ fn capture_label(i: &Input) -> String {
         .unwrap_or_else(|| i.shown().to_owned())
 }
 
-/// True for the dump of an allocator-shim capture (`dump.jsonl` or `shim-dump.jsonl` of a Rust or
-/// native driver) that holds no record of the end of its process: the process still writes it, or
-/// was cut before it did. Read from the parsed lines: a dump of a managed runtime, a file that is
-/// no harness dump, or one over the size bound is never this.
+/// True for the dump of an allocator-shim capture that holds no record of the end of its process:
+/// the process still writes it, or was cut before it did. A dump is a shim capture when the shim
+/// wrote in it (a record with `raw_sites`), when it is a `shim-dump.jsonl`, or when it is the
+/// `dump.jsonl` of an allocation point (`p<k>-alloc/`) of a Rust or native driver, whose process
+/// runs with the shim preloaded and gets its exit record from it. The `dump.jsonl` of any other
+/// point of those drivers holds checkpoint records only, complete as it is, and is never this;
+/// nor is a dump of a managed runtime, a file that is no harness dump, or one over the size bound.
 fn shim_dump_without_exit(i: &Input) -> bool {
-    if !matches!(i.name_lower().as_str(), "dump.jsonl" | "shim-dump.jsonl")
-        || i.size > EXIT_SCAN_BYTES
-    {
+    let name = i.name_lower();
+    if !matches!(name.as_str(), "dump.jsonl" | "shim-dump.jsonl") || i.size > EXIT_SCAN_BYTES {
         return false;
     }
     let Ok(bytes) = fs::read(&i.abs) else {
@@ -131,12 +133,19 @@ fn shim_dump_without_exit(i: &Input) -> bool {
     };
     let text = String::from_utf8_lossy(&bytes);
     let (dumps, _bad) = dla_core::HarnessDump::parse_lines(&text);
-    let shim = dumps.iter().any(|d| {
-        d.raw_sites.is_some()
-            || d.runtime
-                .as_deref()
-                .is_some_and(|r| r.eq_ignore_ascii_case("native") || r.eq_ignore_ascii_case("rust"))
+    let alloc_point = i
+        .abs
+        .parent()
+        .and_then(|d| d.file_name())
+        .is_some_and(|n| n.to_string_lossy().ends_with("-alloc"));
+    let driver = dumps.iter().any(|d| {
+        d.runtime
+            .as_deref()
+            .is_some_and(|r| r.eq_ignore_ascii_case("native") || r.eq_ignore_ascii_case("rust"))
     });
+    let shim = name == "shim-dump.jsonl"
+        || dumps.iter().any(|d| d.raw_sites.is_some())
+        || (alloc_point && driver);
     shim && !dumps
         .iter()
         .any(|d| d.phase == dla_core::harness::DumpPhase::Exit)

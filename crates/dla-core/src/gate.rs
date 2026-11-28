@@ -1468,13 +1468,15 @@ pub fn uncaptured_residuals(view: &RunView) -> Vec<UncapturedResidual> {
         if residual_row_covered(view, r) {
             continue;
         }
-        // An item that lists several rows asks for the capture of its largest one: a capture
-        // of a small row's series says nothing of a row two orders larger.
-        if cov
-            .residual
-            .iter()
-            .any(|o| o.open_item.as_ref() == Some(id) && o.residual > r.residual)
-        {
+        // An item that lists several rows asks for the capture of its largest one above its
+        // threshold (in the same unit): a capture of a small row's series says nothing of a row
+        // two orders larger, and a row under its threshold asks for nothing.
+        if cov.residual.iter().any(|o| {
+            o.open_item.as_ref() == Some(id)
+                && o.unit == r.unit
+                && o.residual > o.threshold
+                && o.residual > r.residual
+        }) {
             continue;
         }
         let Some(harness) = view.series_harness.get(series) else {

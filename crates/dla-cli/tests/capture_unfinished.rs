@@ -143,3 +143,25 @@ fn complete_captures_alone_are_read_as_before() {
     assert_eq!(code, 0, "{v}");
     assert!(v.get("left_out").is_none(), "{v}");
 }
+
+/// The `dump.jsonl` of a plain point of a Rust or native driver holds its checkpoints only: no
+/// shim runs in that process, so it never gets an exit record, and it is complete as it is.
+#[test]
+fn a_plain_point_of_a_driver_is_never_called_unfinished() {
+    let p = Project::new();
+    let checkpoints = "{\"dla_harness\":1,\"phase\":\"checkpoint\",\"pid\":7,\"runtime\":\"rust\",\"x\":1000,\"t_ms\":1,\"gc_forced\":false,\"values\":{},\"groups\":{}}\n{\"dla_harness\":1,\"phase\":\"checkpoint\",\"pid\":7,\"runtime\":\"rust\",\"x\":2000,\"t_ms\":2,\"gc_forced\":false,\"values\":{},\"groups\":{}}\n";
+    let mut files: Vec<String> = [(1000, 10, 5), (2000, 20, 5), (4000, 40, 5)]
+        .iter()
+        .enumerate()
+        .map(|(i, (x, a, b))| p.dump(&format!("p{}-alloc", i + 1), &exit_record(*x, *a, *b)))
+        .collect();
+    files.push(p.dump("p1-fresh", checkpoints));
+    let (_, v) = p.summarize(&files);
+    assert!(
+        !v.to_string().contains("has no exit record"),
+        "a plain point is not a capture still being written: {v}"
+    );
+    let (_, v) = p.summarize(&[p.dump("p2-fresh", checkpoints)]);
+    assert_ne!(v["error"]["code"], "capture-incomplete", "{v}");
+    assert!(!v.to_string().contains("has no exit record"), "{v}");
+}

@@ -1,0 +1,57 @@
+A run claims only what it measured: residual rows, close-rest, unfinished captures, the set-up hold
+
+The same real run on a Rust library showed four more ways a run ends with a claim no measurement
+made, or with the step that finds the leak cut short.
+
+Residual items:
+
+- `dla gap --residual` keyed an open item on the region alone. One item opened for a heap row
+  of 0.94 bytes per iteration kept the later rows of 2 MB per iteration of other series, a
+  resolution citing the small row counted every row as covered, and the report printed "ABOVE
+  THRESHOLD, see O1" beside a resolved item.
+- A row now records the residual evidence that listed it. A row of another series, or one more
+  than 10% larger than the item's largest, is added to the open item, and `next` names the
+  largest row (series, bytes per unit, threshold). Once the item is resolved, the same row opens
+  a new item.
+- A resolution covers a row only when it was made after the row was listed. An item stays open
+  while a row of another series on it is above its threshold.
+- Leaving a heap residual unresolved needs a summarized capture of the harness written after the
+  first series of the driver that wrote the item's largest row above its threshold.
+- The report prints "resolved as <reason>: <remedy>" for a covered row and "NOT COVERED" for one
+  the resolution does not cover.
+- A worker's rows are matched to its prefixed items. A row under its threshold stays no item.
+
+close-rest:
+
+- A target whose best verdict is `executed` was closed with "its code ran and showed no growth"
+  though no column of any run measured its holder.
+- The remedy keeps "showed no growth" only when a trend has a probe column made for the finding,
+  a column tied to it, or a site column at its site or writer lines. Otherwise it says "its code
+  ran; its holder was not measured", and names the captures of its harness when there are any.
+- The second-look texts say no run showed the holder grow, not that it stayed flat. The
+  candidates close-rest closes are the same.
+
+Unfinished captures and a harness run twice:
+
+- `dla summarize` leaves out a shim capture that has no exit record (a `shim-dump.jsonl`, a dump
+  the shim wrote in, or the `dump.jsonl` of a Rust or native allocation point), and names it with
+  the text to wait for `dla harness run <H>` to end. It refuses the call when nothing else is
+  left. A plain point's dump holds checkpoints only and is read as before.
+- A truncated heap dump or V8 snapshot gets the same wait text.
+- `dla harness run <H>` is refused with `harness-running` while another run of the same harness
+  is alive. Its pid, start time and the fix are named. Another harness, a dead command and one
+  that marked itself stopped are not refused.
+- The run record of a Rust allocation capture counts its shim records.
+
+The set-up hold:
+
+- The sentence that says to change `setup()` put the action last, and the output bound cuts an
+  entry after 160 characters, so the model read "...leave out what" and slowed the consumer,
+  which still drained what the unit added.
+- The sentence now starts with the action: leave out what consumes or resets the state (absent,
+  not slowed). `dla trend` puts the hold first, and the driver block of a held target gives it
+  as the first line under the target, with the set-up function of that runtime's skeleton.
+- The references say once that a guard that fills when nothing drains it is run with the
+  consumer absent.
+
+Tests pin the harness that the JVM heap-graph and Node heap-snapshot summaries name.
