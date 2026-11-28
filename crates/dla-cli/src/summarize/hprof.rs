@@ -131,7 +131,12 @@ fn parse_failure(rel: &str, e: &hprof::HprofError) -> Failure {
             "a .hprof or .hprof.gz file",
             "dla summarize heap-graph <dump>.hprof",
         ),
-        H::Truncated(_) | H::Malformed(_) | H::Gzip(_) => fail(
+        H::Truncated(_) => super::input::truncated_refusal(
+            rel,
+            &e.to_string(),
+            "take the dump again (jcmd <pid> GC.heap_dump <file>) and rerun dla summarize heap-graph",
+        ),
+        H::Malformed(_) | H::Gzip(_) => fail(
             "malformed-artifact",
             format!("{rel} cannot be read: {e}"),
             "a complete heap dump",

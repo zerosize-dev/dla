@@ -239,6 +239,50 @@ pub fn thin_old(
     m
 }
 
+impl RunArgs {
+    /// The harness the command runs (`H1`).
+    pub fn harness_id(&self) -> &str {
+        &self.harness
+    }
+}
+
+/// Refuses a second `dla harness run <H>` while another command of the same run, registered as
+/// `dla harness run <H>`, is alive (its process exists and is the one that registered: PID reuse
+/// is told by the start time). Two runs of one harness write the same `out/` files and the same
+/// series, and the second would also stop what the first started. A run of another harness is no
+/// reason, and a command that died without marking itself stopped is not alive.
+fn refuse_running(ctx: &Ctx, harness: &str) -> Res<()> {
+    let state = dla_core::RunState::load(&ctx.run_dir)?;
+    let name = format!("dla harness run {harness}");
+    let Some(p) = state.processes.iter().find(|p| {
+        p.kind == dla_core::state::ProcessKind::Command
+            && p.stopped_at.is_none()
+            && p.worker == ctx.worker
+            && p.pid != std::process::id()
+            && p.command == name
+            && dla_core::proc::is_alive(p.pid)
+            && dla_core::proc::identity_matches(
+                p,
+                dla_sample::os::process_start_time(p.pid).as_deref(),
+            )
+    }) else {
+        return Ok(());
+    };
+    Err(Failure::refuse(
+        "harness-running",
+        format!(
+            "`{name}` is still running (pid {}, started {}): a second run of {harness} would write the same out/ files and series while the first is writing them",
+            p.pid,
+            p.started_at.format("%H:%M:%SZ")
+        ),
+        format!("{harness} not running"),
+        format!(
+            "wait for it to end (dla run status; while kill -0 {} 2>/dev/null; do sleep 5; done), or cut its harness process with `dla run stop` and run {harness} again once that command has ended",
+            p.pid
+        ),
+    ))
+}
+
 /// Runs `dla harness`.
 pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: HarnessCmd) -> Res<Value> {
     let tc = stage::tool_ctx(project, ctx, data);
@@ -328,6 +372,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: HarnessCmd) -> 
                     "dla harness run H1",
                 ));
             }
+            refuse_running(ctx, &r.harness)?;
             let opts = RunOptions {
                 modes: r.mode.map(|m| m.0).unwrap_or_default(),
                 iterations: r.iterations,

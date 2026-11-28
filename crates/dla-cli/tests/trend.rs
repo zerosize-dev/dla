@@ -226,6 +226,7 @@ fn a_series_with_a_gap_row_is_not_hinted_to_run_gap_again() {
         unit: "bytes/iteration".into(),
         threshold: 1.0,
         open_item: None,
+        listed: None,
     };
     dla_core::CoverageManifest::update(&pr.run_dir, |m| m.set_residual(vec![row.clone()])).unwrap();
     assert!(

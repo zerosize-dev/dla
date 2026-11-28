@@ -125,7 +125,12 @@ fn read_failure(rel: &str, e: &NodeError) -> Failure {
             "a .heapsnapshot file",
             "dla summarize heap-graph <snapshot>.heapsnapshot",
         ),
-        NodeError::Malformed(_) | NodeError::Truncated(_) => Failure::refuse(
+        NodeError::Truncated(_) => super::input::truncated_refusal(
+            rel,
+            &e.to_string(),
+            "take the snapshot again (v8.writeHeapSnapshot, or dla harness run <H> --capture heap) and rerun",
+        ),
+        NodeError::Malformed(_) => Failure::refuse(
             "malformed-artifact",
             format!("{rel} cannot be read: {e}"),
             "a complete heap snapshot",

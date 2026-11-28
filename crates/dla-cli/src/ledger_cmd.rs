@@ -1253,7 +1253,8 @@ fn resolve_open_item(ctx: &Ctx, ledger: &mut Ledger, id: OpenItemId, a: ResolveA
 }
 
 /// Refuses to leave the open item of a heap residual above its threshold unresolved while the
-/// harness of its series has no summarized capture and its runtime takes `--capture`: the
+/// largest row's series has no summarized capture written after it (see
+/// [`gate::uncaptured_residuals`]) and its runtime takes `--capture`: the
 /// capture and its `dla summarize` commands say who keeps the growth. An aborted run is not held
 /// to it, and `time_budget` keeps its own rule.
 fn refuse_uncaptured_residual(ctx: &Ctx, id: &OpenItemId) -> Res<()> {
@@ -1267,12 +1268,14 @@ fn refuse_uncaptured_residual(ctx: &Ctx, id: &OpenItemId) -> Res<()> {
     Err(Failure::refuse(
         core_codes::CAPTURE_NOT_SUMMARIZED,
         format!(
-            "{id} cannot be left unresolved: it is a heap residual above its threshold and harness {} has no summarized capture (no retention or allocation-stack summary computed from capture files under harness/{}/; a capture run that records it could not write stacks releases it)",
-            u.harness, u.harness
+            "{id} cannot be left unresolved: it is a heap residual above its threshold and no summarized capture of its largest row ({}) exists: no retention or allocation-stack summary computed from capture files under harness/{}/ was written after the first series of the driver that wrote it (a capture taken before it, or of an earlier driver, says nothing of it; a capture run that records it could not write stacks releases it)",
+            u.series.join(", "),
+            u.harness
         ),
         format!(
-            "a capture of {} and its summaries (who keeps the growth), then the item resolved by what they show",
-            u.harness
+            "a capture of {} taken for {} and its summaries (who keeps the growth), then the item resolved by what they show",
+            u.harness,
+            u.series.join(", ")
         ),
         u.fix(),
     ))

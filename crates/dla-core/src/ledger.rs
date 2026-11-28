@@ -223,6 +223,8 @@ struct Index {
     finding_order: BTreeMap<FindingId, RecordOrder>,
     /// The `ts` of the line that raised every open item.
     open_item_ts: BTreeMap<OpenItemId, DateTime<Utc>>,
+    /// The chronological key of the line that resolved every open item.
+    open_item_resolved_order: BTreeMap<OpenItemId, RecordOrder>,
     /// The chronological key of the latest transition of a finding to `confirmed`.
     confirmed_order: BTreeMap<FindingId, RecordOrder>,
     /// Every checklist answer with its key, in replay order (`answers` keeps only the latest
@@ -262,6 +264,7 @@ impl Index {
             evidence_order: BTreeMap::new(),
             finding_order: BTreeMap::new(),
             open_item_ts: BTreeMap::new(),
+            open_item_resolved_order: BTreeMap::new(),
             confirmed_order: BTreeMap::new(),
             answer_log: Vec::new(),
         }
@@ -1685,6 +1688,7 @@ impl Index {
             Record::OpenItemResolved(r) => {
                 if let Some(s) = self.open_items.get_mut(&r.id) {
                     s.resolution = Some(r.resolution.clone());
+                    self.open_item_resolved_order.insert(r.id.clone(), at);
                 }
             }
             Record::ChecklistAnswer(a) => {
@@ -2865,6 +2869,13 @@ impl Ledger {
     pub fn open_item_added_at(&self, id: &OpenItemId) -> Option<DateTime<Utc>> {
         let id = self.own_open_item_id(id);
         self.index.open_item_ts.get(&id).copied()
+    }
+
+    /// When the line that resolved open item `id` was written (the latest, should a replay
+    /// hold two); `None` while it is open.
+    pub fn open_item_resolved_order(&self, id: &OpenItemId) -> Option<RecordOrder> {
+        let id = self.own_open_item_id(id);
+        self.index.open_item_resolved_order.get(&id).copied()
     }
 
     /// Raises an open item, allocating `O<n>`.

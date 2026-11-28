@@ -68,6 +68,8 @@ pub struct Scan {
     /// record whose raw file lists capture files under `harness/<H>/` (its result file lies in
     /// `allocs/`, so the captures it was computed from name the harness).
     pub summarized: BTreeSet<String>,
+    /// When the newest of those summaries of each harness was written (the `ts` of its line).
+    pub summarized_at: std::collections::BTreeMap<String, chrono::DateTime<chrono::Utc>>,
 }
 
 /// The harness a file under `harness/<H>/...` belongs to.
@@ -210,14 +212,22 @@ pub fn scan_in(ledger: &Ledger, run_dir: Option<&Path>) -> Scan {
             EvidenceKind::RetentionPath | EvidenceKind::AllocStack
         ) && rec.authority != Authority::Static
         {
+            let mut hs: BTreeSet<String> = BTreeSet::new();
             if let Source::Artifact { path, .. } = &rec.source
                 && let Some(h) = harness_of_path(path)
             {
-                out.summarized.insert(h.to_owned());
+                hs.insert(h.to_owned());
             }
             if rec.kind == EvidenceKind::AllocStack {
-                out.summarized.extend(capture_harnesses(run_dir, rec));
+                hs.extend(capture_harnesses(run_dir, rec));
             }
+            if let Some(at) = ledger.evidence_order(&rec.evidence_id) {
+                for h in &hs {
+                    let t = out.summarized_at.entry(h.clone()).or_insert(at.ts);
+                    *t = (*t).max(at.ts);
+                }
+            }
+            out.summarized.extend(hs);
         }
         if rec.kind != EvidenceKind::RetentionPath
             || rec.authority == Authority::Static

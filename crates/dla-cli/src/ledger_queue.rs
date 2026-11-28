@@ -239,11 +239,69 @@ pub fn list(ctx: &Ctx, a: ListArgs) -> Res<String> {
     Ok(out)
 }
 
+/// What the runs of this run measured of a finding's holder.
+#[derive(Debug, PartialEq, Eq)]
+enum HolderMeasured {
+    /// A probe column of the finding, or a site or holder column at its site or writer lines,
+    /// is in a trend of the run: some run measured the holder.
+    Column,
+    /// No column: these harnesses (targeted ones) have an allocation-stack or heap capture
+    /// summary, which shows nothing at the writer lines.
+    CapturesOnly(Vec<String>),
+    /// Nothing measured the holder.
+    Nothing,
+}
+
+/// Whether a run measured the holder of `f`: a probe column made for it, a column tied to it, or
+/// a site or holder column (of a harness series or of a capture summary) at its site or at one of
+/// its writer lines. Whole-process columns are no measure of a holder.
+fn holder_measured(view: &RunView, ix: &Index, f: &Finding) -> HolderMeasured {
+    let column = view.trends.iter().flat_map(|t| &t.columns).any(|c| {
+        c.finding.as_ref() == Some(&f.id)
+            || c.candidates.contains(&f.id)
+            || dla_core::grown::column_site(c)
+                .is_some_and(|site| dla_core::grown::finding_is_at_site(&view.ledger, f, site))
+    });
+    if column {
+        return HolderMeasured::Column;
+    }
+    let scan = view.measured_holders();
+    let captured: Vec<String> = ix
+        .targeted_in(&f.id)
+        .into_iter()
+        .map(|(h, _)| h)
+        .filter(|h| scan.summarized.contains(h))
+        .collect();
+    if captured.is_empty() {
+        HolderMeasured::Nothing
+    } else {
+        HolderMeasured::CapturesOnly(captured)
+    }
+}
+
+/// What `Executed` says once it is known whether a run measured the holder: its code ran, and
+/// only a measurement of the holder lets the sentence say it showed no growth.
+fn executed_outcome(measured: &HolderMeasured, runtime: Option<&str>) -> String {
+    match measured {
+        HolderMeasured::Column => "its code ran and showed no growth".to_owned(),
+        HolderMeasured::CapturesOnly(hs) => format!(
+            "its code ran; its holder was not measured ({} has no probe for it) and the captures of {} show no growth at its writer lines",
+            runtime.unwrap_or("the runtime"),
+            hs.join(", ")
+        ),
+        HolderMeasured::Nothing => format!(
+            "its code ran; its holder was not measured ({} has no probe for it)",
+            runtime.unwrap_or("the runtime")
+        ),
+    }
+}
+
 /// The remedy `close-rest` builds from a finding's history.
 fn default_remedy(
     f: &Finding,
     r: Option<&queue::Ranked>,
     ix: &Index,
+    view: &RunView,
     runtime: Option<&str>,
     key_from_caller: bool,
 ) -> String {
@@ -293,7 +351,7 @@ fn default_remedy(
         Some(Verdict::WriterNotExecuted) => {
             "its function ran but the lines that add to the holder never ran".to_owned()
         }
-        Some(Verdict::Executed) => "its code ran and showed no growth".to_owned(),
+        Some(Verdict::Executed) => executed_outcome(&holder_measured(view, ix, f), runtime),
         Some(Verdict::Unknown) => queue::NO_COVERAGE.to_owned(),
         Some(Verdict::Changed) => "its holder changed but did not pass the growth gate".to_owned(),
         Some(Verdict::Grew) => "its holder grew".to_owned(),
@@ -502,6 +560,7 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
                 f,
                 by_id.get(&f.id).copied(),
                 &ix,
+                &view,
                 runtime.as_deref(),
                 key_from_caller,
             )

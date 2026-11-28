@@ -817,13 +817,15 @@ fn missed_targets_entry(
                 .collect()
         })
         .unwrap_or_default();
+    // A set-up hold comes first: it holds the action ("change `setup()`"), and the output bound
+    // cuts an entry after its first 160 characters.
     let held = if held.is_empty() {
         String::new()
     } else {
-        format!(". {}", held.join(". "))
+        format!("{}. ", held.join(". "))
     };
     Some(format!(
-        "{h} missed {} target(s): {}{more}{held}; give them a harness of their own (3 at most): dla harness gen --lang {} --driver --next",
+        "{held}{h} missed {} target(s): {}{more}; give them a harness of their own (3 at most): dla harness gen --lang {} --driver --next",
         missed.len(),
         shown.join(", "),
         m.runtime.as_str()

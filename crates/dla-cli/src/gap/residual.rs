@@ -306,10 +306,32 @@ fn citing_finding(ledger: &Ledger, calc: &RegionCalc) -> Option<FindingId> {
         .map(|c| c.finding.clone())
 }
 
+/// A row counts as larger than what an item recorded only above this factor (a re-run of the
+/// same series measures a little differently each time).
+const LARGER: f64 = 1.1;
+
+/// The row of an item with the largest residual, as the text of an item and of a next line says
+/// it: series, bytes per unit, threshold.
+fn largest_text(rows: &[(String, f64, f64)], unit: &str) -> String {
+    rows.iter()
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(series, residual, threshold)| {
+            format!(
+                "{series} {} {unit} unattributed (threshold {})",
+                fit::human(*residual),
+                fit::human(*threshold)
+            )
+        })
+        .unwrap_or_default()
+}
+
 /// What happens to the open item of a region.
 enum Action {
     None,
     Keep(OpenItemId),
+    /// The row of this series is new to the item, or larger than any row it recorded: it is
+    /// listed on the item, which now names the largest.
+    Add(OpenItemId),
     Open(OpenItemId),
     Resolve(OpenItemId, FindingId),
     LeaveOpen(OpenItemId),
@@ -318,7 +340,7 @@ enum Action {
 impl Action {
     fn item(&self) -> Option<&OpenItemId> {
         match self {
-            Action::Keep(i) | Action::Open(i) | Action::LeaveOpen(i) => Some(i),
+            Action::Keep(i) | Action::Add(i) | Action::Open(i) | Action::LeaveOpen(i) => Some(i),
             Action::None | Action::Resolve(..) => None,
         }
     }
@@ -365,18 +387,75 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
         ));
     }
     let unit = unit_of(src.axis);
+    let ev_id: EvidenceId = ledger.next_evidence_id();
+    // The rows an earlier `dla gap --residual` listed, on the series of this call and others.
+    // A row keeps the plain id (`O1`) of an item a worker raised as `<worker>/O1`: rows are
+    // compared by the id the ledger holds the item under.
+    let prior: Vec<ResidualRow> = CoverageManifest::load(&tc.run_dir)?
+        .map(|m| m.residual)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|mut r| {
+            r.open_item = r.open_item.map(|o| ledger.own_open_item_id(&o));
+            r
+        })
+        .collect();
+    let on_item = |id: &OpenItemId| -> Vec<&ResidualRow> {
+        prior
+            .iter()
+            .filter(|r| r.open_item.as_ref() == Some(id))
+            .collect()
+    };
+    let own_row = |id: &OpenItemId, region: Region| -> Option<&ResidualRow> {
+        prior.iter().find(|r| {
+            r.open_item.as_ref() == Some(id)
+                && r.region == region
+                && r.series.as_deref() == Some(src.id.as_str())
+        })
+    };
 
     // Decide what happens to each region's open item.
     let mut next_open = ledger.next_open_item_id().number();
     let mut actions = Vec::new();
+    // The evidence that listed each row on its item (kept from the earlier listing when the row
+    // is already on it at that size).
+    let mut listed: Vec<Option<EvidenceId>> = Vec::new();
+    let mut added: Vec<String> = Vec::new();
     for c in &calcs {
         let existing = open_item_for(&ledger, c.region);
+        let mut row_listed = None;
         let action = match (c.over(), existing) {
-            (true, Some(id)) => Action::Keep(id),
+            (true, Some(id)) => {
+                let rows = on_item(&id);
+                let largest = rows.iter().map(|r| r.residual).fold(0.0, f64::max);
+                let own = own_row(&id, c.region);
+                if own.is_none() || c.residual > largest * LARGER {
+                    row_listed = Some(ev_id.clone());
+                    added.push(id.to_string());
+                    Action::Add(id)
+                } else {
+                    row_listed = own.and_then(|r| r.listed.clone());
+                    Action::Keep(id)
+                }
+            }
             (true, None) => {
+                row_listed = Some(ev_id.clone());
                 let id = OpenItemId::new(next_open);
                 next_open += 1;
                 Action::Open(id)
+            }
+            // Another series' row is still above its threshold on this item: it stays open.
+            (false, Some(id))
+                if on_item(&id).iter().any(|r| {
+                    r.residual > r.threshold
+                        && !(r.region == c.region && r.series.as_deref() == Some(src.id.as_str()))
+                }) =>
+            {
+                limitations.push(format!(
+                    "{id} ({}) stays open: a row of another series listed on it is still above its threshold",
+                    region_name(c.region)
+                ));
+                Action::LeaveOpen(id)
             }
             (false, Some(id)) => match citing_finding(&ledger, c) {
                 Some(f) => Action::Resolve(id, f),
@@ -391,10 +470,10 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
             (false, None) => Action::None,
         };
         actions.push(action);
+        listed.push(row_listed);
     }
 
     // The full table goes to a file; the evidence carries the bounded rows.
-    let ev_id: EvidenceId = ledger.next_evidence_id();
     let dir = tc.stage_dir("gap")?;
     // A worker's evidence id carries a `<worker>/` prefix, which is no file name part.
     let ev_file = ev_id.to_string().replace('/', "_");
@@ -477,15 +556,16 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
                     )
                 };
                 let text = format!(
-                    "unexplained growth: {} {unit} in {} ({}); {what}",
+                    "unexplained growth: {} {unit} in {} ({}); largest row {}; {what}",
                     fit::human(c.residual),
                     region_name(c.region),
-                    src.id
+                    src.id,
+                    largest_text(&[(src.id.clone(), c.residual, c.threshold)], &unit),
                 );
                 ledger.open_item_add(&text, None, OPENED_BY)?;
                 opened.push(id.to_string());
             }
-            Action::Keep(id) | Action::LeaveOpen(id) => kept.push(id.to_string()),
+            Action::Keep(id) | Action::Add(id) | Action::LeaveOpen(id) => kept.push(id.to_string()),
             Action::Resolve(id, f) => {
                 ledger.resolve_open_item(id, Resolution::Hypothesis(f.clone()))?;
                 resolved.push(json!({"item": id.to_string(), "by": f.to_string()}));
@@ -496,7 +576,8 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
     let cov_rows: Vec<ResidualRow> = calcs
         .iter()
         .zip(&actions)
-        .map(|(c, a)| ResidualRow {
+        .zip(listed)
+        .map(|((c, a), listed)| ResidualRow {
             series: Some(src.id.clone()),
             region: c.region,
             total_slope: c.total,
@@ -505,6 +586,7 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
             unit: unit.clone(),
             threshold: c.threshold,
             open_item: a.item().cloned(),
+            listed: listed.filter(|_| a.item().is_some()),
         })
         .collect();
     CoverageManifest::update(&tc.run_dir, |m| m.set_residual(cov_rows))?;
@@ -512,6 +594,28 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
     let mut next = Vec::new();
     for (c, a) in calcs.iter().zip(&actions) {
         if let Some(id) = a.item().filter(|_| c.over()) {
+            if matches!(a, Action::Add(_)) {
+                // The item names the largest row it lists: this one, or one listed before.
+                let mut rows: Vec<(String, f64, f64)> = on_item(id)
+                    .iter()
+                    .map(|r| {
+                        (
+                            r.series.clone().unwrap_or_default(),
+                            r.residual,
+                            r.threshold,
+                        )
+                    })
+                    .collect();
+                rows.push((src.id.clone(), c.residual, c.threshold));
+                next.push(format!(
+                    "{id}: row {} ({} {unit}, threshold {}) is listed on {id}; its largest row is {}; resolve {id} only citing a measurement of that series (a capture of {} taken after it, or an alloc-test), or a resolution leaves the later row uncovered",
+                    src.id,
+                    fit::human(c.residual),
+                    fit::human(c.threshold),
+                    largest_text(&rows, &unit),
+                    src.source.run_harness().unwrap_or("its harness"),
+                ));
+            }
             match src.source.run_harness() {
                 Some(h) if c.region == Region::NonHeap => {
                     next.push(dla_core::gate::nonheap_alloc_route(
@@ -547,7 +651,7 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
         "evidence": [ev.to_string()],
         "rows": rows,
         "calibrated": false,
-        "open_items": {"opened": opened, "kept": kept, "resolved": resolved},
+        "open_items": {"opened": opened, "kept": kept, "added": added, "resolved": resolved},
         "artifacts": [tc.pointer(&file)],
         "limitations": limitations,
         "next": next,

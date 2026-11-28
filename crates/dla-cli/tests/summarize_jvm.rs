@@ -1132,6 +1132,56 @@ fn a_via_holder_is_listed_followed_in_the_series_and_tied_by_its_owner() {
     assert!(vals[0] < vals[1] && vals[1] < vals[2], "{vals:?}");
 }
 
+/// The `source` of the series a heap-graph call wrote.
+fn series_source(p: &Project, v: &Value) -> Value {
+    let s: Value = serde_json::from_str(
+        &fs::read_to_string(
+            p.run_dir
+                .join(format!("series/{}.json", v["series"].as_str().unwrap())),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    s["source"].clone()
+}
+
+/// The coroutine dumps put at `<run>/harness/<h>/out/p<i>/heap-1.hprof`, `h` per dump.
+fn harness_dumps(p: &Project, harnesses: [&str; 3]) -> Vec<String> {
+    let run = p
+        .run_dir
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    [100, 200, 300]
+        .iter()
+        .zip(harnesses)
+        .enumerate()
+        .map(|(i, (n, h))| {
+            p.put(
+                &format!(".dla/{run}/harness/{h}/out/p{i}/capture/1/heap-1.hprof"),
+                &coroutine_dump(T0 + 30_000 * i as u64, *n),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_heap_graph_series_names_its_harness_only_when_every_dump_lies_under_one() {
+    let p = Project::new();
+    p.put("src/shop/Waiters.kt", WAITERS_KT.as_bytes());
+    census_finding(&p, "shop.Waiters.gates", "src/shop/Waiters.kt:5", &[]);
+    // Under one harness: `source.harness` is that harness.
+    let v = heap_graph(&p, &harness_dumps(&p, ["H1", "H1", "H1"]), &[]);
+    assert_eq!(series_source(&p, &v)["harness"], "H1", "{v}");
+    // Outside any harness: none.
+    let v = heap_graph(&p, &coroutine_dumps(&p), &[]);
+    assert!(series_source(&p, &v).get("harness").is_none(), "{v}");
+    // Under two harnesses: none.
+    let v = heap_graph(&p, &harness_dumps(&p, ["H1", "H2", "H2"]), &[]);
+    assert!(series_source(&p, &v).get("harness").is_none(), "{v}");
+}
+
 /// Two pooled threads whose `ThreadLocal` (held by the static `shop.Ctx.BUF`) holds a buffer of
 /// `n` kilobytes each, as the entries of their `threadLocals` maps.
 fn thread_local_dump(ts: u64, n: usize) -> Vec<u8> {

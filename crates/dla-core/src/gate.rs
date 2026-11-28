@@ -1054,12 +1054,8 @@ fn residual_covers(view: &RunView, series: &str, c: &ColumnTrend) -> bool {
     if rows.is_empty() {
         return false;
     }
-    rows.iter().all(|r| {
-        r.residual <= r.threshold
-            || r.open_item
-                .as_ref()
-                .is_some_and(|id| residual_item_resolved(view, id, &r.region.to_string()))
-    })
+    rows.iter()
+        .all(|r| r.residual <= r.threshold || residual_row_covered(view, r))
 }
 
 /// More series than this without a residual row make the gate name `dla gap --residual --all`.
@@ -1115,7 +1111,7 @@ fn residual_fix(view: &RunView, series: &str, c: &ColumnTrend) -> String {
         .iter()
         .filter(|r| r.residual > r.threshold)
         .filter_map(|r| r.open_item.as_ref().map(|id| (id, r)))
-        .filter(|(id, r)| !residual_item_resolved(view, id, &r.region.to_string()))
+        .filter(|(_, r)| !residual_row_covered(view, r))
         .map(|(id, r)| (id.to_string(), r.region))
         .collect();
     if open.is_empty() {
@@ -1403,6 +1399,52 @@ fn too_short_for_the_gate(series: &crate::series::SeriesFile) -> bool {
     series.points.len().saturating_sub(series.warmup as usize) < need
 }
 
+/// True when a capture of `harness` was summarized after the first series of the driver that
+/// wrote `series` was written: the capture of that driver, not one taken before it. A summary of
+/// the first captures of a harness says nothing of a later series of a driver that was changed
+/// since (its hooks differ), while a later run of the same driver (the same `driver_digest` in
+/// the run records of the harness) is the one that capture explained. A series with no run
+/// record (an alloc-test writes none) is of the driver of the newest run record. A series file
+/// whose time cannot be read counts any summary of the harness.
+fn capture_of_series(
+    scan: &crate::measured_holders::Scan,
+    run_dir: &std::path::Path,
+    harness: &str,
+    series: &str,
+    of_harness: &std::collections::BTreeMap<String, String>,
+) -> bool {
+    let Some(at) = scan.summarized_at.get(harness) else {
+        return scan.summarized.contains(harness);
+    };
+    let written = |s: &str| {
+        std::fs::metadata(crate::series::SeriesFile::path_in(run_dir, s))
+            .and_then(|m| m.modified())
+            .ok()
+            .map(chrono::DateTime::<chrono::Utc>::from)
+            .and_then(|t| chrono::DateTime::from_timestamp_millis(t.timestamp_millis()))
+    };
+    let all: Vec<&str> = of_harness
+        .iter()
+        .filter(|(_, h)| h.as_str() == harness)
+        .map(|(s, _)| s.as_str())
+        .collect();
+    let known = |s: &str| crate::harness::run_record_of(run_dir, harness, s)?.driver_digest;
+    // The driver of the newest series that has a run record.
+    let newest = all
+        .iter()
+        .filter_map(|s| Some((written(s)?, known(s)?)))
+        .max()
+        .map(|(_, d)| d);
+    let driver = |s: &str| known(s).or_else(|| newest.clone());
+    let mine = driver(series);
+    let first = all
+        .iter()
+        .filter(|s| **s == series || driver(s) == mine)
+        .filter_map(|s| written(s))
+        .min();
+    first.is_none_or(|w| *at >= w)
+}
+
 /// The over-threshold heap residual rows whose harness has no summarized capture, one entry per
 /// harness. A row counts only when its unattributed growth over the span of its series is at
 /// least [`MIN_CAPTURE_GROWTH_BYTES`]. A harness has a summarized capture when the run holds a
@@ -1423,7 +1465,18 @@ pub fn uncaptured_residuals(view: &RunView) -> Vec<UncapturedResidual> {
         let (Some(id), Some(series)) = (&r.open_item, &r.series) else {
             continue;
         };
-        if residual_item_resolved(view, id, &r.region.to_string()) {
+        if residual_row_covered(view, r) {
+            continue;
+        }
+        // An item that lists several rows asks for the capture of its largest one above its
+        // threshold (in the same unit): a capture of a small row's series says nothing of a row
+        // two orders larger, and a row under its threshold asks for nothing.
+        if cov.residual.iter().any(|o| {
+            o.open_item.as_ref() == Some(id)
+                && o.unit == r.unit
+                && o.residual > o.threshold
+                && o.residual > r.residual
+        }) {
             continue;
         }
         let Some(harness) = view.series_harness.get(series) else {
@@ -1435,7 +1488,7 @@ pub fn uncaptured_residuals(view: &RunView) -> Vec<UncapturedResidual> {
         let Some(runtime) = file.source.runtime.filter(|rt| supports_capture(*rt)) else {
             continue;
         };
-        if scan.summarized.contains(harness)
+        if capture_of_series(scan, run_dir, harness, series, &view.series_harness)
             || (runtime == crate::runtime::Runtime::Rust
                 && capture_wrote_no_stacks(run_dir, harness))
             || residual_growth_bytes(r.residual, &file) < MIN_CAPTURE_GROWTH_BYTES
@@ -2137,28 +2190,68 @@ fn rule_out(view: &RunView, out: &mut Out) {
 
 // -------------------------------------------------------------------- final
 
-/// True when the open item a residual row names is resolved. A worker raises `O1` in its
+/// The resolved open item a residual row names. A worker raises `O1` in its
 /// slice and the merge renames it `<worker>/O1`, while the coverage row keeps the plain
 /// id: an unprefixed id also matches the same number under a worker prefix when that
 /// item is about the same region and resolved.
-fn residual_item_resolved(view: &RunView, id: &crate::ids::OpenItemId, region: &str) -> bool {
+fn resolved_item_of(
+    view: &RunView,
+    id: &crate::ids::OpenItemId,
+    region: &str,
+) -> Option<crate::ids::OpenItemId> {
     if view
         .ledger
         .open_item(id)
         .is_some_and(|o| o.resolution.is_some())
     {
-        return true;
+        return Some(id.clone());
     }
     if id.prefix().is_some() {
-        return false;
+        return None;
     }
     let tag = format!(" in {region} (");
-    view.ledger.open_items().any(|o| {
-        o.item.id.prefix().is_some()
-            && o.item.id.number() == id.number()
-            && o.resolution.is_some()
-            && o.item.text.contains(&tag)
-    })
+    view.ledger
+        .open_items()
+        .find(|o| {
+            o.item.id.prefix().is_some()
+                && o.item.id.number() == id.number()
+                && o.resolution.is_some()
+                && o.item.text.contains(&tag)
+        })
+        .map(|o| o.item.id.clone())
+}
+
+/// How the open item a residual row names was resolved; `None` while it is open.
+pub fn residual_row_resolution<'a>(
+    view: &'a RunView,
+    r: &crate::coverage::ResidualRow,
+) -> Option<&'a crate::record::Resolution> {
+    let id = r.open_item.as_ref()?;
+    let resolved = resolved_item_of(view, id, &r.region.to_string())?;
+    view.ledger
+        .open_item(&resolved)
+        .and_then(|o| o.resolution.as_ref())
+}
+
+/// True when the open item a residual row names is resolved and the resolution covers the row:
+/// it was made after the row was listed on the item (`listed`). A row listed after the
+/// resolution is one the resolver never saw. A row that records no listing is covered by any
+/// resolution, as before.
+pub fn residual_row_covered(view: &RunView, r: &crate::coverage::ResidualRow) -> bool {
+    let Some(id) = &r.open_item else {
+        return false;
+    };
+    let Some(resolved) = resolved_item_of(view, id, &r.region.to_string()) else {
+        return false;
+    };
+    let listed = r
+        .listed
+        .as_ref()
+        .and_then(|e| view.ledger.evidence_order(e));
+    match (listed, view.ledger.open_item_resolved_order(&resolved)) {
+        (Some(l), Some(res)) => l < res,
+        _ => true,
+    }
 }
 
 fn final_items(view: &RunView, out: &mut Out) {
@@ -2182,11 +2275,7 @@ fn final_items(view: &RunView, out: &mut Out) {
     // (e) residual rows over their threshold have a resolved open item.
     if let Some(cov) = &view.coverage {
         for r in cov.residual.iter().filter(|r| r.residual > r.threshold) {
-            let resolved = r
-                .open_item
-                .as_ref()
-                .is_some_and(|id| residual_item_resolved(view, id, &r.region.to_string()));
-            if !resolved {
+            if !residual_row_covered(view, r) {
                 out.add(
                     "residual",
                     r.region.to_string(),
@@ -3495,6 +3584,7 @@ mod in_run_column_tests {
             unit: "bytes/n".into(),
             threshold: 2.5,
             open_item: None,
+            listed: None,
         }
     }
 

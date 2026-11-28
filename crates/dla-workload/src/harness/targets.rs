@@ -93,6 +93,10 @@ pub struct Target {
     pub writer_gap: Vec<String>,
     /// The harness whose run read the target `writer_not_executed` (empty when none did).
     pub writer_gap_in: String,
+    /// The set-up hold of the target ([`dla_core::queue::setup_hold_sentence`]) with the set-up
+    /// function of the skeleton it points at: the first line under the target's own, so it is
+    /// read before anything else. Empty when no earlier harness held it.
+    pub setup_hold: String,
     /// The holder is kept per thread (see `dla_core::census::HolderFacts::thread_keyed`): it
     /// grows with the number of distinct threads or thread lifetimes the units come from.
     pub thread_keyed: bool,
@@ -652,6 +656,7 @@ pub fn describe(
                 feature_command: String::new(),
                 writer_gap: Vec::new(),
                 writer_gap_in: String::new(),
+                setup_hold: String::new(),
                 thread_keyed: dla_core::census::thread_keyed(
                     f.and_then(|f| f.holder),
                     ann.map(|a| &a.facts),
@@ -667,6 +672,7 @@ pub fn describe(
 /// those earlier reads by finding.
 pub fn add_writer_gaps(
     project: &Path,
+    rt: dla_core::runtime::Runtime,
     targets: &mut [Target],
     misses: &std::collections::BTreeMap<FindingId, dla_core::queue::Miss>,
     holds: &std::collections::BTreeMap<FindingId, Vec<String>>,
@@ -695,11 +701,29 @@ pub fn add_writer_gaps(
             let guard = lines
                 .iter()
                 .find_map(|l| l.trim_start().strip_prefix("above it, "));
-            lines.push(dla_core::queue::setup_hold_sentence(
-                &t.id, harnesses, guard,
-            ));
+            // The first line of the target says what to change and where: the set-up function of
+            // this runtime's skeleton (the `DLA-HOOK setup` marker), not the unit.
+            let first = format!(
+                "{} (the set-up function of this skeleton: {}, under the `DLA-HOOK setup` marker)",
+                dla_core::queue::setup_hold_sentence(&t.id, harnesses, guard),
+                setup_hook(rt)
+            );
+            t.setup_hold = first;
         }
         t.writer_gap = lines;
+    }
+}
+
+/// The set-up function of the driver skeleton of `rt`, as its `DLA-HOOK setup` marker sits in it.
+pub fn setup_hook(rt: dla_core::runtime::Runtime) -> &'static str {
+    use dla_core::runtime::Runtime;
+    match rt {
+        Runtime::Python => "`def setup()` in dla_harness.py",
+        Runtime::Node => "`async function setup()` in dla-harness.cjs",
+        Runtime::Jvm => "`static void setup()` in DlaHarness.java",
+        Runtime::Go => "`func dlaSetup()` in zz_dla_driver_test.go",
+        Runtime::Rust => "`fn setup() -> State` in dla_harness.rs",
+        Runtime::Native => "`static void setup(void)` in dla_harness.c",
     }
 }
 
@@ -905,6 +929,9 @@ impl Target {
         if let Some(s) = &self.sibling_of {
             out[0].push_str(&format!(" (sibling_of {s}: state of the same owner)"));
         }
+        if !self.setup_hold.is_empty() {
+            out.push(format!("  {}", self.setup_hold));
+        }
         if let Some(m) = &self.message {
             out.push(format!("  rule: {m}"));
         }
@@ -1086,7 +1113,7 @@ pub fn second_look_notes(
     threads: bool,
 ) -> Vec<String> {
     let mut out = vec![
-        "Second look: one flat run of one driver settled these targets (their code ran and their holder stayed flat), and budget is left. A flat reading of one arbitrary unit says that unit does not leak; a leak that needs a sequence stays hidden. This harness needs a DIFFERENT driver: dla harness run refuses hooks equal to an earlier harness's, and a VARIES.txt line per target (what this driver does that the first did not).".to_owned(),
+        "Second look: one flat run of one driver settled these targets (their code ran and no run showed their holder grow), and budget is left. A flat reading of one arbitrary unit says that unit does not leak; a leak that needs a sequence stays hidden. This harness needs a DIFFERENT driver: dla harness run refuses hooks equal to an earlier harness's, and a VARIES.txt line per target (what this driver does that the first did not).".to_owned(),
         "To vary, at least some of:".to_owned(),
     ];
     out.extend(SECOND_LOOK_TODOS.iter().map(|l| (*l).to_owned()));
@@ -1245,6 +1272,7 @@ mod tests {
             feature_command: String::new(),
             writer_gap: Vec::new(),
             writer_gap_in: String::new(),
+            setup_hold: String::new(),
             thread_keyed: false,
             key_note: None,
         }
@@ -1402,6 +1430,7 @@ mod tests {
             feature_command: String::new(),
             writer_gap: Vec::new(),
             writer_gap_in: String::new(),
+            setup_hold: String::new(),
             thread_keyed: false,
             key_note: None,
         }

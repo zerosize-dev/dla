@@ -167,6 +167,9 @@ pub struct Ctx<'a> {
     /// The harness every input of the call lies under (`harness/<H>/` of the run), when there is
     /// one: the series a growth summary writes names it as its `source.harness`.
     capture_harness: Option<String>,
+    /// One sentence per capture left out of the call because it has no exit record: an adapter
+    /// that reads such captures lists them among the limitations of its evidence.
+    pub left_out: Vec<String>,
 }
 
 impl<'a> Ctx<'a> {
@@ -181,6 +184,7 @@ impl<'a> Ctx<'a> {
             ledger: RefCell::new(None),
             resolver: dla_core::attribution::Resolver::new(&tc.run_dir, &tc.project),
             capture_harness: None,
+            left_out: Vec::new(),
         })
     }
 
@@ -823,6 +827,9 @@ pub fn execute_in(
 ) -> Res<Value> {
     tc.require_time(&format!("dla {}", req.op.command()))?;
     let inputs = input::resolve_all(tc, &req.files, req.op)?;
+    // A shim dump with no exit record is a capture still being written (or cut): out of the
+    // summary, with its limitation, or the call is refused when nothing else is left.
+    let (inputs, left_out) = input::without_unfinished(inputs)?;
     let selected = select_in(all, tc, req.op, &req.choice, &inputs, env)?;
     let selected = match selected {
         Ok(s) => s,
@@ -849,7 +856,8 @@ pub fn execute_in(
         }
     };
     let a = selected.adapter;
-    let ctx = Ctx::new(tc, env)?.with_inputs(&inputs);
+    let mut ctx = Ctx::new(tc, env)?.with_inputs(&inputs);
+    ctx.left_out = left_out;
     // An unknown --finding is refused before anything is written, whatever the operation
     // and however many captures there are.
     if let Some(f) = &req.finding
@@ -921,6 +929,9 @@ pub fn execute_in(
     );
     if let Some(r) = &out.raw {
         v.insert("raw".into(), r.to_json());
+    }
+    if !ctx.left_out.is_empty() {
+        v.insert("left_out".into(), json!(ctx.left_out));
     }
     if !gaps.is_empty() {
         v.insert("coverage_gap".into(), json!(gaps));
