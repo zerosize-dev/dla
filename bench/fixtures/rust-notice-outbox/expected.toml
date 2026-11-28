@@ -1,0 +1,23 @@
+schema_version = 1
+id = "rust-notice-outbox"
+runtime = "rust"
+category = "archetype-free"
+pair = "rust-notice-outbox-linked"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+Operators report that the relay desk's resident memory grows in step with the number of alert waves it has processed, and the process is restarted every few days. The desk keeps no history of the alerts on purpose: every notice is handed to the uplink queue, which is a few hundred entries long. Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/outbox.rs:44"
+lines = [44, 44]
+alt_sites = ["src/outbox.rs:12", "src/outbox.rs:17", "src/outbox.rs:41-44"]
+holder = "container-field"
+region = "heap"
+cause = "UNCLASSIFIED"
+share = 1.0
+confirmable = true
+dump_backed = true

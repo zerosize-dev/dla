@@ -367,6 +367,11 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
     if let Some(site) = detector_site(ctx, &main.series) {
         passed.sort_by_key(|c| c.site.as_deref() != Some(site.as_str()));
     }
+    summary::live_heap_first(&mut passed);
+    out.insert(
+        "by_region".into(),
+        Value::Object(summary::by_region(&passed)),
+    );
     out.insert(
         "passed".into(),
         Value::Array(
@@ -374,19 +379,27 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
                 .iter()
                 .take(8)
                 .map(|c| {
-                    json!({
+                    let mut e = json!({
                         "column": c.name,
                         "shape": c.shape,
-                        "slope": c.sen.map(|s| s.slope),
-                        "candidates": c.candidates.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                    })
+                        // One decimal: the full figure is in the stored trend.
+                        "slope": c.sen.map(|s| (s.slope * 10.0).round() / 10.0),
+                    });
+                    // Only a column that points at a finding says so: the bound of the output
+                    // is tight, and an empty list says nothing.
+                    if !c.candidates.is_empty() {
+                        e["candidates"] = json!(
+                            c.candidates
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                        );
+                    }
+                    e
                 })
                 .collect(),
         ),
     );
-    if passed.len() > 8 {
-        out.insert("passed_more".into(), json!(passed.len() - 8));
-    }
     out.insert("failed".into(), json!(cols.len() - passed.len()));
     let short_cols = short::columns(&cols, &th);
     if !short_cols.is_empty() {
@@ -541,6 +554,20 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         next.insert(0, entry);
         next.truncate(MAX_NEXT);
         out.insert("_attention".into(), json!([attention]));
+    }
+    // The heap of a harness made for findings grew and nothing measured their holder: the
+    // alloc-test on that harness decides each, and comes before everything else.
+    if let Some(h) = main.series.source.run_harness() {
+        let leads: Vec<String> = target_verdicts
+            .iter()
+            .filter(|v| v.declared && v.verdict == dla_core::trend::Verdict::GrewUntied)
+            .map(|v| format!("dla alloc-test {h} --finding {}", v.finding))
+            .collect();
+        for cmd in leads.into_iter().rev() {
+            next.retain(|n| *n != cmd);
+            next.insert(0, cmd);
+        }
+        next.truncate(MAX_NEXT);
     }
     if let Some(hint) = holders_hint(ctx, &main.series, &next) {
         out.insert("holders_hint".into(), json!(hint));

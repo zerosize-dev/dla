@@ -230,3 +230,81 @@ fn the_rust_driver_is_fitted_inside_its_first_round() {
     assert!(st.success());
     check(&out, started);
 }
+
+/// State a thread-local holds is freed by `exit()` before the allocator shim's destructor runs,
+/// so the shim's exit record misses it; the driver hands the shim a snapshot after its last unit.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn the_rust_driver_gives_the_shim_a_snapshot_that_holds_a_thread_local() {
+    if !have("rustc", "--version") || !have("cc", "--version") {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let shim_c = repo().join("harness/native/dla_alloc_shim.c");
+    let (lib, preload) = if cfg!(target_os = "macos") {
+        ("libdlashim.dylib", "DYLD_INSERT_LIBRARIES")
+    } else {
+        ("libdlashim.so", "LD_PRELOAD")
+    };
+    let mut cc = Command::new("cc");
+    cc.args(["-std=gnu11", "-O2", "-g"]);
+    if cfg!(target_os = "macos") {
+        cc.arg("-dynamiclib");
+    } else {
+        cc.args(["-fPIC", "-shared", "-fno-optimize-sibling-calls"]);
+    }
+    cc.arg("-o").arg(dir.path().join(lib)).arg(&shim_c);
+    if !cfg!(target_os = "macos") {
+        cc.args(["-ldl", "-lpthread"]);
+    }
+    assert!(cc.status().unwrap().success());
+    let t = fs::read_to_string(repo().join("harness/rust/dla_harness.rs")).unwrap();
+    let t = fill(&t, &[("DLA_CRATE", "demo"), ("DLA_UNSAFE_EXTERN", "")])
+        .replace(
+            "todo!(\"DLA-HOOK setup has not been filled in\")",
+            "State::default()",
+        )
+        .replace(
+            "todo!(\"DLA-HOOK unit has not been filled in\")",
+            "HELD.with(|h| h.borrow_mut().extend(0..1000u64))",
+        )
+        + "\nthread_local! { static HELD: std::cell::RefCell<Vec<u64>> = const { std::cell::RefCell::new(Vec::new()) }; }\n";
+    fs::write(dir.path().join("d.rs"), t).unwrap();
+    let st = Command::new("rustc")
+        .args(["--edition", "2021", "-O", "d.rs", "-o", "d"])
+        .current_dir(dir.path())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(st.success());
+    let run = |disable: bool, name: &str| -> Vec<Value> {
+        let out = dir.path().join(name);
+        let mut c = Command::new(dir.path().join("d"));
+        c.env("DLA_HARNESS_OUT", &out)
+            .env(preload, dir.path().join(lib))
+            .env("DLA_SHIM_ONLY", "d");
+        if disable {
+            c.env("DLA_SHIM_DISABLE", "1");
+        }
+        assert!(c.status().unwrap().success());
+        fs::read_to_string(&out)
+            .unwrap_or_default()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    };
+    // 1500 units of 1000 u64 each: 12 MB at the end (the vector doubles, so at least that).
+    let recs = run(false, "snap.jsonl");
+    let shim: Vec<&Value> = recs.iter().filter(|r| r["runtime"] == "native").collect();
+    assert_eq!(shim.len(), 1, "one shim record per process: {recs:?}");
+    assert_eq!(shim[0]["at"], "snapshot");
+    assert_eq!(shim[0]["x"], 1500);
+    let live = shim[0]["values"]["native.live_bytes"].as_u64().unwrap();
+    assert!(
+        live >= 12_000_000,
+        "the thread-local is live in the snapshot: {live}"
+    );
+    // With the shim disabled the call is a no-op and nothing but the driver writes.
+    let recs = run(true, "off.jsonl");
+    assert!(recs.iter().all(|r| r["runtime"] == "rust"), "{recs:?}");
+}

@@ -786,7 +786,9 @@ fn a_heap_residual_of_a_rust_driver_is_not_left_unresolved_before_its_stacks_are
         "--reason",
         "inconclusive",
         "--remedy",
-        "a guess",
+        // Two series are over their thresholds once the capture runs (its own series): each is
+        // named.
+        "S1 and S2: a guess",
     ];
     let o = r.run(&leave);
     assert_ne!(o.code, 0, "{}", o.text);

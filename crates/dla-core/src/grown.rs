@@ -325,6 +325,36 @@ pub(crate) fn alloc_tested(view: &RunView, root: &FindingId) -> bool {
     })
 }
 
+/// True when an alloc-test decided the growth of `id` (its root): the rule of
+/// [`grown_unmeasured`] for a lead. An alloc-test on a driver made for it counts whatever it
+/// favored; an inconclusive one that names a longer window the budget can pay for does not.
+pub fn alloc_decided(view: &RunView, id: &FindingId) -> bool {
+    let root = root_of(&view.ledger, id);
+    matches!(decided_by_alloc_test(view, &root), AllocVerdict::Decided)
+}
+
+/// True when an alloc-test ran on harness `harness` and measured: any outcome, except an
+/// inconclusive one whose longer window (`points_needed`) is still unspent while the budget is
+/// over its floor. For a growth no finding names (a residual row): the test of the harness
+/// that made the series.
+pub fn alloc_measured_on(view: &RunView, harness: &str) -> bool {
+    let newest = view
+        .ledger
+        .evidence_in_order()
+        .filter(|e| {
+            e.kind == EvidenceKind::Discriminator
+                && e.result.get("test").and_then(|t| t.as_str()) == Some("plateau+purge")
+                && e.result.get("harness").and_then(|h| h.as_str()) == Some(harness)
+        })
+        .last();
+    let Some(e) = newest else {
+        return false;
+    };
+    let inconclusive =
+        crate::discriminator::favors_of(e) == Some(crate::discriminator::Favors::Inconclusive);
+    !(inconclusive && longer_window(view, e, harness).is_some())
+}
+
 /// What the alloc-tests of a family say about the growth of its root, for [`grown_unmeasured`].
 enum AllocVerdict {
     /// An alloc-test decided it: the lead is lifted.
@@ -1141,7 +1171,14 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
                 }
             }
         }
-        for v in t.targets.iter().filter(|v| v.verdict == Verdict::Grew) {
+        // A lead from the heap of the harness (`grew_untied`) holds a close only while the
+        // budget is over its floor: nothing tied the growth to the finding, so at the floor
+        // the run can always finish.
+        let over_floor =
+            crate::gate::budget_over_floor(&view.state, view.worker.as_deref()).is_some();
+        for v in t.targets.iter().filter(|v| {
+            v.verdict == Verdict::Grew || (v.verdict == Verdict::GrewUntied && over_floor)
+        }) {
             let column = v
                 .column
                 .clone()

@@ -53,7 +53,8 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   field that keeps one block per push (a `Box`, a `String`), and the finding has the growth lead (`dla alloc-test` decides
   it; closing it as no growth is refused). A buffer cleared with its capacity kept, or one that stood still between two
   points, does not pass (the `needed` text says which). `dla summarize alloc-stack-diff` of a capture with one flat
-  pair of a constant-count stack says to take points whose work differs by a factor of two or more.
+  pair of a constant-count stack says to take points whose work differs by a factor of two or more (only when they differ
+  by less than that). A summary marked `blind` (its totals stayed flat while the process's own live bytes rose: state the exit freed, such as a thread-local) is no evidence of no growth: a generated driver hands the shim a snapshot after its last unit, and `dla alloc-test` reads the process's own series.
 - Purges: `trim` (glibc `malloc_trim`).
 
 A `thread_local!` holder, and a container of a module or type that owns one, is kept per thread (the census records the holder and its owner, not the writers of a Rust holder): the driver block says so for such a target, and the units must run on a new thread per unit (`std::thread::spawn`, joined) and on a small pool of threads that live across units, not only on the caller's thread (a first pass on one thread leaves such a target pending for its second look).

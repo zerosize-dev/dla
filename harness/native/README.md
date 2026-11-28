@@ -42,7 +42,20 @@ nested calls (from `backtrace()`, the dump) straight to the real allocator.
 
 ### The record
 
-One JSON line, `phase:"exit"`, `runtime:"native"`, written by the destructor (and on SIGTERM):
+One JSON line, `phase:"exit"`, `runtime:"native"`, written by the destructor, by a snapshot or on
+SIGTERM. `at` says which: `"exit"`, `"snapshot"` or `"signal"`. Exactly one record is written per
+process: the first of the three wins.
+
+- What the exit record holds: only what survives `exit()`. `exit()` runs the calling thread's
+  thread-local destructors, the `atexit` handlers and the C++ static destructors before the shim's
+  destructor, so state kept there is already freed (a main-thread `thread_local`, a C++ static
+  container; `native.peak_bytes` still shows it). A Rust `static` is never dropped and stays visible.
+- What a snapshot holds: the live state. `dla_shim_snapshot(uint64_t x)` is exported (C ABI); a driver
+  calls it after its last unit and before it drops anything. `x` is the driver's current x
+  (`UINT64_MAX` means: use `DLA_ITER`). The `dla`-generated drivers look it up at run time and call it
+  when it is there; without the shim, or with `DLA_SHIM_DISABLE=1`, nothing happens. A process that
+  never calls it keeps the exit record.
+- A SIGTERM dump is taken while the program is alive, so it sees thread-locals too.
 
 - `values`: `native.live_bytes`, `native.live_blocks`, `native.peak_bytes` (requested sizes of live
   blocks, peak of live bytes) and `os.rss`, `os.rss_anon`, `os.rss_file`, `os.rss_shmem`,
@@ -84,6 +97,9 @@ One JSON line, `phase:"exit"`, `runtime:"native"`, written by the destructor (an
 
 - Fork: children do not write a record (the dump runs only in the process that loaded the shim);
   a child that execs another program is measured as that program (its own pid line, same file).
+- The exit record misses what `exit()` frees first (see "The record"); only a snapshot or a SIGTERM
+  dump sees it. `dla summarize` compares a capture with the driver's own readings and marks one that
+  missed growth as blind.
 - `_exit()`, `SIGKILL`, `abort()` and crashes leave no record. A program that frees everything
   before `exit` shows the retained memory only in `native.peak_bytes` and in `os.*`.
 - Statically linked executables, Go, and runtimes with a private allocator (statically linked

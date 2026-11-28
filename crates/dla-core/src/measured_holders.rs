@@ -19,7 +19,11 @@
 //! The record in the ledger is bounded, so the full holders are read from its raw file when that
 //! is there; the bounded entries serve when it is not.
 
-use std::{collections::BTreeSet, fs, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::Path,
+};
 
 use serde_json::Value;
 
@@ -54,6 +58,16 @@ pub struct ProjectHolder {
     pub site: String,
 }
 
+/// One allocation-stack summary of a harness, kept until the newest per harness is known.
+struct StackSummary {
+    /// Where its line lies in time; `None` counts as the oldest.
+    order: Option<crate::ledger::RecordOrder>,
+    /// What it said when it was marked blind.
+    blind_text: Option<String>,
+    /// At least one stack grows at every capture.
+    shows_growth: bool,
+}
+
 /// What the retention records of a run say about whose the holders are.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Scan {
@@ -64,12 +78,23 @@ pub struct Scan {
     /// Harnesses (`H3`) some retention record was read from.
     pub harnesses: BTreeSet<String>,
     /// Harnesses (`H3`) with a summarized capture of any tool: a retention record or an
-    /// allocation-stack record whose source lies under `harness/<H>/`, or an allocation-stack
+    /// allocation-stack record (when the newest allocation-stack summary of the harness is not
+    /// blind) whose source lies under `harness/<H>/`, or an allocation-stack
     /// record whose raw file lists capture files under `harness/<H>/` (its result file lies in
     /// `allocs/`, so the captures it was computed from name the harness).
     pub summarized: BTreeSet<String>,
     /// When the newest of those summaries of each harness was written (the `ts` of its line).
     pub summarized_at: std::collections::BTreeMap<String, chrono::DateTime<chrono::Utc>>,
+    /// Harnesses (`H3`) whose allocation-stack summary was marked blind (its captures could not
+    /// see growth the process measured; `blind_text` of its result): what the summary said. Only
+    /// the NEWEST allocation-stack summary of a harness decides: when it is blind, the harness's
+    /// allocation-stack summaries count for nothing (they are in none of `summarized`,
+    /// `summarized_at` and `grew`); when a newer one is not blind, there is no entry. Retention
+    /// records are never blind and are not revoked by a blind allocation-stack record.
+    pub blind: std::collections::BTreeMap<String, String>,
+    /// Harnesses (`H3`) with a summary that shows growth: a retention record, or an
+    /// allocation-stack record (not blind) with at least one stack that grows at every capture.
+    pub grew: BTreeSet<String>,
 }
 
 /// The harness a file under `harness/<H>/...` belongs to.
@@ -206,6 +231,7 @@ pub fn scan(view: &RunView) -> Scan {
 pub fn scan_in(ledger: &Ledger, run_dir: Option<&Path>) -> Scan {
     let mut out = Scan::default();
     let own = run_dir.map(crate::measurement::Measurement::of_run);
+    let mut stacks: BTreeMap<String, Vec<StackSummary>> = BTreeMap::new();
     for rec in ledger.evidence() {
         if matches!(
             rec.kind,
@@ -221,13 +247,42 @@ pub fn scan_in(ledger: &Ledger, run_dir: Option<&Path>) -> Scan {
             if rec.kind == EvidenceKind::AllocStack {
                 hs.extend(capture_harnesses(run_dir, rec));
             }
-            if let Some(at) = ledger.evidence_order(&rec.evidence_id) {
-                for h in &hs {
-                    let t = out.summarized_at.entry(h.clone()).or_insert(at.ts);
-                    *t = (*t).max(at.ts);
+            let shows_growth = rec.kind == EvidenceKind::RetentionPath
+                || rec
+                    .result
+                    .get("monotone")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|n| n > 0);
+            if rec.kind == EvidenceKind::AllocStack {
+                // Resolved per harness after the loop: the newest summary decides.
+                let blind_text = (rec.result.get("blind").and_then(Value::as_bool) == Some(true))
+                    .then(|| {
+                        rec.result
+                            .get("blind_text")
+                            .and_then(Value::as_str)
+                            .unwrap_or("the capture could not see growth the process measured")
+                            .to_owned()
+                    });
+                let order = ledger.evidence_order(&rec.evidence_id);
+                for h in hs {
+                    stacks.entry(h).or_default().push(StackSummary {
+                        order,
+                        blind_text: blind_text.clone(),
+                        shows_growth,
+                    });
                 }
+            } else {
+                if let Some(at) = ledger.evidence_order(&rec.evidence_id) {
+                    for h in &hs {
+                        let t = out.summarized_at.entry(h.clone()).or_insert(at.ts);
+                        *t = (*t).max(at.ts);
+                    }
+                }
+                if shows_growth {
+                    out.grew.extend(hs.iter().cloned());
+                }
+                out.summarized.extend(hs);
             }
-            out.summarized.extend(hs);
         }
         if rec.kind != EvidenceKind::RetentionPath
             || rec.authority == Authority::Static
@@ -304,6 +359,32 @@ pub fn scan_in(ledger: &Ledger, run_dir: Option<&Path>) -> Scan {
             }
         }
         out.tests_only.extend(tests.difference(&others).cloned());
+    }
+    // The newest allocation-stack summary of a harness decides. A blind one leaves the harness
+    // with no allocation-stack summary at all. A missing order counts as the oldest.
+    for (h, list) in stacks {
+        let newest = list
+            .iter()
+            .max_by_key(|x| (x.order, x.blind_text.is_some()))
+            .expect("a harness has at least one summary here");
+        if let Some(text) = &newest.blind_text {
+            out.blind.insert(h, text.clone());
+            continue;
+        }
+        let mut any = false;
+        for x in list.iter().filter(|x| x.blind_text.is_none()) {
+            any = true;
+            if let Some(at) = x.order {
+                let t = out.summarized_at.entry(h.clone()).or_insert(at.ts);
+                *t = (*t).max(at.ts);
+            }
+            if x.shows_growth {
+                out.grew.insert(h.clone());
+            }
+        }
+        if any {
+            out.summarized.insert(h);
+        }
     }
     // A line a holder of the project keeps is never "only the tests'".
     for p in &out.project {
@@ -471,5 +552,88 @@ mod tests {
             [("pkg.m._reg", vec!["a.py:1".to_owned()])]
         );
         assert!(s.tests_only.is_empty(), "{:?}", s.tests_only);
+    }
+
+    /// Records an allocation-stack summary of harness H4 (blind or not, growing or flat).
+    fn add_stack(l: &mut Ledger, blind: bool, monotone: u64) {
+        let mut result = json!({"monotone": monotone});
+        if blind {
+            result["blind"] = json!(true);
+            result["blind_text"] = json!("the capture was blind");
+        }
+        l.add_evidence(NewEvidence {
+            source: Source::Artifact {
+                path: "harness/H4/out/p1/alloc.json".into(),
+                sha256: "0".into(),
+            },
+            tool: Tool {
+                name: "alloc-stack".into(),
+                version: "1".into(),
+            },
+            authority: Authority::Live,
+            kind: EvidenceKind::AllocStack,
+            result,
+            raw: None,
+            coverage: EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        })
+        .unwrap();
+    }
+
+    fn tick() {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    /// Two summaries of H4, the older written by a worker (its id `w/E1` sorts after the main
+    /// ledger's `E1`) when `older_in_worker`, else the newer one. Returns the merged scan.
+    fn two_summaries(older: (bool, u64), newer: (bool, u64), older_in_worker: bool) -> Scan {
+        let dir = tempfile::tempdir().unwrap();
+        crate::state::RunState::init("/p", None, 3600, None, crate::state::now_utc())
+            .unwrap()
+            .save(dir.path())
+            .unwrap();
+        let mut main = Ledger::create(dir.path()).unwrap();
+        let mut w = Ledger::load_for(dir.path(), Some("w")).unwrap();
+        if older_in_worker {
+            add_stack(&mut w, older.0, older.1);
+            tick();
+            add_stack(&mut main, newer.0, newer.1);
+        } else {
+            add_stack(&mut main, older.0, older.1);
+            tick();
+            add_stack(&mut w, newer.0, newer.1);
+        }
+        w.finish_slice().unwrap();
+        crate::merge::merge(dir.path()).unwrap();
+        let l = Ledger::load(dir.path()).unwrap();
+        scan_in(&l, Some(dir.path()))
+    }
+
+    #[test]
+    fn a_newer_blind_summary_hides_an_older_one_of_the_same_harness_whatever_the_id_order() {
+        for older_in_worker in [true, false] {
+            for older in [(false, 0), (false, 3)] {
+                let s = two_summaries(older, (true, 0), older_in_worker);
+                assert!(!s.summarized.contains("H4"), "{older_in_worker} {older:?}");
+                assert!(!s.summarized_at.contains_key("H4"));
+                assert!(!s.grew.contains("H4"));
+                assert_eq!(
+                    s.blind.get("H4").map(String::as_str),
+                    Some("the capture was blind")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_newer_summary_revokes_an_older_blind_one_whatever_the_id_order() {
+        for older_in_worker in [true, false] {
+            let s = two_summaries((true, 0), (false, 2), older_in_worker);
+            assert!(s.summarized.contains("H4"), "{older_in_worker}");
+            assert!(s.summarized_at.contains_key("H4"));
+            assert!(s.grew.contains("H4"));
+            assert!(s.blind.is_empty());
+        }
     }
 }

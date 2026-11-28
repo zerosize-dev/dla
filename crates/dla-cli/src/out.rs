@@ -28,11 +28,20 @@ fn shrink(v: &Value, max_str: usize, max_arr: usize, changed: &mut bool) -> Valu
                     .collect(),
             )
         }
-        Value::Object(o) => Value::Object(
-            o.iter()
-                .map(|(k, x)| (k.clone(), shrink(x, max_str, max_arr, changed)))
-                .collect(),
-        ),
+        Value::Object(o) => {
+            let mut out = Map::new();
+            for (k, x) in o {
+                out.insert(k.clone(), shrink(x, max_str, max_arr, changed));
+                // An array that was cut says which one and by how many: a bare `truncated`
+                // would read a cut list as the whole list.
+                if let Value::Array(a) = x
+                    && a.len() > max_arr
+                {
+                    out.insert(format!("{k}_cut"), json!(a.len() - max_arr));
+                }
+            }
+            Value::Object(out)
+        }
         other => other.clone(),
     }
 }
@@ -83,6 +92,22 @@ fn protected_copy(v: &Value, max_str: usize, max_arr: usize) -> Value {
     shrink(v, max_str, max_arr, &mut false)
 }
 
+/// Puts `kept` under `key` in `o`, in place of whatever a cut left there, and makes `<key>_cut`
+/// say how many items of the original array `orig` the kept one lacks (no entry when none).
+fn restore(o: &mut Map<String, Value>, key: &str, orig: &Value, kept: Value) {
+    let cut = match (orig, &kept) {
+        (Value::Array(a), Value::Array(b)) => a.len().saturating_sub(b.len()),
+        _ => 0,
+    };
+    let cut_key = format!("{key}_cut");
+    if cut > 0 {
+        o.insert(cut_key, json!(cut));
+    } else {
+        o.remove(&cut_key);
+    }
+    o.insert(key.to_owned(), kept);
+}
+
 /// What gives way first when a status-like object (a list of items to work on, and details
 /// around it) is too long for the bound. One place, one order; `fit` follows it:
 ///
@@ -97,14 +122,15 @@ fn protected_copy(v: &Value, max_str: usize, max_arr: usize) -> Value {
 /// cut is named in `left_out` (a dropped key, or "<list>: N more items"), so nothing reads as
 /// complete when it is not.
 const DETAIL: [&str; 8] = [
-    "revisit",
     "harnesses_generated",
     "harnesses_run",
     "closed_static_only",
     "budget_estimate",
-    "budget",
     "stages_passed",
     "actions",
+    // The time left and what can still be revisited decide whether a run goes on: dropped last.
+    "revisit",
+    "budget",
 ];
 const CONTEXT: [&str; 6] = ["triggers", "queue", "ledger", "report", "record", "counts"];
 
@@ -177,10 +203,8 @@ pub fn bound(v: Value) -> Value {
         if let (Value::Object(o), Value::Object(orig)) = (&mut s, &v) {
             for k in PROTECTED {
                 if let Some(x) = orig.get(k) {
-                    o.insert(
-                        k.to_owned(),
-                        protected_copy(x, PROTECTED_STR.max(max_str), max_arr.max(32)),
-                    );
+                    let kept = protected_copy(x, PROTECTED_STR.max(max_str), max_arr.max(32));
+                    restore(o, k, x, kept);
                 }
             }
             o.insert("truncated".to_owned(), Value::Bool(true));
@@ -188,14 +212,14 @@ pub fn bound(v: Value) -> Value {
             // sentence, not a detail: it is never cut.
             for k in KEPT_WHOLE {
                 if let Some(h) = orig.get(k) {
-                    o.insert(k.to_owned(), h.clone());
+                    restore(o, k, h, h.clone());
                 }
                 // `dla harness gen` carries the hint inside its summary.
                 if let (Some(h), Some(Value::Object(sum))) = (
                     orig.get("summary").and_then(|s| s.get(k)),
                     o.get_mut("summary"),
                 ) {
-                    sum.insert(k.to_owned(), h.clone());
+                    restore(sum, k, h, h.clone());
                 }
             }
         }
@@ -209,13 +233,13 @@ pub fn bound(v: Value) -> Value {
         if let Value::Object(o) = &v {
             for k in PROTECTED.iter().chain(&["record", "command"]) {
                 if let Some(x) = o.get(*k) {
-                    keep.insert((*k).to_owned(), protected_copy(x, max_str, max_arr));
+                    restore(&mut keep, k, x, protected_copy(x, max_str, max_arr));
                 }
             }
             // The sentence that names the next step stays whole here too.
             for k in KEPT_WHOLE {
                 if let Some(x) = o.get(k).or_else(|| o.get("summary").and_then(|s| s.get(k))) {
-                    keep.insert(k.to_owned(), x.clone());
+                    restore(&mut keep, k, x, x.clone());
                 }
             }
             if let Some(Value::Object(e)) = o.get("error") {
@@ -498,5 +522,75 @@ mod tests {
     fn fit_leaves_a_value_that_fits_alone() {
         let v = json!({"ok": true, "blocking": [{"id": "a"}]});
         assert_eq!(fit(v.clone(), "blocking"), v);
+    }
+
+    #[test]
+    fn a_cut_array_names_its_key_and_how_many_items_were_cut() {
+        let v = json!({
+            "ok": true,
+            "passed": (0..8).map(|i| json!({"column": format!("c{i}"), "text": "x".repeat(260)})).collect::<Vec<_>>(),
+            "other": ["a", "b"],
+        });
+        let b = bound(v);
+        assert_eq!(b["truncated"], true, "{b}");
+        let kept = b["passed"].as_array().unwrap().len();
+        assert!(kept < 8, "{b}");
+        assert_eq!(b["passed_cut"], 8 - kept, "{b}");
+        // An array that was not cut says nothing.
+        assert!(b.get("other_cut").is_none(), "{b}");
+    }
+
+    #[test]
+    fn the_time_left_and_the_revisit_list_are_the_last_details_a_status_gives_up() {
+        // Every detail but those two is too much: they stay while anything else can go.
+        let mut v = status_like(3, "blocking");
+        v["budget"] = json!({"remaining_seconds": 9000, "total_seconds": 10020});
+        v["revisit"] = json!(["F1", "F2"]);
+        for k in [
+            "harnesses_generated",
+            "closed_static_only",
+            "budget_estimate",
+            "stages_passed",
+        ] {
+            v[k] = json!("y".repeat(300));
+        }
+        v["actions"] = json!(vec!["z".repeat(500); 3]);
+        let out = fit(v, "blocking");
+        assert!(out.get("budget").is_some(), "{out}");
+        assert!(out.get("revisit").is_some(), "{out}");
+    }
+
+    /// An object of `n` short file names under `files`, with a body big enough to be bound.
+    fn with_files(n: usize) -> Value {
+        json!({
+            "ok": true,
+            "files": (0..n).map(|i| format!("f{i}.json")).collect::<Vec<_>>(),
+            "big": (0..40).map(|i| json!({"t": format!("{i}{}", "x".repeat(2000))})).collect::<Vec<_>>(),
+        })
+    }
+
+    #[test]
+    fn a_protected_list_restored_whole_has_no_cut_count_and_one_cut_by_the_bound_has() {
+        let b = bound(with_files(20));
+        assert_eq!(b["truncated"], true, "{b}");
+        assert_eq!(b["files"].as_array().unwrap().len(), 20, "{b}");
+        assert!(b.get("files_cut").is_none(), "{b}");
+        // 40 files: the bound keeps 32 of them, and says 8 are left out.
+        let b = bound(with_files(40));
+        assert_eq!(b["files"].as_array().unwrap().len(), 32, "{b}");
+        assert_eq!(b["files_cut"], 8, "{b}");
+        // The list that is cut and not protected still counts its own cut.
+        assert!(b["big_cut"].as_u64().unwrap() > 0, "{b}");
+    }
+
+    #[test]
+    fn the_last_resort_names_how_many_items_of_a_protected_list_it_cut() {
+        // 40 long paths do not fit even cut to 32 items: the last-resort levels cut the list.
+        let v = json!({"ok": true, "files": (0..40).map(|i| format!("dir/file-{i:02}-{}.json", "a".repeat(80))).collect::<Vec<_>>()});
+        let b = bound(v);
+        assert_eq!(b["truncated"], true, "{b}");
+        let kept = b["files"].as_array().unwrap().len();
+        assert!(kept < 32, "{kept}");
+        assert_eq!(b["files_cut"], 40 - kept, "{b}");
     }
 }

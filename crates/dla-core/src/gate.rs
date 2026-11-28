@@ -1165,9 +1165,19 @@ fn residual_item_fix(view: &RunView, id: &str, region: Region, series: Option<&s
         .parse::<crate::ids::OpenItemId>()
         .map(|i| view.ledger.open_item_supported_reason(&i))
         .unwrap_or(UnresolvedReason::NotExercised);
-    format!(
+    let close = format!(
         "dla ledger resolve {id} --by <F>   or   dla ledger resolve {id} --as unresolved --reason {reason} --remedy \"<text>\""
-    )
+    );
+    // A growth a live heap column measured and nothing decided: the measurement comes first,
+    // and what the capture of the harness already said is said once.
+    match undecided_heap_of(view, id) {
+        Some(u) => format!(
+            "{}; decide it first: {}; then {close}",
+            u.text(),
+            u.commands().join("   ;   ")
+        ),
+        None => close,
+    }
 }
 
 /// The route that decides a non-heap residual with evidence: a finding for the residual,
@@ -1351,6 +1361,9 @@ pub struct UncapturedResidual {
     pub series: Vec<String>,
     /// Their open items (`O1`).
     pub items: Vec<String>,
+    /// What the summary of a capture of the harness said when it was blind (could not see
+    /// growth the process measured): such a summary is no capture.
+    pub blind: Option<String>,
 }
 
 impl UncapturedResidual {
@@ -1364,8 +1377,27 @@ impl UncapturedResidual {
         }
     }
 
+    /// The sentence for a harness whose capture was summarized and is blind; empty otherwise.
+    pub fn blind_text(&self) -> String {
+        self.blind.as_ref().map_or_else(String::new, |t| {
+            format!(
+                "the capture of {} was summarized and is blind ({t}), so it is not a capture of this growth",
+                self.harness
+            )
+        })
+    }
+
     /// The command that takes the capture; the `dla summarize` commands come from its output.
     pub fn fix(&self) -> String {
+        if self.blind.is_some() {
+            return format!(
+                "dla harness run {} --mode {} --capture {} with a driver that takes the allocator shim's snapshot after its last unit (dla harness gen again for a harness made before it), then the `dla summarize` commands it prints; or, for a declared target of the harness, dla alloc-test {} --finding <F>",
+                self.harness,
+                self.mode,
+                self.capture_kinds(),
+                self.harness
+            );
+        }
         format!(
             "dla harness run {} --mode {} --capture {}, then the `dla summarize` commands it prints",
             self.harness,
@@ -1515,10 +1547,250 @@ pub fn uncaptured_residuals(view: &RunView) -> Vec<UncapturedResidual> {
                 runtime,
                 series: vec![series.clone()],
                 items: vec![id.to_string()],
+                blind: scan
+                    .blind
+                    .get(harness)
+                    .filter(|_| !scan.summarized.contains(harness))
+                    .cloned(),
             }),
         }
     }
     out
+}
+
+/// A heap growth that nothing decided while the budget allows more: the open item of a heap
+/// residual row above its threshold whose series passed a live heap column in its trend, whose
+/// harness has no summarized capture that shows a growing stack (a blind one is none) and no
+/// alloc-test that measured. Text cannot close it: it is closed by a measurement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndecidedHeap {
+    /// The open item (`O1`).
+    pub item: String,
+    /// The series (`S5`) of its rows above their threshold, largest row first.
+    pub series: Vec<String>,
+    /// The harness that measured the largest row's series.
+    pub harness: String,
+    /// The live heap column that passed in the trend of that series (`native.live_bytes`).
+    pub column: String,
+    /// The declared targets of the harness a trend read `grew_untied`: each is decided by an
+    /// alloc-test on the harness.
+    pub leads: Vec<FindingId>,
+    /// The mode its series was measured in, as `dla harness run --mode` spells it.
+    pub mode: String,
+    /// What a summarized capture of the harness said, when one exists: blind, with its numbers,
+    /// or flat.
+    pub capture: Option<CaptureSaid>,
+}
+
+/// What the summarized capture of a harness said of a heap growth.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CaptureSaid {
+    /// It could not see the state the process measured (see `dla summarize`): the sentence.
+    Blind(String),
+    /// It could see the state and no stack grew across its captures.
+    Flat,
+}
+
+impl UndecidedHeap {
+    /// The commands that can decide it. One alloc-test per lead. With no lead: the capture that
+    /// takes the snapshot first when none was summarized yet, then an alloc-test of the harness.
+    /// After a summarized capture (flat or blind) taking it again cannot change what it said, so
+    /// only the alloc-test is named: it is what releases the refusal.
+    pub fn commands(&self) -> Vec<String> {
+        if !self.leads.is_empty() {
+            return self
+                .leads
+                .iter()
+                .map(|f| format!("dla alloc-test {} --finding {f}", self.harness))
+                .collect();
+        }
+        let alloc_test = format!("dla alloc-test {}", self.harness);
+        if self.capture.is_some() {
+            return vec![alloc_test];
+        }
+        vec![
+            format!(
+                "dla harness run {} --mode {} --capture alloc   (a driver that takes the allocator shim's snapshot after its last unit: dla harness gen again for a harness made before it)",
+                self.harness, self.mode
+            ),
+            alloc_test,
+        ]
+    }
+
+    /// What was measured and what is left, in one sentence.
+    pub fn text(&self) -> String {
+        let said = match &self.capture {
+            Some(CaptureSaid::Blind(t)) => format!(
+                "; the capture of {} was summarized and is blind ({t})",
+                self.harness
+            ),
+            Some(CaptureSaid::Flat) => format!(
+                "; the capture of {} was summarized and no stack grew across it",
+                self.harness
+            ),
+            None => String::new(),
+        };
+        format!(
+            "{} of {} passed its growth gate in {} ({}){said}, and neither a capture that shows the growing stack nor an alloc-test decided it",
+            self.column,
+            self.series.join(", "),
+            self.harness,
+            self.item
+        )
+    }
+}
+
+/// The open item `id` as an undecided heap growth ([`UndecidedHeap`]), while the budget is over
+/// its floor; `None` otherwise (the rule drops at the floor: the run can always finish).
+pub fn undecided_heap_of(view: &RunView, id: &str) -> Option<UndecidedHeap> {
+    budget_over_floor(&view.state, view.worker.as_deref())?;
+    let cov = view.coverage.as_ref()?;
+    let mut rows: Vec<&crate::coverage::ResidualRow> = cov
+        .residual
+        .iter()
+        .filter(|r| r.region == Region::Heap && r.residual > r.threshold)
+        .filter(|r| r.open_item.as_ref().is_some_and(|o| o.to_string() == id))
+        .collect();
+    rows.sort_by(|a, b| b.residual.total_cmp(&a.residual));
+    // The rows whose series passed a live heap column in their trend.
+    let mut passed: Vec<(&str, &str)> = Vec::new();
+    for r in &rows {
+        let Some(series) = r.series.as_deref() else {
+            continue;
+        };
+        let Some(t) = view.trends.iter().rev().find(|t| t.series == series) else {
+            continue;
+        };
+        if let Some(c) = t
+            .columns
+            .iter()
+            .find(|c| c.gate == GateVerdict::Pass && crate::trend::is_live_heap_column(&c.name))
+        {
+            passed.push((series, c.name.as_str()));
+        }
+    }
+    let &(series, column) = passed.first()?;
+    let harness = view.series_harness.get(series)?.clone();
+    let scan = view.measured_holders();
+    if scan.grew.contains(&harness) && capture_newer_than_series(view, scan, &harness, series) {
+        return None;
+    }
+    if crate::grown::alloc_measured_on(view, &harness) {
+        return None;
+    }
+    let trend = view.trends.iter().rev().find(|t| t.series == series)?;
+    let leads: Vec<FindingId> = trend
+        .targets
+        .iter()
+        .filter(|v| v.declared && v.verdict == crate::trend::Verdict::GrewUntied)
+        .map(|v| v.finding.clone())
+        .collect();
+    let mode = crate::series::SeriesFile::load(view.run_dir.as_deref()?, series)
+        .ok()
+        .and_then(|f| f.source.mode)
+        .map_or_else(|| "fresh".to_owned(), |m| m.as_str().to_owned());
+    let capture = scan
+        .blind
+        .get(&harness)
+        .filter(|_| !scan.summarized.contains(&harness))
+        .map(|t| CaptureSaid::Blind(t.clone()))
+        .or_else(|| {
+            scan.summarized
+                .contains(&harness)
+                .then_some(CaptureSaid::Flat)
+        });
+    Some(UndecidedHeap {
+        item: id.to_owned(),
+        series: passed.iter().map(|(s, _)| (*s).to_owned()).collect(),
+        harness,
+        column: column.to_owned(),
+        leads,
+        mode,
+        capture,
+    })
+}
+
+/// Whether the summary that shows growth was written after the series (see
+/// [`capture_of_series`]); a summary of an earlier driver decides nothing about a later one.
+fn capture_newer_than_series(
+    view: &RunView,
+    scan: &crate::measured_holders::Scan,
+    harness: &str,
+    series: &str,
+) -> bool {
+    match view.run_dir.as_deref() {
+        Some(dir) => capture_of_series(scan, dir, harness, series, &view.series_harness),
+        None => true,
+    }
+}
+
+/// The text of an open item as the gate shows it. The advice "attribute it first: <capture
+/// command>; then ..." of a heap residual item is dropped once the capture was taken and
+/// summarized, and says what the summary showed (blind, with its numbers, flat, or a growing
+/// stack) instead of sending the reader to take it again.
+pub fn open_item_text(view: &RunView, id: &str, text: &str) -> String {
+    const MARK: &str = "attribute it first: ";
+    let Some(start) = text.find(MARK) else {
+        return text.to_owned();
+    };
+    let Some(row) = view.coverage.as_ref().and_then(|c| {
+        c.residual
+            .iter()
+            .filter(|r| r.region == Region::Heap)
+            .filter(|r| r.open_item.as_ref().is_some_and(|o| o.to_string() == id))
+            .max_by(|a, b| a.residual.total_cmp(&b.residual))
+    }) else {
+        return text.to_owned();
+    };
+    let Some(harness) = row.series.as_ref().and_then(|s| view.series_harness.get(s)) else {
+        return text.to_owned();
+    };
+    let scan = view.measured_holders();
+    let said = if scan.grew.contains(harness) {
+        format!("the capture of {harness} was summarized and shows a growing stack")
+    } else if scan.summarized.contains(harness) {
+        format!("the capture of {harness} was summarized and no stack grew across it")
+    } else if let Some(b) = scan.blind.get(harness) {
+        format!("the capture of {harness} was summarized and is blind ({b})")
+    } else {
+        return text.to_owned();
+    };
+    let tail = text[start..]
+        .find("; then ")
+        .map_or(text.len(), |i| start + i + "; then ".len());
+    format!("{}{said}; {}", &text[..start], &text[tail..])
+}
+
+/// The series (`S5`) of the rows of open item `id` that are above their threshold, one entry
+/// each, in the order of the coverage file.
+pub fn rows_above_threshold(view: &RunView, id: &str) -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
+    for r in view.coverage.iter().flat_map(|c| c.residual.iter()) {
+        if r.residual > r.threshold
+            && r.open_item.as_ref().is_some_and(|o| o.to_string() == id)
+            && let Some(s) = &r.series
+            && !v.contains(s)
+        {
+            v.push(s.clone());
+        }
+    }
+    v
+}
+
+/// The series of `wanted` that the text of `remedy` does not name as a whole word (`S1` is not
+/// named by `S12`).
+pub fn series_not_named(remedy: &str, wanted: &[String]) -> Vec<String> {
+    let bytes = remedy.as_bytes();
+    let named = |s: &str| {
+        remedy.match_indices(s).any(|(i, _)| {
+            let before = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+            let after = bytes
+                .get(i + s.len())
+                .is_none_or(|b| !b.is_ascii_alphanumeric());
+            before && after
+        })
+    };
+    wanted.iter().filter(|s| !named(s)).cloned().collect()
 }
 
 /// The entry of [`uncaptured_residuals`] that has the open item `id`.
@@ -1631,13 +1903,18 @@ pub fn measured_lead(view: &RunView) -> Vec<Missing> {
             kind: RESIDUAL_CAPTURE_KIND.to_owned(),
             id: format!("{}:residual-capture", u.harness),
             description: format!(
-                "{} heap residual row{} of {} over the threshold ({}) and {} has no summarized capture (no retention or allocation-stack summary computed from capture files under harness/{}/)",
+                "{} heap residual row{} of {} over the threshold ({}) and {} has no summarized capture (no retention or allocation-stack summary computed from capture files under harness/{}/){}",
                 u.items.len(),
                 if u.items.len() == 1 { "" } else { "s" },
                 u.series.join(", "),
                 u.items.join(", "),
                 u.harness,
-                u.harness
+                u.harness,
+                if u.blind.is_some() {
+                    format!("; {}", u.blind_text())
+                } else {
+                    String::new()
+                }
             ),
             fix: u.fix(),
         });

@@ -1015,17 +1015,75 @@ fn resolve_unresolved(
     hint: Option<&str>,
     tried: &mut BTreeSet<String>,
 ) -> Out {
-    let o = resolve_unresolved_once(fx, target, hint);
+    let mut o = resolve_unresolved_once(fx, target, hint);
     // A heap residual above its threshold is not left unresolved before its harness has a
     // summarized capture: take the capture the refusal prints, then close the item again.
     if o.code() == "capture-not-summarized" {
         let fix = o.json["error"]["fix"].as_str().unwrap_or("").to_owned();
         if let Some(said) = take_capture(fx, &fix, tried) {
             fx.step(format!("final gate: {said}"));
-            return resolve_unresolved_once(fx, target, hint);
+            o = resolve_unresolved_once(fx, target, hint);
+        }
+    }
+    // A heap growth a live heap column measured is decided by a measurement while the budget
+    // allows one: run what the refusal names (an alloc-test per lead, or the capture), then
+    // close the item again; when that was not enough, the alloc-test of the harness.
+    if o.code() == "heap-growth-undecided" {
+        let fix = o.json["error"]["fix"].as_str().unwrap_or("").to_owned();
+        for said in follow_undecided_heap(fx, &fix, tried) {
+            fx.step(format!("final gate: {said}"));
+        }
+        o = resolve_unresolved_once(fx, target, hint);
+        if o.code() == "heap-growth-undecided"
+            && let Some(h) = harness_of_undecided(&fix)
+            && tried.insert(format!("alloc-test {h}"))
+        {
+            let out = run_dla_line(fx, &format!("dla alloc-test {h}"));
+            fx.step(format!(
+                "final gate: dla alloc-test {h}: {}",
+                if out.ok {
+                    "ok".to_owned()
+                } else {
+                    refusal(&out)
+                }
+            ));
+            o = resolve_unresolved_once(fx, target, hint);
         }
     }
     o
+}
+
+/// The harness a `heap-growth-undecided` fix names: its first alloc-test or capture command.
+fn harness_of_undecided(fix: &str) -> Option<String> {
+    fix.split("   ;   ").map(fix_command).find_map(|c| {
+        c.strip_prefix("dla alloc-test ")
+            .or_else(|| c.strip_prefix("dla harness run "))
+            .and_then(|rest| rest.split_whitespace().next())
+            .map(str::to_owned)
+    })
+}
+
+/// Runs the commands of a `heap-growth-undecided` fix once each: `dla alloc-test H --finding F`
+/// as printed, the capture with its summaries through [`take_capture`].
+fn follow_undecided_heap(fx: &mut Fx, fix: &str, tried: &mut BTreeSet<String>) -> Vec<String> {
+    let mut said = Vec::new();
+    for c in fix.split("   ;   ") {
+        let cmd = fix_command(c).to_owned();
+        if cmd.starts_with("dla alloc-test ") && !cmd.contains('<') {
+            if tried.insert(cmd.clone()) {
+                let o = run_dla_line(fx, &cmd);
+                said.push(format!(
+                    "{cmd}: {}",
+                    if o.ok { "ok".to_owned() } else { refusal(&o) }
+                ));
+            }
+        } else if cmd.starts_with("dla harness run ")
+            && let Some(m) = take_capture(fx, c, tried)
+        {
+            said.push(m);
+        }
+    }
+    said
 }
 
 /// The harness a capture fix (`dla harness run H --mode M --capture alloc,heap, then ...`) is
@@ -1062,8 +1120,9 @@ fn take_capture(fx: &mut Fx, fix: &str, tried: &mut BTreeSet<String>) -> Option<
 }
 
 fn resolve_unresolved_once(fx: &mut Fx, target: &str, hint: Option<&str>) -> Out {
-    let close = |fx: &mut Fx, reason: &str| {
-        fx.call_quiet(&[
+    let mut remedy = REMEDY.to_owned();
+    let mut close = |fx: &mut Fx, reason: &str| {
+        let mut o = fx.call_quiet(&[
             "ledger",
             "resolve",
             target,
@@ -1072,14 +1131,38 @@ fn resolve_unresolved_once(fx: &mut Fx, target: &str, hint: Option<&str>) -> Out
             "--reason",
             reason,
             "--remedy",
-            REMEDY,
-        ])
+            &remedy,
+        ]);
+        // An item with rows of several series above their thresholds wants each series named.
+        if o.code() == "remedy-misses-series" {
+            let msg = o.json["error"]["message"].as_str().unwrap_or("").to_owned();
+            let series: Vec<String> = msg
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .filter(|w| {
+                    w.len() > 1 && w.starts_with('S') && w[1..].chars().all(|c| c.is_ascii_digit())
+                })
+                .map(str::to_owned)
+                .collect();
+            remedy = format!("{REMEDY} (series {})", series.join(", "));
+            o = fx.call_quiet(&[
+                "ledger",
+                "resolve",
+                target,
+                "--as",
+                "unresolved",
+                "--reason",
+                reason,
+                "--remedy",
+                &remedy,
+            ]);
+        }
+        o
     };
     if hint.is_some_and(|h| h.contains("--reason not_exercised")) {
         return close(fx, "not_exercised");
     }
     let o = close(fx, "inconclusive");
-    if o.ok || o.code() == "capture-not-summarized" {
+    if o.ok || o.code() == "capture-not-summarized" || o.code() == "heap-growth-undecided" {
         return o;
     }
     close(fx, "not_exercised")

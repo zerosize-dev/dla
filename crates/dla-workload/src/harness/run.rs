@@ -2685,6 +2685,54 @@ fn rust_alloc_points(
     Ok(())
 }
 
+/// The calls of a Rust driver's own code (its hooks: the unit and the set-up the model wrote)
+/// that leak what they are given on purpose: `mem::forget`, `Box::leak`, `ManuallyDrop::new`. The
+/// driver then leaks by itself, and its series reads as growth of the project. A warning only:
+/// the call may be right (an object that must outlive the unit); project code the unit merely
+/// calls is not scanned. `None` when the driver has none.
+fn driver_leak_note(driver_dir: &Path) -> Option<String> {
+    const CALLS: [&str; 3] = ["mem::forget(", "Box::leak(", "ManuallyDrop::new("];
+    let mut hits: Vec<String> = Vec::new();
+    let mut stack = vec![(driver_dir.to_path_buf(), 0u32)];
+    while let Some((d, depth)) = stack.pop() {
+        let Ok(rd) = fs::read_dir(&d) else { continue };
+        for e in rd.filter_map(Result::ok) {
+            let p = e.path();
+            if p.is_dir() {
+                if depth < 3 {
+                    stack.push((p, depth + 1));
+                }
+                continue;
+            }
+            if p.extension().is_none_or(|x| x != "rs") {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(&p) else {
+                continue;
+            };
+            for (i, l) in text.lines().enumerate() {
+                if l.trim_start().starts_with("//") {
+                    continue;
+                }
+                if let Some(c) = CALLS.iter().find(|c| l.contains(**c)) {
+                    let name = p
+                        .file_name()
+                        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                    hits.push(format!("{} at {name}:{}", c.trim_end_matches('('), i + 1));
+                }
+            }
+        }
+    }
+    hits.sort();
+    hits.dedup();
+    (!hits.is_empty()).then(|| {
+        format!(
+            "the driver's own code leaks on purpose: {}. The driver itself then leaks, and a growth of this series may be the driver's, not the project's: drop the object early instead of forgetting it (warning only)",
+            hits.join(", ")
+        )
+    })
+}
+
 /// `rustc -vV` in `cwd`: `(host triple, LLVM major version)`.
 fn rustc_host_llvm(cwd: &Path, env: &[(String, String)]) -> Option<(String, Option<u32>)> {
     let mut cmd = Command::new("rustc");
@@ -3169,6 +3217,12 @@ pub fn run_points(
         ));
     }
 
+    if manifest.runtime == dla_core::runtime::Runtime::Rust
+        && manifest.mode == HarnessMode::Driver
+        && let Some(note) = driver_leak_note(&paths.hdir.join(super::DRIVER))
+    {
+        out.limitations.push(note);
+    }
     let settled = settle_shim_only(manifest, &paths, &mut out.limitations);
     let manifest = settled.as_ref().unwrap_or(manifest);
 
@@ -5261,5 +5315,24 @@ mod tests_support {
             ffi: None,
             captures: vec![],
         }
+    }
+
+    #[test]
+    fn a_rust_driver_that_forgets_or_leaks_its_objects_is_warned_about() {
+        use std::fs;
+        let d = std::env::temp_dir().join(format!("dla-driverleak-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(
+            d.join("dla_harness.rs"),
+            "fn unit() {\n    // std::mem::forget(c) is only said here\n    let c = make();\n    std::mem::forget(c);\n}\n",
+        )
+        .unwrap();
+        let note = super::driver_leak_note(&d).unwrap();
+        assert!(note.contains("mem::forget at dla_harness.rs:4"), "{note}");
+        assert!(!note.contains(":2"), "{note}");
+        fs::write(d.join("dla_harness.rs"), "fn unit() { drop(make()); }\n").unwrap();
+        assert!(super::driver_leak_note(&d).is_none());
+        let _ = fs::remove_dir_all(&d);
     }
 }

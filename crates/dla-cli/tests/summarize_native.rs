@@ -841,10 +841,9 @@ mod shim {
         assert_eq!(v["gate"], "fail", "{v}");
         let needed = v["needed"].as_str().unwrap();
         assert!(!needed.contains("stood still"), "{needed}");
-        assert!(
-            needed.contains("capture a point with more work"),
-            "{needed}"
-        );
+        // The captures already differ in work by a factor of four: more work is not the advice.
+        assert!(!needed.contains("more work"), "{needed}");
+        assert!(needed.contains("factor of 4"), "{needed}");
     }
 
     #[test]

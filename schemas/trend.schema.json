@@ -544,6 +544,11 @@
           "const": "changed"
         },
         {
+          "description": "No probe and no column tied to the finding, but the harness made for it measured a\ngrowth of its live heap (a region-primary live column passed) and the finding's writer\nlines ran: a lead, not a measurement of its holder. An alloc-test on the harness decides\nit. Not settled by the queue and never credited to a finding before that decision.",
+          "type": "string",
+          "const": "grew_untied"
+        },
+        {
           "description": "A probe column of the finding stayed at one value.",
           "type": "string",
           "const": "constant"

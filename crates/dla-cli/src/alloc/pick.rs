@@ -185,13 +185,7 @@ fn region_primary(
         return GO_IN_RUN;
     }
     let lists: &[&str] = match region {
-        Some(SeriesRegion::Heap) => &[
-            "jvm.heap_used",
-            "go.heap_live",
-            "node.heap_used",
-            "py.traced",
-            "native.live_bytes",
-        ],
+        Some(SeriesRegion::Heap) => &dla_core::trend::LIVE_HEAP_COLUMNS,
         Some(SeriesRegion::OffHeap) => &["native.live_bytes", "gap.unexplained"],
         // A JVM series has `jvm.nonheap_used` (bytes: pools and code cache) and a Go series
         // does not, so Go keeps `go.goroutines` here.

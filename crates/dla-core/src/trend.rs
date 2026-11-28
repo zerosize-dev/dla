@@ -124,6 +124,36 @@ pub struct TrendReport {
     pub targets: Vec<TargetVerdict>,
 }
 
+/// The live heap columns of a series, in the order an alloc-test summarizes the heap region by
+/// (the first one the series has): the bytes a runtime holds right now, never a high-water mark
+/// (`native.peak_bytes`, `os.vm_hwm`) or a process column (`os.rss`, `os.vm_data`).
+pub const LIVE_HEAP_COLUMNS: [&str; 5] = [
+    "jvm.heap_used",
+    "go.heap_live",
+    "node.heap_used",
+    "py.traced",
+    "native.live_bytes",
+];
+
+/// True for a live heap column ([`LIVE_HEAP_COLUMNS`], and the Go heap read while the workload
+/// ran).
+pub fn is_live_heap_column(name: &str) -> bool {
+    name == "go.heap_live.in_run" || LIVE_HEAP_COLUMNS.contains(&name)
+}
+
+/// How far a column leads in a passed list: a live heap column first, then the other heap
+/// columns (`native.peak_bytes`, `go.heap_*`, `jvm.nmt.*`, `py.*`, site columns), then the
+/// process columns (`os.*`) and the rest.
+pub fn column_lead_rank(name: &str, region_is_heap: bool) -> u8 {
+    if is_live_heap_column(name) {
+        0
+    } else if region_is_heap {
+        1
+    } else {
+        2
+    }
+}
+
 /// What a run showed about one targeted finding.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -132,6 +162,11 @@ pub enum Verdict {
     Grew,
     /// A probe column of the finding did not pass, and its values are not all equal.
     Changed,
+    /// No probe and no column tied to the finding, but the harness made for it measured a
+    /// growth of its live heap (a region-primary live column passed) and the finding's writer
+    /// lines ran: a lead, not a measurement of its holder. An alloc-test on the harness decides
+    /// it. Not settled by the queue and never credited to a finding before that decision.
+    GrewUntied,
     /// A probe column of the finding stayed at one value.
     Constant,
     /// The harness has a probe for the finding and the series has no column for it.
@@ -153,6 +188,7 @@ impl Verdict {
         match self {
             Self::Grew => "grew",
             Self::Changed => "changed",
+            Self::GrewUntied => "grew_untied",
             Self::Constant => "constant",
             Self::NotLoaded => "not_loaded",
             Self::Executed => "executed",

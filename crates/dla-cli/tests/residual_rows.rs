@@ -183,7 +183,7 @@ fn an_item_that_lists_a_larger_row_of_another_series_is_not_resolved_by_the_smal
     assert_eq!(r.ledger_item_texts().len(), 1, "one item per region");
 
     // The summary of S1's capture does not measure S2: resolving O1 is refused, naming S2.
-    let (code, v) = r.resolve("O1", "allocator noise");
+    let (code, v) = r.resolve("O1", "S1 and S2: allocator noise");
     assert_ne!(code, 0, "{v}");
     assert_eq!(v["error"]["code"], "capture-not-summarized", "{v}");
     assert!(
@@ -193,13 +193,29 @@ fn an_item_that_lists_a_larger_row_of_another_series_is_not_resolved_by_the_smal
 
     // A capture taken after S2 is written releases it, and the report says how O1 was closed.
     r.summarize();
-    let (code, v) = r.resolve("O1", "the capture of H1 shows the growth is the cache");
+    // The item lists the rows of two series above their thresholds: a remedy that names one
+    // of them accounts for the other with words about the first.
+    let (code, v) = r.resolve(
+        "O1",
+        "the capture of H1 shows the growth of S2 is the cache",
+    );
+    assert_ne!(code, 0, "{v}");
+    assert_eq!(v["error"]["code"], "remedy-misses-series", "{v}");
+    assert!(
+        v["error"]["message"].as_str().unwrap().contains("S1"),
+        "{v}"
+    );
+    let (code, v) = r.resolve(
+        "O1",
+        "S1 and S2: the capture of H1 shows the growth is the cache",
+    );
     assert_eq!(code, 0, "{v}");
     assert!(r.residual_items().is_empty(), "{:?}", r.items());
     let report = r.report();
     assert!(
-        report
-            .contains("resolved as inconclusive: the capture of H1 shows the growth is the cache"),
+        report.contains(
+            "resolved as inconclusive: S1 and S2: the capture of H1 shows the growth is the cache"
+        ),
         "{report}"
     );
     assert!(!report.contains("see O1"), "{report}");

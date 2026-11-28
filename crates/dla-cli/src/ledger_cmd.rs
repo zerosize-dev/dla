@@ -1238,10 +1238,12 @@ fn resolve_open_item(ctx: &Ctx, ledger: &mut Ledger, id: OpenItemId, a: ResolveA
             false,
         )?;
     }
-    if let Resolution::Unresolved { reason, .. } = &resolution
-        && *reason != UnresolvedReason::TimeBudget
-    {
-        refuse_uncaptured_residual(ctx, &id)?;
+    if let Resolution::Unresolved { reason, remedy } = &resolution {
+        refuse_remedy_missing_series(ctx, &id, remedy)?;
+        if *reason != UnresolvedReason::TimeBudget {
+            refuse_uncaptured_residual(ctx, &id)?;
+            refuse_undecided_heap(ctx, &id)?;
+        }
     }
     let line = ledger.resolve_open_item(&id, resolution)?;
     Ok(json!({
@@ -1250,6 +1252,59 @@ fn resolve_open_item(ctx: &Ctx, ledger: &mut Ledger, id: OpenItemId, a: ResolveA
         "seq": line.seq,
         "record": pointer(ctx, line.seq),
     }))
+}
+
+/// Refuses a remedy that resolves an open item with rows of several series above their
+/// thresholds and does not name each of those series: one text about one driver does not
+/// account for the growth of another. Rows under their threshold need nothing.
+fn refuse_remedy_missing_series(ctx: &Ctx, id: &OpenItemId, remedy: &str) -> Res<()> {
+    let view = RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())?;
+    let wanted = gate::rows_above_threshold(&view, &id.to_string());
+    if wanted.len() < 2 {
+        return Ok(());
+    }
+    let missing = gate::series_not_named(remedy, &wanted);
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(Failure::refuse(
+        core_codes::REMEDY_MISSES_SERIES,
+        format!(
+            "{id} lists rows of {} above their thresholds and the remedy does not name {}: a remedy about one series does not account for the growth of another",
+            wanted.join(", "),
+            missing.join(", ")
+        ),
+        "a remedy that names every series whose row is above its threshold (S<n>), or one open item per series",
+        format!(
+            "dla ledger resolve {id} --as unresolved --reason <reason> --remedy \"<text that names {}>\"",
+            wanted.join(", ")
+        ),
+    ))
+}
+
+/// Refuses to leave the open item of a heap growth a live heap column measured unresolved while
+/// nothing decided it and the budget is over its floor (see [`gate::undecided_heap_of`]): the
+/// refusal names the command that can. An alloc-test on the harness (any outcome, an
+/// inconclusive one after its longest window) or the floor releases it. An aborted run is not
+/// held to it.
+fn refuse_undecided_heap(ctx: &Ctx, id: &OpenItemId) -> Res<()> {
+    let view = RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())?;
+    if view.state.status == dla_core::state::RunStatus::Aborted {
+        return Ok(());
+    }
+    let Some(u) = gate::undecided_heap_of(&view, &id.to_string()) else {
+        return Ok(());
+    };
+    let cmds = u.commands();
+    Err(Failure::refuse(
+        core_codes::HEAP_GROWTH_UNDECIDED,
+        format!(
+            "{id} cannot be left unresolved while the budget allows a measurement: {}",
+            u.text()
+        ),
+        "a measurement that decides the growth: an alloc-test on the harness (any outcome), or a capture that shows the growing stack",
+        cmds.join("   ;   "),
+    ))
 }
 
 /// Refuses to leave the open item of a heap residual above its threshold unresolved while the
@@ -1268,9 +1323,14 @@ fn refuse_uncaptured_residual(ctx: &Ctx, id: &OpenItemId) -> Res<()> {
     Err(Failure::refuse(
         core_codes::CAPTURE_NOT_SUMMARIZED,
         format!(
-            "{id} cannot be left unresolved: it is a heap residual above its threshold and no summarized capture of its largest row ({}) exists: no retention or allocation-stack summary computed from capture files under harness/{}/ was written after the first series of the driver that wrote it (a capture taken before it, or of an earlier driver, says nothing of it; a capture run that records it could not write stacks releases it)",
+            "{id} cannot be left unresolved: it is a heap residual above its threshold and no summarized capture of its largest row ({}) exists: no retention or allocation-stack summary computed from capture files under harness/{}/ was written after the first series of the driver that wrote it (a capture taken before it, or of an earlier driver, says nothing of it; a capture run that records it could not write stacks releases it){}",
             u.series.join(", "),
-            u.harness
+            u.harness,
+            if u.blind.is_some() {
+                format!("; {}", u.blind_text())
+            } else {
+                String::new()
+            }
         ),
         format!(
             "a capture of {} taken for {} and its summaries (who keeps the growth), then the item resolved by what they show",

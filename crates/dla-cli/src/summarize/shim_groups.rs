@@ -40,7 +40,7 @@ use super::{
     input::Input,
     redact::Redactor,
     rule::{self, Observed},
-    tie,
+    shim_blind, tie,
 };
 use crate::fail::{Failure, Res};
 
@@ -274,6 +274,8 @@ struct ShimCapture {
     sha256: String,
     stacks: Vec<Stack>,
     unattributed: u64,
+    /// What the record says of itself, for the check against the process's own readings.
+    reading: shim_blind::Reading,
 }
 
 /// One process's shim record with stacks.
@@ -589,6 +591,7 @@ fn shim_run(ctx: &Ctx<'_>, op: Op, inputs: &[Input], opts: &Opts) -> Res<Adapter
             let Some(chosen) = choose_process(procs, i.shown(), &ctx.redactor, &mut limits) else {
                 continue;
             };
+            let reading = shim_blind::Reading::of(chosen.d, chosen.total);
             let (d, raw) = (chosen.d, chosen.raw);
             let stacks = symbolize(
                 &raw,
@@ -615,6 +618,7 @@ fn shim_run(ctx: &Ctx<'_>, op: Op, inputs: &[Input], opts: &Opts) -> Res<Adapter
                 sha256: i.sha256.clone(),
                 stacks,
                 unattributed,
+                reading,
             });
         }
         if captures.is_empty() {
@@ -669,6 +673,13 @@ fn run_diff(
     let tc = ctx.tc;
     let red = &ctx.redactor;
     let n = captures.len();
+    // Whether the captures could see the growth the process itself measured (see shim_blind).
+    let readings: Vec<shim_blind::Reading> = captures.iter().map(|c| c.reading.clone()).collect();
+    let blind_check = shim_blind::check(&readings);
+    let blind = match &blind_check {
+        shim_blind::Check::Blind(b) => Some(b),
+        _ => None,
+    };
     // ---- rows: one per stack key
     let mut rows: BTreeMap<String, Row> = BTreeMap::new();
     for (ci, c) in captures.iter().enumerate() {
@@ -818,6 +829,13 @@ fn run_diff(
             "blocks": r.blocks,
         })).collect::<Vec<_>>(),
         "monotone": mono.iter().map(|r| red.name(&r.label)).collect::<Vec<_>>(),
+        "blind": blind.map(shim_blind::Blind::numbers),
+        "records": captures.iter().map(|c| json!({
+            "at": c.reading.at,
+            "shim_live_bytes": c.reading.shim_live,
+            "shim_peak_bytes": c.reading.shim_peak,
+            "driver": c.reading.driver.map(|(x, live)| json!({"x": x, "live_bytes": live})),
+        })).collect::<Vec<_>>(),
         "redaction": red.mode(),
     });
     let raw = emit::write_raw(tc, &hrel, &raw_value)?;
@@ -853,6 +871,13 @@ fn run_diff(
     }
     let mut result = list.finish();
     result["monotone"] = json!(mono.len());
+    if let Some(b) = blind {
+        // Read back by the gate and the ledger text: a blind capture is no capture of the
+        // harness (it could not see the state the process measured).
+        result["blind"] = json!(true);
+        result["blind_numbers"] = b.numbers();
+        result["blind_text"] = json!(b.sentence());
+    }
     if alloc {
         // The ties of the growing stacks, stated in the record itself: `dla ledger label`
         // counts an allocation-stack record for the findings named here (the ties the
@@ -907,6 +932,7 @@ fn run_diff(
         "each capture is the exit record of a separate process: the figures grow with the work done before exit".into(),
     ];
     spec.limitations.extend(limits.iter().cloned());
+    spec.limitations.extend(blind_limitations(&blind_check));
     if n < rule::MIN_DUMPS {
         spec.limitations.push(
             "fewer than three captures cannot tell a warm-up fill from a leak: no growth column is written".into(),
@@ -941,6 +967,10 @@ fn run_diff(
     );
     body.insert("monotone".into(), json!(mono.len()));
     body.insert("redaction".into(), json!(red.mode()));
+    if let Some(b) = blind {
+        body.insert("blind".into(), json!(true));
+        body.insert("blind_numbers".into(), b.numbers());
+    }
     out.evidence.push(diff_ev);
     if n < rule::MIN_DUMPS {
         body.insert("series".into(), Value::Null);
@@ -1011,7 +1041,11 @@ fn run_diff(
             .into(),
             source_kind: SeriesSourceKind::Dump,
             runtime: None,
-            limitations: spec_limits(&limits),
+            limitations: {
+                let mut l = spec_limits(&limits);
+                l.extend(blind_limitations(&blind_check));
+                l
+            },
             what: "capture",
             focus: opts.finding.clone(),
         },
@@ -1037,17 +1071,51 @@ fn run_diff(
     if let Value::Object(m) = g.json.clone() {
         body.extend(m);
     }
+    if let Some(b) = blind
+        && let Some(reasons) = body.get_mut("reasons").and_then(Value::as_array_mut)
+    {
+        reasons.push(json!(b.sentence()));
+    }
     body.insert("tied".into(), json!(tied_ids));
     if let Some(a) = growth::ambiguous_json(&ambiguous) {
         body.insert("ambiguous".into(), a);
     }
-    let needed = if !g.pass && stood_still {
+    // The captures' own work: "take captures that differ by a factor of two" is advice only when
+    // they do not already.
+    let ratio = xs
+        .as_ref()
+        .and_then(|x| Some(x.last()? / x.first()?))
+        .filter(|r| r.is_finite());
+    let differ = ratio.filter(|r| *r >= 2.0);
+    let seen = match &blind_check {
+        shim_blind::Check::Clear => {
+            " (the process's own readings were compared: nothing they measured rose past what the shim shows)"
+        }
+        _ => "",
+    };
+    let needed = if let (Some(b), false) = (blind, g.pass) {
         format!(
-            "no stack's live bytes grow at every step; a stack of a constant block count grew overall: {} (take captures whose work differs by a factor of two or more; a Rust harness's `--capture alloc` already does, 1, 2, 4 and 8 times its step; then `dla summarize` with all dump files)",
-            rule::STOOD_STILL_NEEDED
+            "no stack's live bytes grow at every step, and the capture is blind ({}): {}",
+            b.sentence(),
+            b.needed()
         )
+    } else if !g.pass && stood_still {
+        match differ {
+            Some(r) => format!(
+                "no stack's live bytes grow at every step; a stack of a constant block count grew overall but stood still between two dumps: a buffer that is resized is flat between resizes, and these captures already differ in work by a factor of {r:.0}, so more captures of the same kind will not settle it; `dla alloc-test <H> --finding <F>` reads the process's own series{seen}"
+            ),
+            None => format!(
+                "no stack's live bytes grow at every step; a stack of a constant block count grew overall: {} (take captures whose work differs by a factor of two or more; a Rust harness's `--capture alloc` already does, 1, 2, 4 and 8 times its step; then `dla summarize` with all dump files)",
+                rule::STOOD_STILL_NEEDED
+            ),
+        }
     } else if !g.pass {
-        "no stack's live bytes grow at every step: capture a point with more work and rerun with all dump files".to_owned()
+        match differ {
+            Some(r) => format!(
+                "no stack's live bytes grow at every step across captures whose work differs by a factor of {r:.0}: the stacks the capture saw do not grow with the work{seen}; that does not decide growth the process's own series measured (`dla alloc-test <H> --finding <F>` reads it)"
+            ),
+            None => "no stack's live bytes grow at every step: take captures whose work differs by a factor of two or more and rerun with all dump files".to_owned(),
+        }
     } else if let Some(f) = tied_ids.first() {
         format!(
             "a refuted non-leak sibling and a holder, then dla ledger confirm {f} --evidence {}",
@@ -1064,6 +1132,13 @@ fn run_diff(
         )
     };
     let mut needed = needed;
+    if let (Some(b), true) = (blind, g.pass) {
+        needed.push_str(&format!(
+            "; the capture is also blind to growth the process measured ({}): {}",
+            b.sentence(),
+            b.needed()
+        ));
+    }
     if !same_function.is_empty() {
         let mut ids: Vec<String> = Vec::new();
         let mut next: Vec<String> = Vec::new();
@@ -1123,6 +1198,21 @@ impl Adapter for ShimAllocStacks {
     }
     fn run(&self, ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
         shim_run(ctx, Op::AllocStackDiff, inputs, opts)
+    }
+}
+
+/// The limitations a check against the process's own readings adds.
+fn blind_limitations(check: &shim_blind::Check) -> Vec<String> {
+    match check {
+        shim_blind::Check::Blind(b) => vec![b.sentence()],
+        shim_blind::Check::Unchecked { peak_hint } => {
+            let mut v = vec![shim_blind::UNCHECKED.to_owned()];
+            if *peak_hint {
+                v.push(shim_blind::PEAK_HINT.to_owned());
+            }
+            v
+        }
+        shim_blind::Check::Clear => Vec::new(),
     }
 }
 
