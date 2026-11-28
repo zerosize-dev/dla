@@ -4162,3 +4162,37 @@ unattended run at a time and no builder beside it.
 - Deleted /root/dla-real/r10-fastrace and r9-fastrace (keeps exist; r10-vbase is the replay base). 1.5 GB free.
 - Next: CI green -> commit-snapshot-tree.sh 33aea7c msg-51; push main+dev; preview.18; release; rig; next real run.
   Disk blocks heavy set B runs (micrometer Gradle cache 630 MB + builds): target/debug 10 GB only the owner can delete.
+
+## 2026-11-28 13:26 round Z on main, preview.18 published, b2-crypto started
+- CI 33aea7c run 46144275199: 15/15 green. Round Z COMMITTED 6702cfb on main (message 51); Version 0.9.0-preview.18
+  92fc0d6; main + dev pushed. Release run 46149163298 success: v0.9.0-preview.18, 11 assets, musl sha bcc07a4d... ok.
+  Rig: bin/dla .18 (dla.prev .17); plugin = git archive 92fc0d6 (diff: plugin.json, verifier.md, stages.md).
+- Freed disk: u119/mcp-try, u119/jni-try, u107/otel-try (trial copies), bin-z, plugin-z: 2.0 GB free.
+- b2-crypto (set B, Go, BLIND: do not read answer-key section 4 until set B ends) STARTED 13:26 pid 24871, alone.
+  Waiter: wait-run.sh b2-crypto 7000 (re-arm if it times out). Keep files after. BLIND RULE: answer-key section 4
+  (and 2, 8, 10, 5) is NOT read until the whole second blind round ends; record the report's findings now, grade later.
+
+## 2026-11-28 13:50 b2-crypto ABORTED by the model at 11 min (ungraded: blind)
+- b2-crypto (preview.18, Go, set B): 689 s, INCOMPLETE (14 open), no leak confirmed; 29 of 78 ranked candidates
+  targeted in 12 harnesses (16 harness runs, 35 series, 1 capture), 168 of 180 min unspent. The model ran
+  `dla run abort --blocker tool --reason "Each queue batch needs a hand-written driver; ... Stopped without finishing
+  the queue."` and then wrote that "tool" was a stretch. Accepted because BLOCKER_CUES has "without". No harness
+  failed (all attempts ran, exit 0). Earlier aborts: r5-otel-go (effort: "139 candidates not targeted"), r5-logstash
+  (legit: gate cannot be met truthfully). Not graded vs key section 4 (blind). Kept b2-crypto-keep (10 MB), run dir deleted.
+- Round AA (brief wip-notes/aa-brief.md, workflow wf_27571434-62f / task wtl54tv9h): abort with tool/build/
+  environment/privilege while work is open needs --evidence of a failure the run recorded (H<n> failed attempt or
+  non-zero exit; checklist item with a missing/refused answer); code blocker-not-recorded; drop cue "without".
+- Disk: deleted target/dla-bench-toolchains (497 MB, re-downloadable) during b2-crypto.
+
+## 2026-11-28 14:45 round AA built and checked; snapshot with CI
+- Workflow wf_27571434-62f: builder + 2 reviewers + verify + fix: 7 findings confirmed and fixed. I then shortened the
+  Stop hook abort offer (" Only a recorded failure ends it: <ABORT_BLOCKER_COMMAND>.") because the 1000-byte hook text
+  clipped the queue's next batch (queue test the_stop_hook_leads_with_the_queue_item); changed the fixer's two hook
+  asserts (user command, evidence phrase) to the final design.
+- Real replay (u183/proj from b2-crypto-keep, state set active): the b2-crypto abort -> blocker-not-recorded ("the 12
+  harness attempts of this run all ran", next command dla harness gen --lang go --driver --next); --evidence H3 refused.
+- My checks: fmt ok, clippy dla-core+dla-cli clean; gate_hooks 65, queue 16, skill_text 34, dla-cli bin 415,
+  abort_evidence 12, abort_verify 5, gate_flow 13, gate_harness 26, grown_chain 24, keep_going 31, run_stop 3,
+  workload_runtime 8, trigger_items 14: all pass.
+- Disk: micrometer-try gradle+project deleted (630 MB; refill with its build.sh/warm.sh, task 128). ~1.1 GB free.
+- Commit message wip-notes/commit-message-52.txt. Next: CI green -> main, preview.19, release, rig, rerun crypto.

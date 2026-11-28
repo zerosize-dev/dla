@@ -130,6 +130,9 @@ pub mod codes {
     pub const TIME_LEFT: &str = "time-left";
     /// `dla run abort` without a blocker while budget is left and the run can still measure.
     pub const BUDGET_LEFT: &str = "budget-left";
+    /// `dla run abort --blocker tool|build|environment|privilege` while budget is left and work
+    /// is open, with no `--evidence` that names a failure this run recorded.
+    pub const BLOCKER_NOT_RECORDED: &str = "blocker-not-recorded";
     /// A finding a passed growth column points at was closed without an alloc-test bound to it.
     pub const GROWTH_NOT_MEASURED: &str = "growth-not-measured";
     /// The open item of a heap residual above its threshold was closed unresolved while its

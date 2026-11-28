@@ -1408,3 +1408,27 @@ fn the_texts_say_an_abort_needs_a_blocker_while_budget_is_left_and_keeps_the_ver
         "SKILL.md still offers a plain abort"
     );
 }
+
+#[test]
+fn every_reference_that_prints_an_abort_on_a_blocker_names_its_evidence() {
+    let refs = root().join("skills/detect-leak-anywhere/references");
+    for file in ["recovery.md", "stages.md"] {
+        let text = fs::read_to_string(refs.join(file)).unwrap();
+        assert!(
+            text.contains("--evidence"),
+            "{file} never says the blocker needs --evidence"
+        );
+    }
+    let recovery = fs::read_to_string(refs.join("recovery.md")).unwrap();
+    assert!(
+        recovery.contains(
+            "--blocker environment --reason \"attach failed: <why>\" --evidence intake.workload"
+        ),
+        "the attach abort carries its evidence"
+    );
+    let stages = fs::read_to_string(refs.join("stages.md")).unwrap();
+    assert!(
+        stages.contains("`blocker-not-recorded`"),
+        "stages.md names the refusal"
+    );
+}

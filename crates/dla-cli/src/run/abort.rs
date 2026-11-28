@@ -32,6 +32,10 @@ pub struct AbortArgs {
     /// The code of the refusal the run cannot satisfy (with `--blocker refusal`).
     #[arg(long, value_name = "CODE")]
     code: Option<String>,
+    /// The harness (`H<n>`) or checklist item of this run that recorded the failure, with
+    /// `--blocker tool|build|environment|privilege` while budget is left and work is open.
+    #[arg(long, value_name = "HARNESS_OR_ITEM")]
+    evidence: Option<String>,
 }
 
 /// What `dla run abort` prints about the run it ended.
@@ -330,46 +334,67 @@ pub fn run(ctx: &Ctx, project: &Path, a: AbortArgs) -> Res<Value> {
             format!("dla --run {} run abort", ctx.run_id),
         ));
     }
-    // Budget left and work open: an abort needs a blocker the run cannot pass.
-    let blocker = match a.blocker.as_deref() {
+    // Budget left and work open: an abort needs a blocker the run cannot pass, and a blocker that
+    // something fails needs a failure the run recorded.
+    let kind = a.blocker.as_deref();
+    let needs_record =
+        kind.is_some_and(|k| abort_rule::EVIDENCE_KINDS.contains(&k)) && a.code.is_none();
+    // A run that cannot be loaded has no work to point at: the abort goes on to its own checks.
+    let view = RunView::load(&ctx.run_dir).ok();
+    let open = view
+        .as_ref()
+        .and_then(|view| abort_rule::open_work(view, &ctx.run_dir));
+    if let (true, Some(view), Some(open), Some(kind)) = (needs_record, &view, &open, kind) {
+        abort_rule::check_evidence(view, &ctx.run_dir, kind, a.evidence.as_deref(), open).map_err(
+            |(message, fix)| {
+                Failure::refuse(
+                    core_codes::BLOCKER_NOT_RECORDED,
+                    message,
+                    "a failure this run recorded, named with --evidence",
+                    fix,
+                )
+            },
+        )?;
+    }
+    let blocker = match kind {
         Some(kind) => Some(
-            abort_rule::check_blocker(kind, a.reason.as_deref(), a.code.as_deref()).map_err(
-                |(code, message, fix)| {
-                    Failure::refuse(
-                        code,
-                        message,
-                        "a blocker of the run, with the reason that names it",
-                        fix,
-                    )
-                },
-            )?,
+            abort_rule::check_blocker(
+                kind,
+                a.reason.as_deref(),
+                a.code.as_deref(),
+                a.evidence.as_deref(),
+            )
+            .map_err(|(code, message, fix)| {
+                Failure::refuse(
+                    code,
+                    message,
+                    "a blocker of the run, with the reason that names it",
+                    fix,
+                )
+            })?,
         ),
         None => None,
     };
-    if blocker.as_ref().is_none_or(|b| b.kind != "user") {
-        // A run that cannot be loaded has no work to point at: the abort goes on to its own checks.
-        if blocker.is_none()
-            && let Some(open) = RunView::load(&ctx.run_dir)
-                .ok()
-                .and_then(|view| abort_rule::open_work(&view, &ctx.run_dir))
-        {
-            return Err(Failure::refuse(
-                core_codes::BUDGET_LEFT,
-                format!(
-                    "{} of {} budget minutes remain and work is open ({}); an abort is no way out while the run can still measure",
-                    open.left,
-                    open.total,
-                    open.describe()
-                ),
-                "the open work done, or a blocker the run cannot pass",
-                format!(
-                    "{}   or   {}   or   {}",
-                    open.first,
-                    abort_rule::ABORT_BLOCKER_COMMAND,
-                    abort_rule::ABORT_REFUSAL_COMMAND
-                ),
-            ));
-        }
+    if blocker.is_none()
+        && let Some(open) = open
+    {
+        return Err(Failure::refuse(
+            core_codes::BUDGET_LEFT,
+            format!(
+                "{} of {} budget minutes remain and work is open ({}); an abort is no way out while the run can still measure",
+                open.left,
+                open.total,
+                open.describe()
+            ),
+            "the open work done, or a blocker the run cannot pass",
+            format!(
+                "{}   or   {}   or   {}   or   {}",
+                open.first,
+                abort_rule::ABORT_BLOCKER_COMMAND,
+                abort_rule::ABORT_USER_COMMAND,
+                abort_rule::ABORT_REFUSAL_COMMAND
+            ),
+        ));
     }
     let stopped = stop_processes(ctx, project, None, "abort")?;
     let given = match &blocker {
@@ -455,6 +480,8 @@ mod tests {
             } else {
                 let fill = if name.starts_with("refusal code") {
                     "time-left"
+                } else if name.starts_with("harness id") {
+                    "H1"
                 } else {
                     "the go toolchain is not installed"
                 };
@@ -494,19 +521,25 @@ mod tests {
     #[test]
     fn every_fix_of_a_failed_blocker_check_runs_as_printed() {
         let reason = Some("the capture needs a privilege the run does not have");
-        let cases: [(&str, Option<&str>, Option<&str>); 8] = [
-            ("sleepy", None, None),
-            ("sleepy", reason, Some("time-left")),
-            ("tool", reason, Some("time-left")),
-            ("user", None, Some("time-left")),
-            ("refusal", reason, None),
-            ("refusal", reason, Some("Not A Code")),
-            ("tool", Some("no go"), None),
-            ("refusal", Some("no go"), Some("time-left")),
+        type Case<'a> = (&'a str, Option<&'a str>, Option<&'a str>, Option<&'a str>);
+        let cases: [Case; 12] = [
+            ("sleepy", None, None, None),
+            ("sleepy", reason, Some("time-left"), None),
+            ("tool", reason, Some("time-left"), None),
+            ("build", reason, Some("time-left"), Some("H1")),
+            ("user", None, Some("time-left"), None),
+            ("user", reason, None, Some("H1")),
+            ("refusal", reason, None, None),
+            ("refusal", reason, Some("Not A Code"), None),
+            ("refusal", reason, Some("time-left"), Some("H1")),
+            ("tool", Some("no go"), None, None),
+            ("environment", Some("no go"), None, Some("H1")),
+            ("refusal", Some("no go"), Some("time-left"), None),
         ];
-        for (kind, reason, code) in cases {
-            let (_, _, fix) = abort_rule::check_blocker(kind, reason, code)
-                .expect_err(&format!("{kind} {reason:?} {code:?} is refused"));
+        for (kind, reason, code, evidence) in cases {
+            let (_, _, fix) = abort_rule::check_blocker(kind, reason, code, evidence).expect_err(
+                &format!("{kind} {reason:?} {code:?} {evidence:?} is refused"),
+            );
             let mut offered: Vec<String> = Vec::new();
             for command in fix.split("   or   ") {
                 assert!(
@@ -523,8 +556,13 @@ mod tests {
                     };
                     let blocker = a.blocker.as_deref().expect("a blocker");
                     assert!(
-                        abort_rule::check_blocker(blocker, a.reason.as_deref(), a.code.as_deref())
-                            .is_ok(),
+                        abort_rule::check_blocker(
+                            blocker,
+                            a.reason.as_deref(),
+                            a.code.as_deref(),
+                            a.evidence.as_deref()
+                        )
+                        .is_ok(),
                         "{kind}: the fix is refused again: {command}"
                     );
                     offered.push(blocker.to_owned());
@@ -541,6 +579,41 @@ mod tests {
         }
     }
 
+    /// The fix of a `blocker-not-recorded` refusal is the queue's next command and whole abort
+    /// commands that run as printed once filled in: the blocker kinds need the evidence the
+    /// refusal asks for, and the refused abort is not offered back unchanged.
+    #[test]
+    fn the_fix_of_a_blocker_not_recorded_refusal_runs_as_printed() {
+        let first = "dla harness gen --lang python --driver --next";
+        let fix = abort_rule::evidence_refusal_fix(first);
+        let mut parts = fix.split("   or   ");
+        assert_eq!(parts.next(), Some(first));
+        let mut kinds = Vec::new();
+        for command in parts {
+            assert!(command.starts_with("dla run abort "), "{command}");
+            assert!(command.contains(" --evidence <harness id"), "{command}");
+            for words in filled(command) {
+                let cli =
+                    crate::Cli::try_parse_from(&words).unwrap_or_else(|e| panic!("{command}\n{e}"));
+                let crate::Command::Run(crate::run::RunCmd::Abort(a)) = cli.command else {
+                    panic!("not `dla run abort`: {command}");
+                };
+                assert_eq!(a.evidence.as_deref(), Some("H1"), "{command}");
+                let kind = a.blocker.as_deref().expect("a blocker");
+                abort_rule::check_blocker(
+                    kind,
+                    a.reason.as_deref(),
+                    a.code.as_deref(),
+                    a.evidence.as_deref(),
+                )
+                .unwrap_or_else(|e| panic!("refused as printed: {command}\n{e:?}"));
+                kinds.push(kind.to_owned());
+            }
+        }
+        kinds.sort();
+        assert_eq!(kinds, ["build", "environment", "privilege", "tool"]);
+    }
+
     /// Every command the `budget-left` refusal and the Stop hook print for ending a run on a
     /// blocker runs as printed for every choice of the blocker: the argument parser accepts it
     /// and `check_blocker` accepts its arguments.
@@ -549,8 +622,9 @@ mod tests {
         let hook = crate::gate_hooks::abort_offer(None);
         assert!(crate::gate_hooks::abort_offer(Some("w")).is_empty());
         let refusal_fix = format!(
-            "dla ledger add   or   {}   or   {}",
+            "dla ledger add   or   {}   or   {}   or   {}",
             abort_rule::ABORT_BLOCKER_COMMAND,
+            abort_rule::ABORT_USER_COMMAND,
             abort_rule::ABORT_REFUSAL_COMMAND
         );
         let mut seen: Vec<String> = Vec::new();
@@ -575,8 +649,13 @@ mod tests {
                         panic!("not `dla run abort`: {c}");
                     };
                     let blocker = a.blocker.as_deref().expect("a blocker");
-                    abort_rule::check_blocker(blocker, a.reason.as_deref(), a.code.as_deref())
-                        .unwrap_or_else(|e| panic!("refused as printed: {c}\n{e:?}"));
+                    abort_rule::check_blocker(
+                        blocker,
+                        a.reason.as_deref(),
+                        a.code.as_deref(),
+                        a.evidence.as_deref(),
+                    )
+                    .unwrap_or_else(|e| panic!("refused as printed: {c}\n{e:?}"));
                     seen.push(blocker.to_owned());
                 }
             }

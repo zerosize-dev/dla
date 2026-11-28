@@ -1667,10 +1667,17 @@ fn an_open_queue_with_budget_over_the_floor_is_not_given_up_by_four_stop_attempt
         assert!(reason.contains(" budget minutes remain and the python queue is open. Run its next batch (dla harness gen --lang python --driver --next)"), "{reason}");
         // The next measurement first; the abort only for a blocker, never a plain one.
         assert!(
-            reason.contains("dla run abort --blocker <user|tool|build|environment|privilege> --reason \"<what blocks the run>\""),
+            reason.contains("dla run abort --blocker <tool|build|environment|privilege> --reason \"<what blocks the run>\" --evidence <harness id or item>"),
             "{reason}"
         );
         assert!(!reason.contains("dla run abort --reason"), "{reason}");
+        // Only a recorded failure is offered here: the hook text has 1000 bytes and the queue's
+        // next batch must fit. The user's stop is offered by the `budget-left` refusal.
+        assert!(
+            reason.contains("Only a recorded failure ends it"),
+            "{reason}"
+        );
+        assert!(!reason.contains("dla run abort --blocker user"), "{reason}");
         assert!(
             reason.find("Run its next batch").unwrap() < reason.find("dla run abort").unwrap(),
             "{reason}"
@@ -1975,7 +1982,7 @@ fn growth_measured_and_not_decided_with_budget_over_the_floor_is_not_given_up_by
             "{reason}"
         );
         assert!(
-            reason.contains("dla run abort --blocker <user|tool|build|environment|privilege> --reason \"<what blocks the run>\"")
+            reason.contains("dla run abort --blocker <tool|build|environment|privilege> --reason \"<what blocks the run>\" --evidence <harness id or item>")
                 && !reason.contains("dla run abort --reason"),
             "{reason}"
         );
@@ -2166,7 +2173,7 @@ fn a_plain_abort_with_an_open_queue_and_budget_left_is_refused_and_names_the_nex
     );
     let fix = e["fix"].as_str().unwrap();
     assert!(
-        fix.starts_with("dla harness gen --lang python --driver --next   or   dla run abort --blocker <user|tool|build|environment|privilege> --reason \"<what blocks the run>\"   or   dla run abort --blocker refusal --code <refusal code> --reason "),
+        fix.starts_with("dla harness gen --lang python --driver --next   or   dla run abort --blocker <tool|build|environment|privilege> --reason \"<what blocks the run>\" --evidence <harness id or item>   or   dla run abort --blocker user   or   dla run abort --blocker refusal --code <refusal code> --reason "),
         "{fix}"
     );
     // A reason alone does not make it pass, whatever it says.
@@ -2195,14 +2202,60 @@ fn an_abort_for_the_user_passes_with_an_open_queue() {
     );
 }
 
+/// Records that a tool is missing, as an answer to the build question: a failure of the run
+/// that closes no queue.
+fn record_missing_tool(p: &P) {
+    p.ok(&[
+        "ledger",
+        "resolve",
+        "intake.build",
+        "--status",
+        "unresolved",
+        "--reason",
+        "tool_missing",
+        "--remedy",
+        "install the go toolchain",
+    ]);
+}
+
+/// A harness H1 of the run with an attempt record that has `outcome` (and `reason` when it
+/// failed), written as `dla harness run` writes it. It closes nothing in the queue.
+fn harness_attempt(p: &P, outcome: dla_core::harness::AttemptOutcome, reason: Option<&str>) {
+    let run_dir = p.run_dir();
+    let m: dla_core::HarnessManifest = serde_json::from_value(json!({
+        "id": "H1", "runtime": "python", "mode": "driver",
+        "scratch": "x", "run": {"argv": ["x"], "cwd": "."},
+        "warmup": 1, "iterations": 8, "step": 1, "key_modes": ["fresh"],
+        "tools": [dla_core::harness::PYTEST_TOOL],
+        "agent": "driver-python", "timeout_secs": 60,
+    }))
+    .unwrap();
+    m.save(&run_dir).unwrap();
+    dla_core::harness::HarnessAttempt {
+        harness: "H1".into(),
+        started_at: dla_core::harness::HarnessAttempt::now(),
+        finished_at: dla_core::harness::HarnessAttempt::now(),
+        outcome,
+        reason: reason.map(Into::into),
+        message: None,
+    }
+    .save(&run_dir)
+    .unwrap();
+}
+
+/// The reason an unattended run gave for stopping early: effort, not a blocker.
+const EFFORT_REASON: &str = "Each queue batch needs a hand-written driver; 12 batches ran (25 of 78 candidates targeted, 3 caches measured), 61 candidates remain and missed targets keep re-queueing. Stopped without finishing the queue.";
+
 #[test]
 fn a_blocker_of_the_environment_needs_a_reason_that_names_it() {
     let p = queue_project();
+    record_missing_tool(&p);
     // Empty reason, no reason, too short, a count of the work left: refused, nothing ended.
     for args in [
         &["--blocker", "tool"][..],
         &["--blocker", "tool", "--reason", ""][..],
         &["--blocker", "build", "--reason", "stuck"][..],
+        &["--blocker", "tool", "--reason", EFFORT_REASON][..],
         &[
             "--blocker",
             "tool",
@@ -2210,7 +2263,9 @@ fn a_blocker_of_the_environment_needs_a_reason_that_names_it() {
             "unattended run: 4 leak hypotheses confirmed plus 2 SDK caches measured; 139 ranked candidates not targeted (each harness batch settles 2-3)",
         ][..],
     ] {
-        let e = refused_with(&p, args, "missing-argument");
+        let mut with = args.to_vec();
+        with.extend(["--evidence", "intake.build"]);
+        let e = refused_with(&p, &with, "missing-argument");
         assert!(e["message"].as_str().unwrap().contains("--reason"), "{e}");
     }
     // An unknown kind, and a code with a kind that takes none.
@@ -2231,7 +2286,280 @@ fn a_blocker_of_the_environment_needs_a_reason_that_names_it() {
         ],
         "invalid-value",
     );
-    // A blocker that names what is in the way passes.
+    // A blocker that names what is in the way, and the failure the run recorded, passes.
+    let (exit, v) = abort_out(
+        &p,
+        &[
+            "--blocker",
+            "tool",
+            "--evidence",
+            "intake.build",
+            "--reason",
+            "the go toolchain is not installed",
+        ],
+    );
+    assert_eq!(exit, 0, "{v}");
+    assert_eq!(
+        v["reason"],
+        "aborted with blocker tool (evidence intake.build): the go toolchain is not installed"
+    );
+}
+
+#[test]
+fn a_blocker_with_no_evidence_is_refused_as_not_recorded_and_the_run_stays_active() {
+    let p = queue_project();
+    harness_attempt(&p, dla_core::harness::AttemptOutcome::Ran, None);
+    for kind in ["tool", "build", "environment", "privilege"] {
+        let e = refused_with(
+            &p,
+            &["--blocker", kind, "--reason", EFFORT_REASON],
+            "blocker-not-recorded",
+        );
+        let message = e["message"].as_str().unwrap();
+        assert!(
+            message.contains(&format!(
+                "No command of this run failed for want of {} {kind}",
+                if kind == "environment" { "an" } else { "a" }
+            )),
+            "{message}"
+        );
+        assert!(
+            message.contains("the 1 harness attempts of this run all ran"),
+            "{message}"
+        );
+        assert!(message.contains("not a blocker"), "{message}");
+        assert!(
+            message.contains("dla harness gen --lang python --driver --next"),
+            "{message}"
+        );
+        assert!(message.contains("--evidence"), "{message}");
+    }
+    // Names nothing of the run, or an item or harness that recorded no failure.
+    for evidence in ["H7", "nonsense", "H1", "intake.build", "intake.target"] {
+        refused_with(
+            &p,
+            &[
+                "--blocker",
+                "tool",
+                "--evidence",
+                evidence,
+                "--reason",
+                "the go toolchain is not installed",
+            ],
+            "blocker-not-recorded",
+        );
+    }
+}
+
+/// The abort commands of a refusal's fix, filled in the way a reader would, with `evidence`.
+fn fix_abort_args(fix: &str, kind: &str, evidence: &str) -> Vec<String> {
+    let command = fix
+        .split("   or   ")
+        .find(|c| c.starts_with("dla run abort ") && c.contains("--evidence"))
+        .expect("a printed abort with evidence");
+    let filled = command
+        .replace("<tool|build|environment|privilege>", kind)
+        .replace("<what blocks the run>", "the go toolchain is not installed")
+        .replace("<harness id or item>", evidence);
+    let mut words = Vec::new();
+    let (mut word, mut quoted) = (String::new(), false);
+    for c in filled.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            c if c.is_whitespace() && !quoted => {
+                if !word.is_empty() {
+                    words.push(std::mem::take(&mut word));
+                }
+            }
+            c => word.push(c),
+        }
+    }
+    words.push(word);
+    words.split_off(3)
+}
+
+#[test]
+fn the_fix_of_a_blocker_not_recorded_refusal_runs_as_printed() {
+    let p = queue_project();
+    harness_attempt(
+        &p,
+        dla_core::harness::AttemptOutcome::Failed,
+        Some("build_fails"),
+    );
+    let e = refused_with(
+        &p,
+        &[
+            "--blocker",
+            "tool",
+            "--reason",
+            "the go toolchain is not installed",
+        ],
+        "blocker-not-recorded",
+    );
+    assert_eq!(
+        e["fix"].as_str().unwrap().split("   or   ").next().unwrap(),
+        "dla harness gen --lang python --driver --next"
+    );
+    let fix = e["fix"].as_str().unwrap().to_owned();
+    // Filled in with the failed harness, the printed abort is accepted as it stands.
+    let args = fix_abort_args(&fix, "environment", "H1");
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let (exit, v) = abort_out(&p, &args);
+    assert_eq!(exit, 0, "{args:?}: {v}");
+    assert_eq!(v["status"], "aborted");
+}
+
+#[test]
+fn a_harness_attempt_that_failed_or_a_run_record_with_a_bad_exit_is_evidence() {
+    use dla_core::harness::AttemptOutcome;
+    let args = |evidence: &'static str| {
+        [
+            "--blocker",
+            "build",
+            "--evidence",
+            evidence,
+            "--reason",
+            "the harness driver does not build",
+        ]
+    };
+    // The attempt failed: accepted.
+    let p = queue_project();
+    harness_attempt(&p, AttemptOutcome::Failed, Some("build_fails"));
+    let (exit, v) = abort_out(&p, &args("H1"));
+    assert_eq!(exit, 0, "{v}");
+    assert_eq!(
+        v["reason"],
+        "aborted with blocker build (evidence H1): the harness driver does not build"
+    );
+    // The attempt ran, but its latest run record has an exit with a non-zero code: accepted.
+    let q = queue_project();
+    harness_attempt(&q, AttemptOutcome::Ran, None);
+    refused_with(&q, &args("H1"), "blocker-not-recorded");
+    // One bad exit among good ones still measured something: refused.
+    fs::write(
+        q.run_dir().join("harness/H1/run-S1.json"),
+        json!({"series": ["S1"], "exits": [{"label": "p1", "code": 0}, {"label": "p2", "code": 2}]})
+            .to_string(),
+    )
+    .unwrap();
+    refused_with(&q, &args("H1"), "blocker-not-recorded");
+    fs::write(
+        q.run_dir().join("harness/H1/run-S1.json"),
+        json!({"series": ["S1"], "exits": [{"label": "p1", "code": 1}, {"label": "p2", "code": 2}]})
+            .to_string(),
+    )
+    .unwrap();
+    let (exit, v) = abort_out(&q, &args("H1"));
+    assert_eq!(exit, 0, "{v}");
+    // A run record with every exit 0 and no failed build: still refused.
+    let r = queue_project();
+    harness_attempt(&r, AttemptOutcome::Ran, None);
+    fs::write(
+        r.run_dir().join("harness/H1/run-S1.json"),
+        json!({"series": ["S1"], "exits": [{"label": "p1", "code": 0}], "limitations": []})
+            .to_string(),
+    )
+    .unwrap();
+    refused_with(&r, &args("H1"), "blocker-not-recorded");
+    // A limitation that names a failed build: accepted.
+    fs::write(
+        r.run_dir().join("harness/H1/run-S1.json"),
+        json!({"series": ["S1"], "exits": [], "limitations": ["the instrumented build for p1 failed (log x)"]})
+            .to_string(),
+    )
+    .unwrap();
+    let (exit, v) = abort_out(&r, &args("H1"));
+    assert_eq!(exit, 0, "{v}");
+}
+
+#[test]
+fn a_checklist_item_that_names_something_missing_is_evidence_and_an_answered_one_is_not() {
+    let p = queue_project();
+    // The item is answered: no failure. Unanswered items name none either.
+    p.ok(&[
+        "ledger",
+        "resolve",
+        "intake.build",
+        "--status",
+        "answered",
+        "--evidence",
+        "E1",
+    ]);
+    let args = |item: &'static str| {
+        [
+            "--blocker",
+            "environment",
+            "--evidence",
+            item,
+            "--reason",
+            "the service the workload needs is not reachable",
+        ]
+    };
+    refused_with(&p, &args("intake.build"), "blocker-not-recorded");
+    refused_with(&p, &args("intake.scope"), "blocker-not-recorded");
+    // A reason that is no failure (the time budget) names nothing missing or refused.
+    p.ok(&[
+        "ledger",
+        "resolve",
+        "intake.scope",
+        "--status",
+        "unresolved",
+        "--reason",
+        "not_exercised",
+        "--remedy",
+        "exercise it",
+    ]);
+    refused_with(&p, &args("intake.scope"), "blocker-not-recorded");
+    // The build question is now answered as blocked by a missing tool.
+    record_missing_tool(&p);
+    let (exit, v) = abort_out(&p, &args("intake.build"));
+    assert_eq!(exit, 0, "{v}");
+    assert_eq!(v["status"], "aborted");
+}
+
+#[test]
+fn user_and_refusal_blockers_need_no_evidence_and_take_none() {
+    let p = queue_project();
+    let (exit, v) = abort_out(&p, &["--blocker", "user"]);
+    assert_eq!(exit, 0, "{v}");
+    let q = queue_project();
+    refused_with(
+        &q,
+        &["--blocker", "user", "--evidence", "H1"],
+        "invalid-value",
+    );
+    refused_with(
+        &q,
+        &[
+            "--blocker",
+            "refusal",
+            "--code",
+            "time-left",
+            "--evidence",
+            "H1",
+            "--reason",
+            "the capture needs a privilege the run does not have",
+        ],
+        "invalid-value",
+    );
+    let (exit, v) = abort_out(
+        &q,
+        &[
+            "--blocker",
+            "refusal",
+            "--code",
+            "time-left",
+            "--reason",
+            "the capture needs a privilege the run does not have",
+        ],
+    );
+    assert_eq!(exit, 0, "{v}");
+}
+
+#[test]
+fn under_the_floor_or_with_nothing_open_a_blocker_needs_no_evidence() {
+    let p = queue_project();
+    set_deadline(&p, 4);
     let (exit, v) = abort_out(
         &p,
         &[
@@ -2242,10 +2570,17 @@ fn a_blocker_of_the_environment_needs_a_reason_that_names_it() {
         ],
     );
     assert_eq!(exit, 0, "{v}");
-    assert_eq!(
-        v["reason"],
-        "aborted with blocker tool: the go toolchain is not installed"
+    let q = project("symptom");
+    let (exit, v) = abort_out(
+        &q,
+        &[
+            "--blocker",
+            "environment",
+            "--reason",
+            "the service the workload needs is not reachable",
+        ],
     );
+    assert_eq!(exit, 0, "{v}");
 }
 
 #[test]
@@ -2314,9 +2649,7 @@ fn a_plain_abort_with_an_undecided_growth_is_refused_and_names_its_first_command
     let fix = e["fix"].as_str().unwrap();
     assert!(fix.starts_with("dla "), "{fix}");
     assert!(
-        fix.contains(
-            "   or   dla run abort --blocker <user|tool|build|environment|privilege> --reason"
-        ),
+        fix.contains("   or   dla run abort --blocker <tool|build|environment|privilege> --reason"),
         "{fix}"
     );
     let (exit, v) = abort_out(&p, &["--blocker", "user"]);

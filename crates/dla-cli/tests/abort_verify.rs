@@ -360,7 +360,7 @@ fn the_fix_of_a_refused_blocker_is_printed_as_the_rule_returns_it() {
     for (args, fix) in [
         (
             vec!["run", "abort", "--blocker", "tool", "--code", "time-left"],
-            "dla run abort --blocker tool --reason \"<what blocks the run>\"",
+            "dla run abort --blocker tool --reason \"<what blocks the run>\" --evidence <harness id or item>",
         ),
         (
             vec![
@@ -375,7 +375,7 @@ fn the_fix_of_a_refused_blocker_is_printed_as_the_rule_returns_it() {
         ),
         (
             vec!["run", "abort", "--blocker", "sleepy"],
-            "dla run abort --blocker <user|tool|build|environment|privilege> --reason \"<what blocks the run>\"   or   dla run abort --blocker refusal --code <refusal code> --reason \"<what blocks the run>\"",
+            "dla run abort --blocker <tool|build|environment|privilege> --reason \"<what blocks the run>\" --evidence <harness id or item>   or   dla run abort --blocker user   or   dla run abort --blocker refusal --code <refusal code> --reason \"<what blocks the run>\"",
         ),
     ] {
         let (code, v) = r.json(&args);

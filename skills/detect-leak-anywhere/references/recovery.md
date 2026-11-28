@@ -25,9 +25,13 @@ ptrace refused, the tool exits non-zero), or the target exited.
   is above 0; memray needs to be importable by the target's own interpreter.
 - Record: `dla ledger resolve <F|O> --as unresolved --reason env_unavailable --remedy "<what to
   change on the machine, then rerun dla attach ...>"`; reason `privilege_declined` when the tier
-  was not consented. Then `dla run abort --blocker environment --reason "attach failed: <why>"` if the run is being abandoned
-  (the blocker is needed while budget is left and work is open):
-  it undoes what was attached and never kills the target.
+  was not consented. An unresolved F or O is not evidence for an abort, so also record the failure on
+  the checklist: `dla ledger resolve intake.workload --status unresolved --reason env_unavailable --remedy "<text>"`.
+  Then, if the run is being abandoned: `dla run abort --blocker environment --reason "attach failed: <why>" --evidence intake.workload`
+  (while budget is left and work is open, tool, build, environment and privilege need `--evidence`: a failed
+  harness `H<n>` or a checklist item answered unresolved for `env_unavailable`, `tool_missing`, `build_fails`
+  or `privilege_declined`; a user who asked to stop needs `--blocker user` and no evidence).
+  The abort undoes what was attached and never kills the target.
 
 ## Insufficient resources
 
@@ -100,7 +104,12 @@ through: the block names the queue's next command, and `dla run abort` is refuse
 open unless `--blocker <kind> --reason "<what blocks the run>"` names something the run cannot pass: `user` (the
 user asked to stop), `tool`, `build`, `environment` or `privilege` (with a reason that names the missing tool, the
 build that does not compile, the environment or permission), or `refusal` with `--code <the refusal's code>`. A
-count of work left is no reason. An abort does not skip the verifier: its output lists the confirmed findings with
+count of work left is no reason, and a long queue is the work of the run: each batch is one driver, and a queue that
+needs many batches is not a blocker. For `tool`, `build`, `environment` and `privilege` the blocker must be a failure
+the run recorded, named with `--evidence <H<n>|checklist item>`: a harness whose latest attempt failed or whose latest
+run record has a non-zero exit or a failed build, or a checklist item answered unresolved for a missing or refused
+thing. Without it the abort is refused (`blocker-not-recorded`); run the command that needs the tool, so the failure
+is recorded, then abort with `--evidence`. At the floor, or with nothing open, no blocker and no evidence is needed. An abort does not skip the verifier: its output lists the confirmed findings with
 no verification record and the commands for each, the Stop hook of the aborted run blocks the first two stop
 attempts while one is unverified and allows the third (with a note), and the report marks it "not verified: the
 run was aborted before the verifier ran". With no queue open, growth that was measured and not decided holds the stop the same way,

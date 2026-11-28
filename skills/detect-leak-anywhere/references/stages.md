@@ -51,7 +51,7 @@ intend to use those operations). Stages 1, 2, then:
   the artifact path.
 - A command that was cut or timed out (a `harness run` over its timeout): `dla run stop` stops the processes DLA started and undoes attaches (it never kills the target) and the run goes on; or run the command again,
   which stops what the earlier one left.
-- Interrupted or finished early for good: `dla run abort --reason "<why>"` does the same and ends the run: it is marked aborted, the gate and the queue count it as over and nothing more can be recorded in it that counts, except a verifier's record (`dla bundle F`, `dla ledger verify F`), which is still taken: the abort lists the confirmed findings still unverified and the Stop hook holds the stop for them. While budget is over the floor and a queue, an undecided growth or another measurement is open, the abort is refused (`budget-left`) unless `--blocker user|tool|build|environment|privilege|refusal` (a reason that names what blocks the run; `--code` for a refusal) is given. `dla run init` starts the next one.
+- Interrupted or finished early for good: `dla run abort --reason "<why>"` does the same and ends the run: it is marked aborted, the gate and the queue count it as over and nothing more can be recorded in it that counts, except a verifier's record (`dla bundle F`, `dla ledger verify F`), which is still taken: the abort lists the confirmed findings still unverified and the Stop hook holds the stop for them. While budget is over the floor and a queue, an undecided growth or another measurement is open, the abort is refused (`budget-left`) unless `--blocker user|tool|build|environment|privilege|refusal` (a reason that names what blocks the run; `--code` for a refusal; `--evidence <H<n>|checklist item>` for tool, build, environment and privilege, naming a failure the run recorded: refused `blocker-not-recorded` without it, and a long queue is the work of the run, not a blocker) is given. `dla run init` starts the next one.
 
 ### Artifact
 `dla run init --entry artifact --artifact <path>...` (paths relative to the project root, one flag
@@ -740,7 +740,7 @@ Stop when every remaining item has a reason and a remedy that a command cannot c
 or something only the user can supply) or the deadline has passed, then judge the newest report. There
 is no fixed number of rounds: ending with most of the budget unspent and entry points unexercised
 measured nothing. Never ask the user whether to continue while time is left. To stop early,
-`dla run abort --reason "<why>"` closes the run (with budget left and work open it needs `--blocker <kind>`, and the confirmed findings still go to the verifier).
+`dla run abort --reason "<why>"` closes the run (with budget left and work open it needs `--blocker <kind>`, and for tool, build, environment and privilege `--evidence <H<n>|checklist item>` naming a failure the run recorded, and the confirmed findings still go to the verifier).
 
 The final gate, `dla gate check` and `dla run status` count actions, not dependents: `N item(s) missing (and D more that wait on them)`. A line that stands for others says `(+K waiting on it: A, B, C, ...)`: the whole-process columns and residual rows that wait for one open item are that open item's line, the queue candidates are the queue's line. Work the list from the top: queue, findings whose column grew, triggers, open items, findings, the rest. The stored gate file keeps every item.
 

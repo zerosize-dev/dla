@@ -41,7 +41,7 @@ pub enum RunCmd {
     Dispatch(workers::DispatchArgs),
     /// Stop the processes the run started and undo what it attached; the run stays open and goes on. Use it for what a command that was cut (a timeout) left running.
     Stop(stop::StopArgs),
-    /// Ends the run for good: it is marked aborted and nothing more can be recorded in it that counts, except a verifier's record (to stop only what a cut command left, use `dla run stop`); it also stops the processes the run started and undoes what it attached (core only). While budget is left and a queue, an undecided growth or another measurement is open, it is refused (`budget-left`) unless `--blocker user|tool|build|environment|privilege|refusal` (with `--reason`, and `--code` for a refusal) names what stops the run.
+    /// Ends the run for good: it is marked aborted and nothing more can be recorded in it that counts, except a verifier's record (to stop only what a cut command left, use `dla run stop`); it also stops the processes the run started and undoes what it attached (core only). While budget is left and a queue, an undecided growth or another measurement is open, it is refused (`budget-left`) unless `--blocker user|tool|build|environment|privilege|refusal` (with `--reason`, `--code` for a refusal, and for tool, build, environment and privilege `--evidence <H<n>|checklist item>`: a harness or checklist item of this run that recorded the failure, else `blocker-not-recorded`) names what stops the run. A long queue is the work of the run, not a blocker.
     Abort(abort::AbortArgs),
     /// Record an audit line and seal the protected run files again after an out-of-band change (core only).
     Reseal(reseal::ResealArgs),

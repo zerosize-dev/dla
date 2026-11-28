@@ -880,7 +880,7 @@ pub(crate) fn abort_offer(worker: Option<&str>) -> String {
         String::new()
     } else {
         format!(
-            " Only a blocker the run cannot pass ends it: {}.",
+            " Only a recorded failure ends it: {}.",
             dla_core::abort_rule::ABORT_BLOCKER_COMMAND
         )
     }

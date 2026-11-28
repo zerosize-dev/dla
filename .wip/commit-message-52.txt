@@ -1,0 +1,20 @@
+An abort while work is open needs a failure the run recorded
+
+Three unattended runs on real libraries ended early through `dla run abort` while the budget was far
+over its floor and the measurement queue was open. The latest used 11 of 180 minutes and targeted 25 of
+78 ranked candidates; every harness attempt ran with exit 0, and the abort was accepted with
+`--blocker tool` and a reason that only said each batch needs a driver. The reason passed the text
+check because it said "stopped without finishing", and "without" counted as naming a blocker.
+
+- With the budget over its floor and work open, the blockers `tool`, `build`, `environment` and
+  `privilege` need `--evidence`: a harness whose latest attempt failed (not for time, unfilled hooks
+  or an interruption) or whose run record has only non-zero exits or a failed build, or a checklist
+  item whose latest answer is unresolved for a missing tool, a failed build, an unavailable environment
+  or a declined privilege. Without it the abort is refused (`blocker-not-recorded`): the refusal says
+  what it checked, that a queue that needs many batches is the work of the run, and the queue's next
+  command. `user` and `refusal` are unchanged, and at the floor or with nothing open nothing is needed.
+- "without" is no longer a blocker cue in the reason check.
+- The `budget-left` refusal, the Stop hook, the help text and the skill references print the abort
+  with `--evidence`. The Stop hook offers only that form, so the queue's next batch fits its text.
+- Replayed on the real run's records: its abort is refused, and so is evidence that names a harness
+  that ran.
