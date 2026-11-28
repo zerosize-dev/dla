@@ -1759,6 +1759,44 @@ fn bundle_of(ctx: &Ctx, finding: &FindingId, sha: &str) -> Res<()> {
     ))
 }
 
+/// Refuses `N-WARM` and `N-HWM` (the level stops) when an alloc-test on the finding measured a
+/// live heap column that favors leak and kept growing over the extra window, unless the
+/// mechanism text names that evidence. Any other label, or no such record, passes.
+fn refuse_verify_against_measurement(ledger: &dla_core::Ledger, a: &VerifyArgs) -> Res<()> {
+    if !matches!(a.label.as_str(), "N-WARM" | "N-HWM") {
+        return Ok(());
+    }
+    let growing =
+        dla_core::discriminator::live_heap_growth_continues(ledger.evidence(), &a.finding);
+    let Some(m) = growing
+        .iter()
+        .find(|m| !dla_core::discriminator::names_evidence(&a.mechanism, &m.evidence_id))
+    else {
+        return Ok(());
+    };
+    let num = |v: Option<f64>| v.map_or_else(|| "n/a".to_owned(), |x| format!("{x:.0}"));
+    Err(Failure::refuse(
+        core_codes::VERIFY_CONTRADICTS_MEASUREMENT,
+        format!(
+            "{} measured {} of {} still growing over its extra window (extra rise {} bytes, slope {} per unit, plateau verdict growth-continues), and {} says the level stops",
+            m.evidence_id,
+            m.column,
+            a.finding,
+            num(m.extra_rise),
+            num(m.extra_slope),
+            a.label
+        ),
+        format!(
+            "the line that bounds or empties the holder and why the extra window did not reach it, citing {} in --mechanism, or another reading",
+            m.evidence_id
+        ),
+        format!(
+            "dla ledger verify {} --site {} --holder {} --mechanism \"<the line that bounds the holder, why the extra window did not reach it ({})>\" --label <ID> --bundle {}",
+            a.finding, a.site, a.holder, m.evidence_id, a.bundle
+        ),
+    ))
+}
+
 /// Runs `dla ledger verify`.
 fn verify(ctx: &Ctx, data: Option<&PathBuf>, a: VerifyArgs) -> Res<Value> {
     if ctx.worker.is_some() {
@@ -1783,6 +1821,7 @@ fn verify(ctx: &Ctx, data: Option<&PathBuf>, a: VerifyArgs) -> Res<Value> {
     })?;
     bundle_of(ctx, &a.finding, &a.bundle)?;
     let mut ledger = open(ctx)?;
+    refuse_verify_against_measurement(&ledger, &a)?;
     let table = ledger_m6::archetype_table(data)?;
     // A verifier often names the line that adds to the holder; the finding records the
     // declaration and the writers the census found. A site in the same function as one of

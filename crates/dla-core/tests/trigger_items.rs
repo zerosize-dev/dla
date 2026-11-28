@@ -76,6 +76,28 @@ fn ran(dir: &Path, series: &str, h: &str, digest: &str, verdict: Verdict) {
     .unwrap();
 }
 
+/// A series `dla summarize` wrote from the captures of `h` (source kind `dump`) and its trend
+/// report with F1's verdict: no run of the harness wrote it, so it has no run record.
+fn captured(dir: &Path, series: &str, h: &str, verdict: Option<Verdict>) {
+    ran(dir, series, h, "cc", verdict.unwrap_or(Verdict::Grew));
+    let text = json!({
+        "id": series, "source": {"kind": "dump", "harness": h},
+        "axis": "n", "columns": [], "points": []
+    });
+    std::fs::write(dir.join(format!("series/{series}.json")), text.to_string()).unwrap();
+    std::fs::remove_file(
+        dir.join("harness")
+            .join(h)
+            .join(format!("run-{series}.json")),
+    )
+    .unwrap();
+    if verdict.is_none() {
+        let mut t = TrendReport::load_all(dir).pop().unwrap();
+        t.targets.clear();
+        t.save(dir).unwrap();
+    }
+}
+
 fn items(dir: &Path) -> Vec<dla_core::view::BlockingItem> {
     let view = RunView::load(dir).unwrap();
     status(&view)
@@ -336,4 +358,46 @@ fn a_refuted_or_unconfirmed_finding_is_not_asked() {
     harness(dir.path(), "H1", false);
     ran(dir.path(), "S1", "H1", "aa", Verdict::Grew);
     assert!(items(dir.path()).is_empty());
+}
+
+#[test]
+fn a_target_that_grew_in_a_capture_series_of_a_hook_driver_is_asked_for_its_trigger() {
+    let dir = run();
+    harness(dir.path(), "H1", false);
+    // A capture series with no verdict for F1 says nothing.
+    captured(dir.path(), "S1", "H1", None);
+    assert!(items(dir.path()).is_empty());
+    captured(dir.path(), "S1", "H1", Some(Verdict::Grew));
+    let it = items(dir.path());
+    assert_eq!(it.len(), 1, "{it:?}");
+    assert_eq!(it[0].id, "F1");
+    assert!(
+        it[0]
+            .fix
+            .starts_with("dla harness gen --lang go --driver --entry F1, fill the hooks"),
+        "{}",
+        it[0].fix
+    );
+    // At the floor of the budget no item is raised.
+    with_state(dir.path(), |st| {
+        st.budget.deadline = now_utc() + chrono::TimeDelta::seconds(100);
+    });
+    assert!(items(dir.path()).is_empty());
+}
+
+#[test]
+fn capture_series_of_entry_path_harnesses_are_no_runs_without_growth() {
+    let dir = run();
+    harness(dir.path(), "H1", false);
+    ran(dir.path(), "S1", "H1", "aa", Verdict::Grew);
+    // Two entry-path harnesses, each with only a capture series that says nothing of F1: they
+    // measured no holder, so the trigger is still unchecked and the item stays (two real runs
+    // without growth would end it).
+    harness(dir.path(), "H2", true);
+    captured(dir.path(), "S2", "H2", None);
+    harness(dir.path(), "H3", true);
+    captured(dir.path(), "S3", "H3", None);
+    let it = items(dir.path());
+    assert_eq!(it.len(), 1, "{it:?}");
+    assert_eq!(it[0].id, "F1");
 }

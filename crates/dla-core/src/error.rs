@@ -142,6 +142,10 @@ pub mod codes {
     /// An open item with rows of several series above their thresholds was resolved by a
     /// remedy that does not name each of those series.
     pub const REMEDY_MISSES_SERIES: &str = "remedy-misses-series";
+    /// `dla ledger verify` chose `N-WARM` or `N-HWM` (the level stops) for a finding whose
+    /// alloc-test measured its live heap column still growing in the extra window, and the
+    /// mechanism text does not name that evidence.
+    pub const VERIFY_CONTRADICTS_MEASUREMENT: &str = "verify-contradicts-measurement";
     /// A finding whose newest alloc-test favors leak was closed unresolved: it is confirmed or
     /// refuted, never closed.
     pub const LEAK_FAVORED: &str = "leak-favored";

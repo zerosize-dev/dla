@@ -215,6 +215,37 @@ fn an_entry_path_harness_that_grew_it_reproduces_the_trigger() {
 }
 
 #[test]
+fn a_capture_series_that_grew_it_takes_what_the_harness_varies_from_its_own_run() {
+    let run = Run::new(1);
+    run.harness("H1", Kind::Entry, &[1]);
+    // The harness's own run did not make F1 grow; its record says what it varies.
+    run.run(
+        "S1",
+        "H1",
+        "aa",
+        Some("new route names"),
+        Some(&[(1, Verdict::Constant)]),
+    );
+    // The series `dla summarize` wrote from its captures: no run record of its own, F1 grew.
+    run.run("S2", "H1", "bb", None, Some(&[(1, Verdict::Grew)]));
+    let series = run.dir.path().join("series/S2.json");
+    let text = std::fs::read_to_string(&series).unwrap();
+    std::fs::write(
+        &series,
+        text.replace(r#""kind":"harness""#, r#""kind":"dump""#),
+    )
+    .unwrap();
+    std::fs::remove_file(run.dir.path().join("harness/H1/run-S2.json")).unwrap();
+    assert_eq!(
+        run.triggers().trigger(&f(1)),
+        Trigger::Reproduced {
+            harness: "H1".into(),
+            varies: "new route names".into()
+        }
+    );
+}
+
+#[test]
 fn a_harness_that_runs_the_projects_own_workload_reproduces_it() {
     let run = Run::new(1);
     run.harness("H1", Kind::Command, &[1]);

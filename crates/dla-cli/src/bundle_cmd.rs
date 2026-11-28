@@ -1147,6 +1147,52 @@ fn without_target_block(text: &str) -> String {
     out
 }
 
+/// The files of the driver directory `driver` without the generated target block, scrubbed like
+/// every other text, written as `<prefix>/<rel>`. Returns the names written and, for a file
+/// over [`MAX_DRIVER_BYTES`], a line that says it was skipped. A directory that is not there
+/// (a command harness has no driver) gives nothing.
+fn copy_driver(
+    driver: &Path,
+    prefix: &str,
+    needles: &Needles,
+    write: &dyn Fn(&str, &[u8]) -> Written,
+) -> Result<(Vec<String>, Vec<String>), Failure> {
+    let mut written = Vec::new();
+    let mut skipped = Vec::new();
+    let mut names: Vec<(String, PathBuf)> = Vec::new();
+    match files_under(driver, driver, &mut names) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((written, skipped)),
+        Err(e) => return Err(io_fail(driver, e)),
+    }
+    names.sort();
+    for (rel, path) in names {
+        if fs::metadata(&path).is_ok_and(|m| m.len() > MAX_DRIVER_BYTES) {
+            skipped.push(format!("{prefix}/{rel} is over {MAX_DRIVER_BYTES} bytes"));
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let cleaned = without_target_block(&text);
+        let kept = bundle_bytes(cleaned.as_bytes(), false, needles, false);
+        let name = format!("{prefix}/{rel}");
+        write(&name, &kept)?;
+        written.push(name);
+    }
+    Ok((written, skipped))
+}
+
+/// The names of all files of the driver directory `driver`, copied or not (a file over
+/// [`MAX_DRIVER_BYTES`] is not copied but is still the generated driver, not the project).
+fn driver_names(driver: &Path) -> Vec<String> {
+    let mut names: Vec<(String, PathBuf)> = Vec::new();
+    if files_under(driver, driver, &mut names).is_err() {
+        return Vec::new();
+    }
+    names.into_iter().map(|(rel, _)| rel).collect()
+}
+
 /// The driver, `VARIES.txt` and trend verdict of the entry-path harnesses that targeted the
 /// finding (the one in which it grew, else up to two), copied into `entry-path/<H>/`. The
 /// verifier judges the trigger from them: whether the unit calls public entry points only and
@@ -1169,23 +1215,12 @@ fn entry_path_files(
     let mut out = Vec::new();
     for r in runs {
         let driver = dla_core::HarnessManifest::dir_in(&tc.run_dir, &r.harness).join("driver");
-        let mut listing = Vec::new();
-        let mut names: Vec<(String, PathBuf)> = Vec::new();
-        files_under(&driver, &driver, &mut names).map_err(|e| io_fail(&driver, e))?;
-        names.sort();
-        for (rel, path) in names {
-            if fs::metadata(&path).is_ok_and(|m| m.len() > MAX_DRIVER_BYTES) {
-                continue;
-            }
-            let Ok(text) = fs::read_to_string(&path) else {
-                continue;
-            };
-            let cleaned = without_target_block(&text);
-            let kept = bundle_bytes(cleaned.as_bytes(), false, needles, false);
-            let name = format!("entry-path/{}/{rel}", r.harness);
-            write(&name, &kept)?;
-            listing.push(name);
-        }
+        let (mut listing, _) = copy_driver(
+            &driver,
+            &format!("entry-path/{}", r.harness),
+            needles,
+            write,
+        )?;
         let verdict = json!({
             "harness": r.harness,
             "series": r.series,
@@ -1236,25 +1271,270 @@ fn harness_words(
     }
 }
 
-/// The `harnesses` of `index.json`: the harnesses the evidence of the bundle comes from, each
+/// At most this many harnesses go into the `harnesses` of a bundle, with their driver and what
+/// ran in them.
+const MAX_BUNDLE_HARNESSES: usize = 4;
+/// At most this many functions (or classes) are listed in a `ran.txt`.
+const MAX_RAN_LINES: usize = 3000;
+
+/// The harnesses the bundle shows: those in `cited` first, then the others, each group in the
+/// order it came in (the order of their ids), at most `max`; and how many were left out.
+fn pick_harnesses<T>(
+    all: Vec<T>,
+    id: impl Fn(&T) -> &str,
+    cited: &std::collections::BTreeSet<String>,
+    max: usize,
+) -> (Vec<T>, usize) {
+    let (mut first, rest): (Vec<T>, Vec<T>) = all.into_iter().partition(|h| cited.contains(id(h)));
+    first.extend(rest);
+    let left_out = first.len().saturating_sub(max);
+    first.truncate(max);
+    (first, left_out)
+}
+
+/// What ran in the measured program of one harness, read from its coverage records.
+struct RanText {
+    /// `ran.txt`, or `ran-classes.txt` for a runtime that lists loaded classes.
+    file: &'static str,
+    /// The file's text, with its header line and, when it was cut, its count line.
+    text: String,
+    /// The functions (or classes) that ran, before the cut.
+    count: usize,
+}
+
+/// The project functions that ran in the measured program of `harness`: the union of the
+/// `functions` of the coverage records `executed.json` and `executed-<S>.json` in its directory
+/// (the files `dla trend` reads), without the functions of a file named like a file of the
+/// driver (the generated driver is not the project), one line `<file>:<line> <name>`, sorted and
+/// deduplicated, at most `cap` lines. A JVM record lists loaded classes; they go to
+/// `ran-classes.txt` the same way. `Err` is the reason nothing was recorded.
+fn ran_text(hdir: &Path, harness: &str, cap: usize) -> Result<RanText, String> {
+    let mut records: Vec<PathBuf> = fs::read_dir(hdir)
+        .map(|rd| {
+            rd.filter_map(Result::ok)
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                        n == "executed.json" || (n.starts_with("executed-") && n.ends_with(".json"))
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    records.sort();
+    if records.is_empty() {
+        return Err(format!(
+            "no coverage record (harness/{harness}/executed.json or executed-<S>.json)"
+        ));
+    }
+    // Every file of the driver directory, also one too large to copy, is the generated driver:
+    // its functions are not the project's.
+    let driver_files = driver_names(&hdir.join("driver"));
+    let own: std::collections::BTreeSet<&str> = driver_files
+        .iter()
+        .map(|f| f.rsplit('/').next().unwrap_or(f))
+        .collect();
+    let mut functions: std::collections::BTreeSet<(String, u64, String)> = Default::default();
+    let mut classes: std::collections::BTreeSet<String> = Default::default();
+    let mut units: Option<u64> = None;
+    let mut why = String::new();
+    for p in records {
+        let Some(doc) = fs::read_to_string(&p)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        else {
+            continue;
+        };
+        let list = |key: &str| {
+            doc.get(key)
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        };
+        match doc.get("kind").and_then(Value::as_str) {
+            Some("functions") => {
+                for f in list("functions") {
+                    let (Some(file), Some(name)) = (
+                        f.get("file").and_then(Value::as_str),
+                        f.get("name").and_then(Value::as_str),
+                    ) else {
+                        continue;
+                    };
+                    if own.contains(file.rsplit('/').next().unwrap_or(file)) {
+                        continue;
+                    }
+                    let line = f.get("line").and_then(Value::as_u64).unwrap_or(0);
+                    functions.insert((file.to_owned(), line, name.to_owned()));
+                }
+            }
+            Some("classes") => {
+                classes.extend(
+                    list("classes")
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned),
+                );
+            }
+            _ => {
+                if why.is_empty() {
+                    why = doc
+                        .get("note")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned();
+                }
+            }
+        }
+        if let Some(n) = doc.get("fresh_units").and_then(Value::as_u64) {
+            units = Some(units.map_or(n, |u| u.max(n)));
+        }
+    }
+    let (file, what, absent, lines): (&'static str, &str, String, Vec<String>) = if !functions
+        .is_empty()
+    {
+        (
+            "ran.txt",
+            "project functions that ran",
+            if units.is_some() {
+                "a function not listed did not run there".to_owned()
+            } else {
+                "the length of the coverage is not recorded and may be one step of units, so a function that starts late or runs only every many units may be missing".to_owned()
+            },
+            functions
+                .into_iter()
+                .map(|(f, l, n)| format!("{f}:{l} {n}"))
+                .collect(),
+        )
+    } else if !classes.is_empty() {
+        (
+            "ran-classes.txt",
+            "classes loaded",
+            "a class not listed was not loaded there".to_owned(),
+            classes.into_iter().collect(),
+        )
+    } else if why.is_empty() {
+        return Err("the coverage record lists nothing".to_owned());
+    } else {
+        return Err(why);
+    };
+    let count = lines.len();
+    let measured = units.map_or_else(String::new, |u| format!("coverage of {u} units; "));
+    let absent = if count > cap {
+        format!(
+            "only {cap} of {count} are listed, sorted by file: a function not listed may be in the cut tail, see the last line"
+        )
+    } else {
+        absent
+    };
+    let mut text = format!("# {what} in the measured program of {harness} ({measured}{absent})\n");
+    for l in lines.iter().take(cap) {
+        text.push_str(l);
+        text.push('\n');
+    }
+    if count > cap {
+        text.push_str(&format!("# {} more not listed (cap {cap})\n", count - cap));
+    }
+    Ok(RanText { file, text, count })
+}
+
+/// The evidence the bundle holds cites a series or a capture of these harnesses.
+fn cited_harnesses(
+    view: &dla_core::RunView,
+    ledger: &dla_core::Ledger,
+    ids: &[EvidenceId],
+    run_dir: &Path,
+    all: &[String],
+) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    for e in ids.iter().filter_map(|i| ledger.evidence_by_id(i)) {
+        if let Some(h) = e
+            .result
+            .get("series")
+            .and_then(Value::as_str)
+            .and_then(|s| view.harness_of_series(s))
+        {
+            out.insert(h.to_owned());
+        }
+        for h in all {
+            if dla_core::grown::made_from_capture_of(run_dir, e, h) {
+                out.insert(h.clone());
+            }
+        }
+    }
+    out
+}
+
+/// What `harness_files` found: the entries of `harnesses` in `index.json`, how many harnesses
+/// were left out, and the files it did not copy.
+struct HarnessPart {
+    entries: Vec<Value>,
+    left_out: usize,
+    omitted: Vec<String>,
+}
+
+/// The `harnesses` of `index.json`: the harnesses the evidence of the bundle comes from (at
+/// most [`MAX_BUNDLE_HARNESSES`], those whose series or captures the evidence cites first), each
 /// with its id, what it is in plain words, the units it runs per round and its key modes. It
 /// names no finding and no site: the verifier learns from it whether the growth was reproduced
 /// by a driver made for the line or only by a loop over the project's tests.
-fn harness_list(tc: &ToolCtx, id: &FindingId) -> Vec<Value> {
-    let Ok(view) = dla_core::RunView::load_for(&tc.run_dir, tc.worker.as_deref()) else {
-        return Vec::new();
+///
+/// Under `harnesses/<H>/` each has its `driver/` (without the generated target block) and
+/// `ran.txt`, the project functions that ran in its measured program, so that the verifier can
+/// tell whether a consumer, a drain or a flush it assumes ran there at all.
+fn harness_files(
+    tc: &ToolCtx,
+    ledger: &dla_core::Ledger,
+    id: &FindingId,
+    ids: &[EvidenceId],
+    needles: &Needles,
+    write: &dyn Fn(&str, &[u8]) -> Written,
+) -> Result<HarnessPart, Failure> {
+    let mut part = HarnessPart {
+        entries: Vec::new(),
+        left_out: 0,
+        omitted: Vec::new(),
     };
-    dla_core::grown::harnesses_about(&view, id)
-        .into_iter()
-        .map(|(m, about)| {
-            json!({
-                "id": m.id,
-                "is": harness_words(&m, &about),
-                "units_per_round": m.step,
-                "key_modes": m.key_modes.iter().map(|k| k.as_str()).collect::<Vec<_>>(),
-            })
-        })
-        .collect()
+    let Ok(view) = dla_core::RunView::load_for(&tc.run_dir, tc.worker.as_deref()) else {
+        return Ok(part);
+    };
+    let about = dla_core::grown::harnesses_about(&view, id);
+    let all: Vec<String> = about.iter().map(|(m, _)| m.id.clone()).collect();
+    let cited = cited_harnesses(&view, ledger, ids, &tc.run_dir, &all);
+    let (kept, left_out) =
+        pick_harnesses(about, |(m, _)| m.id.as_str(), &cited, MAX_BUNDLE_HARNESSES);
+    part.left_out = left_out;
+    for (m, how) in kept {
+        let hdir = dla_core::HarnessManifest::dir_in(&tc.run_dir, &m.id);
+        let (driver, skipped) = copy_driver(
+            &hdir.join("driver"),
+            &format!("harnesses/{}/driver", m.id),
+            needles,
+            write,
+        )?;
+        part.omitted.extend(skipped);
+        let mut entry = json!({
+            "id": m.id,
+            "is": harness_words(&m, &how),
+            "units_per_round": m.step,
+            "key_modes": m.key_modes.iter().map(|k| k.as_str()).collect::<Vec<_>>(),
+            "driver": driver,
+        });
+        match ran_text(&hdir, &m.id, MAX_RAN_LINES) {
+            Ok(r) => {
+                let name = format!("harnesses/{}/{}", m.id, r.file);
+                let kept = bundle_bytes(r.text.as_bytes(), false, needles, false);
+                write(&name, &kept)?;
+                entry["ran"] = json!(name);
+                entry["functions_ran"] = json!(r.count);
+            }
+            Err(why) => {
+                entry["ran"] = json!(format!("not recorded: {why}"));
+                entry["functions_ran"] = json!(0);
+            }
+        }
+        part.entries.push(entry);
+    }
+    Ok(part)
 }
 
 /// At most this many test-loop harnesses go into a bundle.
@@ -1500,10 +1780,14 @@ fn build(
     if !tests.is_empty() {
         index["test_loop"] = Value::Array(tests);
     }
-    let behind = harness_list(tc, id);
-    if !behind.is_empty() {
-        index["harnesses"] = Value::Array(behind);
+    let behind = harness_files(tc, ledger, id, ids, &needles, &write)?;
+    if !behind.entries.is_empty() {
+        index["harnesses"] = Value::Array(behind.entries);
     }
+    if behind.left_out > 0 {
+        index["harnesses_left_out"] = json!(behind.left_out);
+    }
+    omitted.extend(behind.omitted);
     if let Some(o) = owner {
         index["owner"] = json!(o);
     }
@@ -1681,6 +1965,151 @@ mod tests {
         focus_retention(&mut v, &[&finding_at(Some("m.g"), Some("a.py:1"))]);
         assert_eq!(v["kept"], 5);
         assert_eq!(v["sites"], 3, "two lines kept and one minor");
+    }
+
+    fn record(hdir: &Path, name: &str, doc: Value) {
+        fs::create_dir_all(hdir).unwrap();
+        fs::write(hdir.join(name), doc.to_string()).unwrap();
+    }
+
+    fn funcs(list: &[(&str, &str, u64)]) -> Vec<Value> {
+        list.iter()
+            .map(|(f, n, l)| json!({"file": f, "name": n, "line": l}))
+            .collect()
+    }
+
+    #[test]
+    fn ran_text_is_the_sorted_union_without_the_driver_and_says_the_units() {
+        let d = tempfile::tempdir().unwrap();
+        record(
+            d.path(),
+            "executed.json",
+            json!({"kind": "functions", "functions": funcs(&[
+                ("src/b.rs", "drain", 9), ("src/a.rs", "push", 3),
+                ("src/bin/dla_harness.rs", "unit", 1)]), "fresh_units": 440}),
+        );
+        record(
+            d.path(),
+            "executed-S1.json",
+            json!({"kind": "functions", "functions": funcs(&[
+                ("src/a.rs", "push", 3), ("src/a.rs", "grow", 1)]), "fresh_units": 3520}),
+        );
+        fs::create_dir_all(d.path().join("driver/src/bin")).unwrap();
+        fs::write(
+            d.path().join("driver/src/bin/dla_harness.rs"),
+            "fn main() {}",
+        )
+        .unwrap();
+        let r = ran_text(d.path(), "H5", 100).unwrap();
+        assert_eq!(r.file, "ran.txt");
+        assert_eq!(r.count, 3);
+        assert_eq!(
+            r.text,
+            "# project functions that ran in the measured program of H5 (coverage of 3520 units; a function not listed did not run there)\nsrc/a.rs:1 grow\nsrc/a.rs:3 push\nsrc/b.rs:9 drain\n"
+        );
+        // A record with no units says no units.
+        let e = tempfile::tempdir().unwrap();
+        record(
+            e.path(),
+            "executed.json",
+            json!({"kind": "functions", "functions": funcs(&[("a.py", "f", 2)])}),
+        );
+        let r = ran_text(e.path(), "H1", 100).unwrap();
+        assert!(
+            r.text.starts_with(
+                "# project functions that ran in the measured program of H1 (the length of the coverage is not recorded and may be one step of units, so a function that starts late or runs only every many units may be missing)\n"
+            ),
+            "{}",
+            r.text
+        );
+    }
+
+    #[test]
+    fn ran_text_is_cut_at_the_cap_and_says_how_many_were_left_out() {
+        let d = tempfile::tempdir().unwrap();
+        let many: Vec<Value> = (1..=7)
+            .map(|n| json!({"file": "a.rs", "name": format!("f{n}"), "line": n}))
+            .collect();
+        record(
+            d.path(),
+            "executed.json",
+            json!({"kind": "functions", "functions": many}),
+        );
+        let r = ran_text(d.path(), "H1", 5).unwrap();
+        assert_eq!(r.count, 7);
+        let lines: Vec<&str> = r.text.lines().collect();
+        assert_eq!(lines.len(), 1 + 5 + 1, "{lines:?}");
+        assert_eq!(lines[5], "a.rs:5 f5");
+        assert_eq!(lines[6], "# 2 more not listed (cap 5)");
+        // The header does not say that a function not listed did not run: the tail was cut.
+        assert!(!lines[0].contains("did not run"), "{}", lines[0]);
+        assert!(lines[0].contains("only 5 of 7 are listed"), "{}", lines[0]);
+        assert!(lines[0].contains("may be in the cut tail"), "{}", lines[0]);
+        let all = ran_text(d.path(), "H1", 7).unwrap();
+        assert!(!all.text.contains("more not listed"), "{}", all.text);
+    }
+
+    #[test]
+    fn ran_text_leaves_out_the_functions_of_a_driver_file_too_large_to_copy() {
+        let d = tempfile::tempdir().unwrap();
+        let driver = d.path().join("driver");
+        fs::create_dir_all(&driver).unwrap();
+        let big = fs::File::create(driver.join("dla_harness.py")).unwrap();
+        big.set_len(MAX_DRIVER_BYTES + 1).unwrap();
+        let hdir = d.path();
+        record(
+            hdir,
+            "executed.json",
+            json!({"kind": "functions", "functions": funcs(&[
+                ("dla_harness.py", "unit", 5), ("app/a.py", "f", 2)]), "fresh_units": 10}),
+        );
+        let r = ran_text(hdir, "H1", 100).unwrap();
+        assert!(!r.text.contains("dla_harness"), "{}", r.text);
+        assert_eq!(r.count, 1);
+    }
+
+    #[test]
+    fn ran_text_names_loaded_classes_and_says_why_nothing_was_recorded() {
+        let d = tempfile::tempdir().unwrap();
+        record(
+            d.path(),
+            "executed.json",
+            json!({"kind": "classes", "classes": ["b.B", "a.A", "a.A"]}),
+        );
+        let r = ran_text(d.path(), "H2", 100).unwrap();
+        assert_eq!(r.file, "ran-classes.txt");
+        assert_eq!(
+            r.text,
+            "# classes loaded in the measured program of H2 (a class not listed was not loaded there)\na.A\nb.B\n"
+        );
+        assert_eq!(r.count, 2);
+        let none = tempfile::tempdir().unwrap();
+        record(
+            none.path(),
+            "executed.json",
+            json!({"kind": "none", "note": "the allocator shim sees allocations, not calls"}),
+        );
+        let why = ran_text(none.path(), "H3", 100).err().unwrap();
+        assert_eq!(why, "the allocator shim sees allocations, not calls");
+        let empty = tempfile::tempdir().unwrap();
+        let why = ran_text(empty.path(), "H4", 100).err().unwrap();
+        assert!(why.starts_with("no coverage record"), "{why}");
+    }
+
+    #[test]
+    fn cited_harnesses_come_first_and_the_rest_are_counted() {
+        let ids = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        let cited: std::collections::BTreeSet<String> = ["H5".to_owned()].into();
+        let (kept, left) = pick_harnesses(
+            ids(&["H1", "H2", "H3", "H4", "H5", "H6"]),
+            |h| h.as_str(),
+            &cited,
+            4,
+        );
+        assert_eq!(kept, ids(&["H5", "H1", "H2", "H3"]));
+        assert_eq!(left, 2);
+        let (kept, left) = pick_harnesses(ids(&["H1", "H2"]), |h| h.as_str(), &cited, 4);
+        assert_eq!((kept.len(), left), (2, 0));
     }
 
     #[test]

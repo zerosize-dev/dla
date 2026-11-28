@@ -832,12 +832,18 @@ pub fn driver_reading(dump_text: &str, pid: u32) -> Option<serde_json::Value> {
 /// fit the time limit, so this can be less than `step` times the rounds). `None` when the dump
 /// holds no such record.
 pub fn driver_units(dump_text: &str) -> Option<u64> {
+    checkpoint_units(dump_text, "rust")
+}
+
+/// The largest `x` of the `checkpoint` records the driver of `runtime` (`rust`, `go`) wrote in
+/// `dump_text`: the units that process did. `None` when the dump holds no such record.
+pub fn checkpoint_units(dump_text: &str, runtime: &str) -> Option<u64> {
     dump_text
         .lines()
         .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
         .filter(|v| {
             v.get("dla_harness").is_some()
-                && v.get("runtime").and_then(|r| r.as_str()) == Some("rust")
+                && v.get("runtime").and_then(|r| r.as_str()) == Some(runtime)
                 && v.get("phase").and_then(|p| p.as_str()) == Some("checkpoint")
         })
         .filter_map(|v| v.get("x").and_then(serde_json::Value::as_u64))

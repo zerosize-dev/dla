@@ -387,6 +387,126 @@ fn a_rust_driver_whose_setup_closes_the_guard_reads_writer_not_executed() {
     );
 }
 
+/// A holder that is pushed only after a bounded buffer of `SLOTS` slots is full: the first
+/// `SLOTS` calls fill the buffer (an occupancy count here), every later call pushes.
+fn rust_threshold_project(dir: &Path) {
+    write(
+        dir,
+        "Cargo.toml",
+        "[package]\nname = \"ringed\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    write(
+        dir,
+        "src/lib.rs",
+        "use std::sync::{\n    Mutex,\n    atomic::{AtomicUsize, Ordering},\n};\n\nconst SLOTS: usize = 3000;\nstatic PENDING: Mutex<Vec<u32>> = Mutex::new(Vec::new());\nstatic FILLED: AtomicUsize = AtomicUsize::new(0);\n\n/// Fills the buffer first; the values past its last slot go to the overflow list.\npub fn submit(value: u32) {\n    if FILLED.fetch_add(1, Ordering::SeqCst) < SLOTS {\n        return;\n    }\n    PENDING.lock().unwrap().push(value);\n}\n",
+    );
+}
+
+#[test]
+fn a_rust_writer_that_starts_after_a_threshold_is_counted_at_the_series_length() {
+    if !rust_ready() {
+        return;
+    }
+    let r = Proj::new(rust_threshold_project, "rust");
+    let gen_out = r.dla(&["harness", "gen", "--lang", "rust", "--driver", "--next"]);
+    let edit = r.p.join(gen_out.json["summary"]["edit"].as_str().unwrap());
+    let text =
+        rust_fill(NO_SETUP, "ringed::submit(key as u32);")(fs::read_to_string(&edit).unwrap());
+    fs::write(&edit, text).unwrap();
+    // One step is 440 units and the series 8 rounds of them (3520): the buffer of 3000 slots is
+    // not full after one step.
+    let manifest: Value = serde_json::from_str(
+        &fs::read_to_string(r.run_dir.join("harness/H1/harness.json")).unwrap(),
+    )
+    .unwrap();
+    let (step, rounds) = (
+        manifest["step"].as_u64().unwrap(),
+        manifest["iterations"].as_u64().unwrap(),
+    );
+    assert!(step < 3000 && 3000 < step * rounds, "{manifest}");
+    let run = r.dla(&["harness", "run", "H1", "--mode", "both"]);
+    let series = run.json["summary"]["series"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let v = r.verdict(&series);
+    assert_eq!(v["verdict"], "executed", "{v}");
+    let rec = r.executed("H1", &series);
+    assert_eq!(rec["fresh_units"], step * rounds, "{rec}");
+    let line = &rec["lines"][0];
+    assert!(line["count"].as_u64().unwrap() > 0, "{rec}");
+    // Per unit, the writer ran 520 times in 3520 units: it feeds the holder, so the verdict
+    // is not the one a rare writer gets.
+    assert!(line["fresh"].as_u64().unwrap() > 0, "{rec}");
+    let said = fs::read_to_string(r.run_dir.join(format!("harness/H1/run-{series}.json"))).unwrap();
+    assert!(
+        said.contains(&format!("was taken again at {} units", step * rounds))
+            && said.contains("a writer that starts after a threshold"),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_longer_coverage_run_records_the_units_the_driver_did_when_it_lowered_its_step() {
+    if !rust_ready() {
+        return;
+    }
+    let r = Proj::new(rust_threshold_project, "rust");
+    let gen_out = r.dla(&["harness", "gen", "--lang", "rust", "--driver", "--next"]);
+    let edit = r.p.join(gen_out.json["summary"]["edit"].as_str().unwrap());
+    // A slow unit: the series does not fit the time limit of the harness, so the driver lowers
+    // its step in the longer coverage process (it gets the time left of the limit) and exits 0.
+    let text = rust_fill(
+        NO_SETUP,
+        "std::thread::sleep(std::time::Duration::from_millis(4));\n    ringed::submit(key as u32);",
+    )(fs::read_to_string(&edit).unwrap());
+    fs::write(&edit, text).unwrap();
+    let file = r.run_dir.join("harness/H1/harness.json");
+    let mut manifest: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+    manifest["timeout_secs"] = 20.into();
+    fs::write(&file, manifest.to_string()).unwrap();
+    let (step, rounds) = (
+        manifest["step"].as_u64().unwrap(),
+        manifest["iterations"].as_u64().unwrap(),
+    );
+    let run = r.dla(&["harness", "run", "H1", "--mode", "both"]);
+    let series = run.json["summary"]["series"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let rec = r.executed("H1", &series);
+    let units = rec["fresh_units"].as_u64().unwrap();
+    // The units are what the driver did (read from its own dump), not step times the rounds.
+    assert!(units > step && units < step * rounds, "{rec}");
+    let said = fs::read_to_string(r.run_dir.join(format!("harness/H1/run-{series}.json"))).unwrap();
+    assert!(
+        said.contains(&format!("was taken again at {units} units"))
+            && said.contains("the driver did"),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_rust_writer_that_ran_in_one_step_is_not_counted_again() {
+    if !rust_ready() {
+        return;
+    }
+    let r = Proj::new(rust_project, "rust");
+    let gen_out = r.dla(&["harness", "gen", "--lang", "rust", "--driver", "--next"]);
+    let edit = r.p.join(gen_out.json["summary"]["edit"].as_str().unwrap());
+    let text =
+        rust_fill(NO_SETUP, "gated::submit(key as u32);")(fs::read_to_string(&edit).unwrap());
+    fs::write(&edit, text).unwrap();
+    let run = r.dla(&["harness", "run", "H1", "--mode", "both"]);
+    assert!(!run.text.contains("was taken again"), "{}", run.text);
+    let series = run.json["summary"]["series"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let rec = r.executed("H1", &series);
+    assert_eq!(rec["fresh_units"], 440, "{rec}");
+}
+
 #[test]
 fn a_rust_driver_that_leaves_the_guard_open_runs_the_writer_and_reads_as_before() {
     if !rust_ready() {
@@ -402,7 +522,7 @@ fn a_rust_driver_that_leaves_the_guard_open_runs_the_writer_and_reads_as_before(
     assert_eq!(v["verdict"], "executed", "{v}");
     assert_eq!(v["detail"], "function submit at src/lib.rs:15 was executed");
     assert!(v.get("remedy").is_none(), "{v}");
-    // The line ran once per unit of the one round the coverage point makes.
+    // The line ran at least once per unit of one step (it ran, so the coverage was not taken again).
     let rec = r.executed("H1", "S1");
     let line = &rec["lines"][0];
     assert_eq!(line["line"], 19, "{rec}");
@@ -518,6 +638,70 @@ fn a_go_driver_that_sets_the_delegate_reads_writer_not_executed() {
             "26: if del, ok := m.delegate.Load().(func(string) (*Counter, error)); ok {",
         ],
     );
+}
+
+/// A registry that keeps an entry only after its first 3000 calls (a bounded buffer that has to
+/// fill first).
+fn go_threshold_project(dir: &Path) {
+    write(dir, "go.mod", "module example.test/gated\n\ngo 1.21\n");
+    write(
+        dir,
+        "registry/registry.go",
+        "package registry\n\nimport \"sync\"\n\n// Counter is one entry of a registry.\ntype Counter struct{ name string }\n\n// Registry hands out counters; past its first 3000 calls it keeps each one it made.\ntype Registry struct {\n\tmtx     sync.Mutex\n\tcalls   int\n\tentries []*Counter\n}\n\n// NewCounter returns a counter by name.\nfunc (m *Registry) NewCounter(name string) (*Counter, error) {\n\tm.mtx.Lock()\n\tdefer m.mtx.Unlock()\n\tm.calls++\n\tc := &Counter{name: name}\n\tif m.calls <= 3000 {\n\t\treturn c, nil\n\t}\n\tm.entries = append(m.entries, c)\n\treturn c, nil\n}\n\n// NewRegistry makes a registry.\nfunc NewRegistry() *Registry { return &Registry{} }\n",
+    );
+}
+
+#[test]
+fn a_go_writer_that_starts_after_a_threshold_is_counted_at_the_series_length() {
+    if !have("go", "version") {
+        return;
+    }
+    let r = Proj::new(go_threshold_project, "go");
+    let gen_out = r.dla(&["harness", "gen", "--lang", "go", "--driver", "--next"]);
+    let edit = r.p.join(gen_out.json["summary"]["edit"].as_str().unwrap());
+    let text = go_fill(false)(fs::read_to_string(&edit).unwrap());
+    fs::write(&edit, text).unwrap();
+    let manifest: Value = serde_json::from_str(
+        &fs::read_to_string(r.run_dir.join("harness/H1/harness.json")).unwrap(),
+    )
+    .unwrap();
+    let (step, rounds) = (
+        manifest["step"].as_u64().unwrap(),
+        manifest["iterations"].as_u64().unwrap(),
+    );
+    assert!(step < 3000 && 3000 < step * rounds, "{manifest}");
+    let run = r.dla(&["harness", "run", "H1", "--mode", "both"]);
+    let series = run.json["summary"]["series"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let rec = r.executed("H1", &series);
+    let line = rec["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["line"] == 24)
+        .unwrap_or_else(|| panic!("{rec}"));
+    assert!(line["count"].as_u64().unwrap() > 0, "{rec}");
+    let said = fs::read_to_string(r.run_dir.join(format!("harness/H1/run-{series}.json"))).unwrap();
+    // The units in the note are what the driver did (its own dump), which can be more than
+    // step times the rounds: a Go driver keeps one warm-up round.
+    let units: u64 = said
+        .split("was taken again at ")
+        .nth(1)
+        .and_then(|t| t.split(' ').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("{said}"));
+    let dump = fs::read_to_string(r.run_dir.join("harness/H1/out/p1-fresh-cover/dump.jsonl"))
+        .unwrap_or_else(|e| panic!("{e}: {said}"));
+    let did = dump
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|v| v["phase"] == "checkpoint")
+        .filter_map(|v| v["x"].as_u64())
+        .max()
+        .unwrap();
+    assert_eq!(units, did, "{said}");
 }
 
 #[test]

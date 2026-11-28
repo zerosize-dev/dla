@@ -123,6 +123,22 @@ impl Run {
         .unwrap();
     }
 
+    /// A series `dla summarize` wrote from the captures of `h` (source kind `dump`), and its
+    /// trend report.
+    fn captured(&self, series: &str, h: &str, verdicts: &[(u32, Verdict)]) {
+        self.ran(series, h, "cc", verdicts);
+        let d = self.dir.path();
+        std::fs::write(
+            d.join(format!("series/{series}.json")),
+            json!({"id": series, "source": {"kind": "dump", "harness": h},
+                "axis": "n", "columns": [], "points": []})
+            .to_string(),
+        )
+        .unwrap();
+        // No run of the harness wrote it.
+        std::fs::remove_file(d.join("harness").join(h).join(format!("run-{series}.json"))).unwrap();
+    }
+
     fn report(&self) -> String {
         self.report_with(|_| {})
     }
@@ -436,5 +452,36 @@ fn a_finding_disputed_by_the_verifier_and_released_is_counted_once_and_the_plain
     assert!(
         md.contains("Grows only while callers skip the release"),
         "{md}"
+    );
+}
+
+#[test]
+fn a_target_that_grew_in_a_capture_series_has_a_trigger_that_is_not_checked_for_want_of_an_entry_harness()
+ {
+    let run = Run::new();
+    run.harness("H1", false, &["F1", "F3"], None);
+    run.captured("S1", "H1", &[(1, Verdict::Grew)]);
+    let md = run.report();
+    assert!(
+        md.contains("- Trigger: not checked (no entry-path harness was run for it)"),
+        "{md}"
+    );
+    // The capture series is no run of the harness: F3 has no verdict in it and still reads as
+    // having no grown series.
+    let f3 = md.split("### F3").nth(1).unwrap();
+    assert!(
+        f3.contains("no harness series that grew is tied to it"),
+        "{f3}"
+    );
+    let f1 = md
+        .split("### F1")
+        .nth(1)
+        .unwrap()
+        .split("### F3")
+        .next()
+        .unwrap();
+    assert!(
+        !f1.contains("no harness series that grew is tied to it"),
+        "{f1}"
     );
 }

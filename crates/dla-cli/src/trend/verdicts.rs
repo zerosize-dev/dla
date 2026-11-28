@@ -42,6 +42,9 @@ pub struct Inputs<'a> {
 /// The verdicts of the series, declared targets first. Empty for a series that no harness
 /// measured.
 pub fn compute(inp: &Inputs<'_>) -> Vec<TargetVerdict> {
+    if let Some(h) = inp.series.source.capture_harness() {
+        return capture_verdicts(inp, h);
+    }
     let Some(h) = inp.series.source.run_harness() else {
         return Vec::new();
     };
@@ -106,6 +109,58 @@ pub fn compute(inp: &Inputs<'_>) -> Vec<TargetVerdict> {
         })
         .collect();
     heap_lead(inp, verdicts)
+}
+
+/// The verdicts of a series `dla summarize` wrote from the captures of harness `h` (source kind
+/// `dump`). A capture series can say that a column grew, and nothing else: it never saw a line
+/// run or a holder stay flat. So a declared target of `h` that a passed column of the series is
+/// tied to (the column's `finding` or one of its `candidates`, the tie [`tied_to`] reads for
+/// every series) is `grew`, and every other target has no verdict here.
+fn capture_verdicts(inp: &Inputs<'_>, h: &str) -> Vec<TargetVerdict> {
+    let Ok(m) = HarnessManifest::load(inp.run_dir, h) else {
+        return Vec::new();
+    };
+    let captures = inp.series.points.len();
+    m.targets
+        .iter()
+        .filter(|f| inp.ledger.finding(f).is_some())
+        .filter_map(|f| {
+            let c = inp
+                .columns
+                .iter()
+                .find(|c| tied_to(c, f) && c.gate == GateVerdict::Pass)?;
+            let shape = serde_json::to_value(c.shape)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .unwrap_or_default();
+            let rate = c
+                .sen
+                .filter(|s| s.slope.is_finite() && s.slope != 0.0)
+                .map(|s| {
+                    let unit = if c.unit == dla_core::series::Unit::Bytes {
+                        "B"
+                    } else {
+                        "blocks"
+                    };
+                    format!(", {:+.0} {unit}/unit", s.slope)
+                })
+                .unwrap_or_default();
+            let what = match &c.site {
+                Some(site) => format!("the allocation stack {} ({site})", c.name),
+                None => format!("the column {}", c.name),
+            };
+            Some(TargetVerdict {
+                finding: f.clone(),
+                verdict: Verdict::Grew,
+                column: Some(c.name.clone()),
+                detail: format!(
+                    "{what} grew across the {captures} captures of {h} ({shape}{rate})"
+                ),
+                declared: true,
+                writers: Vec::new(),
+            })
+        })
+        .collect()
 }
 
 /// The growth of the heap of a harness made for findings that have no probe: a live heap
@@ -1093,6 +1148,73 @@ mod tests {
         for c in cols {
             c.finding = Some(FindingId::new(f));
         }
+    }
+
+    /// The verdicts of a capture series of H1 (kind `dump`, three captures) with the given columns.
+    fn capture_verdicts_of(
+        s: &Scene,
+        targets: &[&str],
+        cols: Vec<Col>,
+        mut fill: impl FnMut(&mut Vec<ColumnTrend>),
+    ) -> Vec<TargetVerdict> {
+        manifest(json!([]), targets).save(s.dir.path()).unwrap();
+        let mut file = series("S1", 0, cols);
+        file.source = dla_core::series::SeriesSource::new(dla_core::series::SeriesSourceKind::Dump);
+        file.source.harness = Some("H1".into());
+        for (p, x) in file.points.iter_mut().zip([440.0, 880.0, 1760.0]) {
+            p.x = x;
+        }
+        let mut analysed = analyze_series(
+            &file,
+            &(0..file.columns.len()).collect::<Vec<_>>(),
+            &GateThresholds::default(),
+        );
+        fill(&mut analysed);
+        compute(&Inputs {
+            project: s.dir.path(),
+            run_dir: s.dir.path(),
+            ledger: &s.ledger,
+            series: &file,
+            columns: &analysed,
+            too_short: None,
+            executed: None,
+        })
+    }
+
+    #[test]
+    fn a_capture_series_gives_grew_to_the_targets_a_passed_column_is_tied_to_and_nothing_to_the_others()
+     {
+        let s = scene();
+        let grow = || Col::gauge("stack:push_overflow", &[1e6, 2e6, 4e6]).site("a.py:6");
+        // F1 is tied by the column's finding; F2 (a target too) has no tied column.
+        let v = capture_verdicts_of(&s, &["F1", "F2"], vec![grow()], |c| tie(c, 1));
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert_eq!(v[0].finding, FindingId::new(1));
+        assert_eq!(v[0].verdict, Verdict::Grew);
+        assert_eq!(v[0].column.as_deref(), Some("stack:push_overflow"));
+        assert!(v[0].declared);
+        assert!(
+            v[0].detail
+                .contains("the allocation stack stack:push_overflow (a.py:6) grew across the 3 captures of H1 (steady"),
+            "{}",
+            v[0].detail
+        );
+        // A tie by candidates counts too.
+        let v = capture_verdicts_of(&s, &["F1", "F2"], vec![grow()], |c| {
+            c[0].candidates = vec![FindingId::new(2)];
+        });
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert_eq!(v[0].finding, FindingId::new(2));
+        // A column that failed the rule, or that is tied to no target, gives no verdict at all:
+        // never `constant`, `executed` or `writer_not_executed`.
+        let flat = Col::gauge("stack:push_overflow", &[500.0, 800.0, 806.0]).site("a.py:6");
+        let v = capture_verdicts_of(&s, &["F1", "F2"], vec![flat], |c| tie(c, 1));
+        assert!(v.is_empty(), "{v:?}");
+        let v = capture_verdicts_of(&s, &["F1", "F2"], vec![grow()], |_| {});
+        assert!(v.is_empty(), "{v:?}");
+        // A tied finding the harness did not declare is not a target of it.
+        let v = capture_verdicts_of(&s, &["F2"], vec![grow()], |c| tie(c, 1));
+        assert!(v.is_empty(), "{v:?}");
     }
 
     #[test]
