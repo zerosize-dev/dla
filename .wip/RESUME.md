@@ -4040,3 +4040,17 @@ unattended run at a time and no builder beside it.
   harness-running refusal + capture file count, X4 hold sentence action first + skill sentence).
 - Next: suite green -> snapshot "[W]" -> CI -> commit-snapshot-tree on main (msg 48) -> push main + dev
   branch. Start builder X once the suite is done (no tree edits during it).
+
+## Round X verification (2026-11-28)
+- Round W on main as 5ee0359 (CI 46076739560 15/15 on snapshot dcab0f6); pushed main + dev.
+- Builder X report: X0-X4 done; dynamic merged from runs; rust-delayed-queue needed capture rule
+  "capture after first series of the same driver" (first rule exhausted the 6-round gate loop).
+- node-signal-compose-22 rule_outs change: variance (u173 W vs X 3 runs each: both give both outcomes).
+- Review wf_9627fa8e-615: 3 confirmed + fixed by me: worker id normalisation (residual.rs prior rows via
+  own_open_item_id; test a_workers_rows_are_matched_to_its_prefixed_items), plain driver dumps not
+  "unfinished" (input.rs shim rule: shim-dump.jsonl | raw_sites | p<k>-alloc + rust/native; test
+  a_plain_point_of_a_driver_is_never_called_unfinished), harness-running fix text; plus largest-row
+  pick only over-threshold same-unit rows (gate.rs, no test), VERIFY X0 row file names, stages.md parens.
+- My mutations MUTX1-7 all caught. Full suite green (u173/check.log). Snapshot 9a37c3f (CI) waiting.
+- Commit message: wip-notes/commit-message-49.txt. Next: commit to main, bump preview.16, release,
+  rig refresh, r9-fastrace alone.
