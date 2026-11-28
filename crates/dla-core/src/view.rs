@@ -617,7 +617,11 @@ pub fn status_for(view: &RunView, worker: Option<&str>) -> ReportStatus {
             blocking.push(BlockingItem {
                 kind: BlockingKind::OpenItem,
                 id: o.item.id.to_string(),
-                description: format!("open item {}: {}", o.item.id, o.item.text),
+                description: format!(
+                    "open item {}: {}",
+                    o.item.id,
+                    crate::gate::open_item_text(view, &o.item.id.to_string(), &o.item.text)
+                ),
                 fix: format!(
                     "dla ledger resolve {} {}",
                     o.item.id,

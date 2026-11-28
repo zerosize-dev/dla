@@ -62,6 +62,7 @@ pub mod py_tracemalloc;
 pub mod py_types;
 pub mod redact;
 pub mod rule;
+pub mod shim_blind;
 pub mod shim_groups;
 pub mod tie;
 pub mod valgrind;

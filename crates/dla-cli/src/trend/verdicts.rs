@@ -59,7 +59,8 @@ pub fn compute(inp: &Inputs<'_>) -> Vec<TargetVerdict> {
     let chosen = chosen_tests(inp.run_dir, &m);
     let dropped = dropped_classes(inp.series);
     let features = dla_core::features::HarnessFeatures::load(inp.run_dir, h);
-    ids.into_iter()
+    let verdicts: Vec<TargetVerdict> = ids
+        .into_iter()
         .filter(|(f, _)| inp.ledger.finding(f).is_some())
         .map(|(f, declared)| {
             let mut v = one(inp, &m, &f);
@@ -103,7 +104,115 @@ pub fn compute(inp: &Inputs<'_>) -> Vec<TargetVerdict> {
             }
             v
         })
-        .collect()
+        .collect();
+    heap_lead(inp, verdicts)
+}
+
+/// The growth of the heap of a harness made for findings that have no probe: a live heap
+/// column of the series passed ([`dla_core::trend::is_live_heap_column`]: not a high-water or a
+/// process column), no column with a site or a probe ties it to a declared target, and a
+/// declared target in the heap region has writer lines that ran. Such a target is not
+/// `executed` (a flat reading of its code) but `grew_untied`: a lead an alloc-test on the
+/// harness decides. Never a measurement of the holder, never credited to the finding, never
+/// given to a target whose writer lines did not run.
+fn heap_lead(inp: &Inputs<'_>, verdicts: Vec<TargetVerdict>) -> Vec<TargetVerdict> {
+    heap_lead_over(
+        inp.columns,
+        &|f| {
+            inp.ledger
+                .finding(f)
+                .is_some_and(|x| x.region == Some(dla_core::finding::Region::Heap))
+        },
+        inp.series.source.run_harness().unwrap_or("the harness"),
+        &inp.series.id,
+        verdicts,
+    )
+}
+
+/// [`heap_lead`] over what it reads: the columns, whether a finding is in the heap region, the
+/// harness and series ids for the sentence.
+fn heap_lead_over(
+    columns: &[ColumnTrend],
+    in_heap: &dyn Fn(&FindingId) -> bool,
+    h: &str,
+    series_id: &str,
+    mut verdicts: Vec<TargetVerdict>,
+) -> Vec<TargetVerdict> {
+    let declared: Vec<&FindingId> = verdicts
+        .iter()
+        .filter(|v| v.declared)
+        .map(|v| &v.finding)
+        .collect();
+    // A passed column tied to a declared target is a `grew`, not this.
+    if columns.iter().any(|c| {
+        c.gate == GateVerdict::Pass
+            && declared
+                .iter()
+                .any(|f| c.finding.as_ref() == Some(*f) || c.candidates.contains(f))
+    }) {
+        return verdicts;
+    }
+    let Some(col) = columns.iter().find(|c| {
+        c.gate == GateVerdict::Pass
+            && dla_core::trend::is_live_heap_column(&c.name)
+            && c.site.is_none()
+            && c.finding.is_none()
+            && c.candidates.is_empty()
+            && c.rise > 0.0
+    }) else {
+        return verdicts;
+    };
+    let heap_targets: Vec<usize> = verdicts
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| v.declared && v.verdict == Verdict::Executed)
+        .filter(|(_, v)| v.writers.iter().any(|w| w.count.is_some_and(|c| c > 0)))
+        .filter(|(_, v)| in_heap(&v.finding))
+        .map(|(i, _)| i)
+        .collect();
+    if heap_targets.is_empty() {
+        return verdicts;
+    }
+    let shape = serde_json::to_value(col.shape)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    let grew = if col.unit == dla_core::series::Unit::Bytes {
+        format!("+{:.2} MB", col.rise / 1e6)
+    } else {
+        format!("+{}", num(col.rise))
+    };
+    let all: Vec<String> = heap_targets
+        .iter()
+        .map(|i| verdicts[*i].finding.to_string())
+        .collect();
+    for i in heap_targets {
+        let ran: u64 = verdicts[i].writers.iter().filter_map(|w| w.count).sum();
+        let others: Vec<&String> = all
+            .iter()
+            .filter(|f| **f != verdicts[i].finding.to_string())
+            .collect();
+        let also = if others.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; the same lead is open for {}",
+                others
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        let v = &mut verdicts[i];
+        v.verdict = Verdict::GrewUntied;
+        v.column = Some(col.name.clone());
+        v.detail = format!(
+            "the heap of {h} grew ({series_id} {} {shape}, {grew}) and nothing measured its holder; its writer lines ran {ran} times{also}",
+            col.name
+        );
+    }
+    verdicts
 }
 
 /// The test classes a test-loop harness chose for each of its targets (`tests.json` of the
@@ -1632,5 +1741,138 @@ mod tests {
         // Without that statement of the agent nothing says the class loaded.
         let v = verdicts_lim(&s, &m, cols(), |_| {}, None, &[]);
         assert_eq!(v[0].verdict, Verdict::NotLoaded, "{v:?}");
+    }
+
+    // ---- a no-probe target in a harness whose live heap grew is a lead, not `executed`
+
+    fn column(name: &str, gate: GateVerdict, rise: f64) -> ColumnTrend {
+        ColumnTrend {
+            name: name.into(),
+            unit: dla_core::series::Unit::Bytes,
+            kind: dla_core::series::ColumnKind::Gauge,
+            region: dla_core::series::SeriesRegion::Heap,
+            site: None,
+            finding: None,
+            candidates: vec![],
+            n: 8,
+            mk: None,
+            sen: None,
+            halves: None,
+            every_delta: None,
+            noise: 0.0,
+            rise,
+            shape: dla_stats::TrendShape::Stair,
+            gate,
+            gate_failed: vec![],
+            gate_note: None,
+            resized: false,
+        }
+    }
+
+    /// An `executed` verdict of target `id` whose writer lines ran `counts` times each.
+    fn executed(id: u32, counts: &[Option<u64>]) -> TargetVerdict {
+        TargetVerdict {
+            finding: FindingId::new(id),
+            verdict: Verdict::Executed,
+            column: None,
+            detail: "function send was executed".into(),
+            declared: true,
+            writers: counts
+                .iter()
+                .enumerate()
+                .map(|(i, c)| dla_core::trend::WriterCount {
+                    file: "src/q.rs".into(),
+                    line: 30 + i as u32,
+                    count: *c,
+                })
+                .collect(),
+        }
+    }
+
+    fn lead(cols: &[ColumnTrend], v: Vec<TargetVerdict>) -> Vec<TargetVerdict> {
+        heap_lead_over(cols, &|_| true, "H3", "S5", v)
+    }
+
+    #[test]
+    fn a_target_whose_writer_lines_ran_in_a_harness_whose_live_heap_grew_is_a_lead() {
+        let cols = [
+            column("os.rss", GateVerdict::Pass, 9e6),
+            column("native.live_bytes", GateVerdict::Pass, 3.44e6),
+        ];
+        let out = lead(
+            &cols,
+            vec![
+                executed(41, &[Some(5733), Some(1913)]),
+                executed(6, &[Some(2)]),
+            ],
+        );
+        assert_eq!(out[0].verdict, Verdict::GrewUntied, "{out:?}");
+        assert_eq!(out[0].column.as_deref(), Some("native.live_bytes"));
+        assert!(
+            out[0]
+                .detail
+                .contains("the heap of H3 grew (S5 native.live_bytes stair, +3.44 MB)")
+                && out[0].detail.contains("nothing measured its holder")
+                && out[0].detail.contains("ran 7646 times")
+                && out[0].detail.contains("F6"),
+            "{}",
+            out[0].detail
+        );
+        // Several targets are all listed, each with the same lead.
+        assert_eq!(out[1].verdict, Verdict::GrewUntied);
+        assert!(out[1].detail.contains("F41"), "{}", out[1].detail);
+    }
+
+    #[test]
+    fn a_peak_only_stair_gives_nothing() {
+        let cols = [
+            column("native.peak_bytes", GateVerdict::Pass, 3.44e6),
+            column("os.vm_data", GateVerdict::Pass, 3.44e6),
+            column("native.live_bytes", GateVerdict::Fail, 0.0),
+        ];
+        let out = lead(&cols, vec![executed(41, &[Some(100)])]);
+        assert_eq!(out[0].verdict, Verdict::Executed, "{out:?}");
+    }
+
+    #[test]
+    fn a_target_that_never_ran_or_has_no_count_gets_nothing() {
+        let cols = [column("native.live_bytes", GateVerdict::Pass, 3.44e6)];
+        let out = lead(
+            &cols,
+            vec![
+                executed(21, &[Some(0)]),
+                executed(22, &[None]),
+                executed(23, &[]),
+            ],
+        );
+        assert!(
+            out.iter().all(|v| v.verdict == Verdict::Executed),
+            "{out:?}"
+        );
+        let mut never = executed(6, &[Some(9)]);
+        never.verdict = Verdict::NotExecuted;
+        assert_eq!(lead(&cols, vec![never])[0].verdict, Verdict::NotExecuted);
+    }
+
+    #[test]
+    fn a_column_tied_to_a_declared_target_is_a_growth_not_a_lead() {
+        let mut tied = column("native.live_bytes@src/q.rs:35", GateVerdict::Pass, 1e6);
+        tied.candidates = vec![FindingId::new(41)];
+        let cols = [tied, column("native.live_bytes", GateVerdict::Pass, 3.44e6)];
+        let out = lead(&cols, vec![executed(41, &[Some(100)])]);
+        assert_eq!(out[0].verdict, Verdict::Executed, "{out:?}");
+    }
+
+    #[test]
+    fn a_target_outside_the_heap_region_gets_nothing() {
+        let cols = [column("native.live_bytes", GateVerdict::Pass, 3.44e6)];
+        let out = heap_lead_over(
+            &cols,
+            &|_| false,
+            "H3",
+            "S5",
+            vec![executed(41, &[Some(5)])],
+        );
+        assert_eq!(out[0].verdict, Verdict::Executed);
     }
 }

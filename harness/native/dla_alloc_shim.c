@@ -32,6 +32,13 @@
  * allocation-heavy multithreaded programs (use DLA_SHIM_SAMPLE for cheaper stacks); the recorded
  * size is the requested size, not the usable size; allocations made through the shim's guard
  * (backtrace internals, dump) are not counted; SIGKILL and _exit() leave no dump.
+ *
+ * What an exit record holds: only what survives exit(). exit() runs the calling thread's
+ * thread-local destructors, the atexit handlers and the C++ static destructors BEFORE this
+ * library's destructor, so state kept there (a main-thread thread_local, a C++ static container)
+ * is already freed when the exit record is written; "native.peak_bytes" still shows it. A
+ * snapshot (dla_shim_snapshot, "at":"snapshot") holds the live state: DLA-generated drivers call
+ * it after their last unit. A SIGTERM dump ("at":"signal") is taken while the program is alive.
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -1071,8 +1078,12 @@ static void put_frame(uintptr_t a)
     PUTL("}");
 }
 
-static void dump_record(int from_signal)
+enum { AT_EXIT = 0, AT_SIGNAL = 1, AT_SNAPSHOT = 2 };
+
+/* x_arg is the driver's current x for a snapshot (UINT64_MAX: none given, DLA_ITER is used). */
+static void dump_record(int at, uint64_t x_arg)
 {
+    int from_signal = at == AT_SIGNAL;
     if (atomic_exchange(&dumped, 1))
         return;
     if (!active || out_path == NULL || getpid() != init_pid)
@@ -1145,14 +1156,24 @@ static void dump_record(int from_signal)
         return;
     }
     olen = 0;
-    PUTL("{\"dla_harness\":1,\"phase\":\"exit\",\"pid\":");
+    PUTL("{\"dla_harness\":1,\"phase\":\"exit\",\"at\":\"");
+    if (at == AT_SNAPSHOT)
+        PUTL("snapshot");
+    else if (at == AT_SIGNAL)
+        PUTL("signal");
+    else
+        PUTL("exit");
+    PUTL("\",\"pid\":");
     putu((uint64_t)getpid());
     PUTL(",\"argv\":");
     put_cmdline();
     PUTL(",\"exe\":");
     putjs(exe_path);
     PUTL(",\"runtime\":\"native\"");
-    if (iter_env != NULL && iter_env[0] >= '0' && iter_env[0] <= '9') {
+    if (x_arg != UINT64_MAX) {
+        PUTL(",\"x\":");
+        putu(x_arg);
+    } else if (iter_env != NULL && iter_env[0] >= '0' && iter_env[0] <= '9') {
         PUTL(",\"x\":");
         putu((uint64_t)strtoull(iter_env, NULL, 10));
     }
@@ -1291,7 +1312,7 @@ static void on_sigterm(int sig)
 {
     signal(SIGALRM, SIG_DFL);
     alarm(3); /* if the dump deadlocks inside the loader, the default SIGALRM action ends us */
-    dump_record(1);
+    dump_record(AT_SIGNAL, UINT64_MAX);
     signal(sig, SIG_DFL);
     raise(sig);
 }
@@ -1438,4 +1459,12 @@ __attribute__((constructor(101))) static void dla_shim_init(void)
     active = 1;
 }
 
-__attribute__((destructor(101))) static void dla_shim_fini(void) { dump_record(0); }
+/*
+ * Snapshot: the record the destructor would write, taken while the program still holds its state.
+ * A driver calls it after its last unit and before it drops anything; x is the driver's current x
+ * (UINT64_MAX: use DLA_ITER). It writes the one record of the process ("at":"snapshot"); the
+ * destructor and the SIGTERM path then write nothing. Without a call nothing changes.
+ */
+DLA_EXPORT void dla_shim_snapshot(uint64_t x) { dump_record(AT_SNAPSHOT, x); }
+
+__attribute__((destructor(101))) static void dla_shim_fini(void) { dump_record(AT_EXIT, UINT64_MAX); }

@@ -729,6 +729,10 @@ pub enum ShimSplit {
 /// never by size and never another process's. Without a shim record with stacks for that
 /// process nothing is written and the file of an earlier run is removed. A dump of a native
 /// harness (already the shim's own) is left alone.
+///
+/// The process's own last checkpoint (same pid) is kept with the record as
+/// `"driver":{"x","live_bytes","live_blocks"}` (see [`driver_reading`]), so that
+/// `dla summarize` can compare the exit view with what the process itself measured.
 pub fn split_shim_dump(label_dir: &Path, measured: Option<u32>) -> ShimSplit {
     let file = label_dir.join(SHIM_DUMP);
     let _ = fs::remove_file(&file);
@@ -771,10 +775,56 @@ pub fn split_shim_dump(label_dir: &Path, measured: Option<u32>) -> ShimSplit {
     let Some(last) = mine.last() else {
         return ShimSplit::Missing { others };
     };
-    if fs::write(&file, format!("{last}\n")).is_err() {
+    let record = measured
+        .and_then(|pid| driver_reading(&text, pid))
+        .and_then(|d| {
+            let mut v: serde_json::Value = serde_json::from_str(last).ok()?;
+            v["driver"] = d;
+            Some(v.to_string())
+        })
+        .unwrap_or_else(|| (*last).to_owned());
+    if fs::write(&file, format!("{record}\n")).is_err() {
         return ShimSplit::Missing { others };
     }
     ShimSplit::Written
+}
+
+/// The last checkpoint of process `pid` in `dump_text` that carries the driver's
+/// `native.live_bytes`, as `{"x","live_bytes","live_blocks"}` (`live_blocks` only when the
+/// checkpoint has it). `None` when the process wrote no such checkpoint (a command-mode capture
+/// of the project's own process has none).
+pub fn driver_reading(dump_text: &str, pid: u32) -> Option<serde_json::Value> {
+    let mut best = None;
+    for v in dump_text
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+    {
+        let driver = v.get("dla_harness").is_some()
+            && v.get("phase").and_then(|p| p.as_str()) == Some("checkpoint")
+            && !v
+                .get("runtime")
+                .and_then(|r| r.as_str())
+                .is_some_and(|r| r.eq_ignore_ascii_case("native"))
+            && v.get("pid").and_then(serde_json::Value::as_u64) == Some(u64::from(pid));
+        let live = v
+            .get("values")
+            .and_then(|m| m.get("native.live_bytes"))
+            .and_then(serde_json::Value::as_u64);
+        if let (true, Some(live), Some(x)) =
+            (driver, live, v.get("x").and_then(serde_json::Value::as_u64))
+        {
+            let mut d = serde_json::json!({"x": x, "live_bytes": live});
+            if let Some(b) = v
+                .get("values")
+                .and_then(|m| m.get("native.live_blocks"))
+                .and_then(serde_json::Value::as_u64)
+            {
+                d["live_blocks"] = b.into();
+            }
+            best = Some(d);
+        }
+    }
+    best
 }
 
 /// The units a Rust driver did in one process: the largest `x` of its own `checkpoint` records
@@ -1557,5 +1607,31 @@ mod tests {
             let (kind, s, _) = classify(name).unwrap();
             assert_eq!((kind, s), (CaptureKind::Valgrind, seq));
         }
+    }
+    #[test]
+    fn the_shim_record_keeps_the_last_checkpoint_of_the_same_process() {
+        let d = std::env::temp_dir().join(format!("dla-shimdriver-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let text = concat!(
+            r#"{"dla_harness":1,"phase":"checkpoint","runtime":"rust","pid":7,"x":10,"values":{"native.live_bytes":100,"native.live_blocks":3}}"#,
+            "\n",
+            r#"{"dla_harness":1,"phase":"checkpoint","runtime":"rust","pid":7,"x":20,"values":{"native.live_bytes":900,"native.live_blocks":4}}"#,
+            "\n",
+            r#"{"dla_harness":1,"phase":"checkpoint","runtime":"rust","pid":8,"x":30,"values":{"native.live_bytes":5,"native.live_blocks":1}}"#,
+            "\n",
+            r#"{"dla_harness":1,"phase":"exit","runtime":"native","pid":7,"x":20,"raw_sites":{"0x1":{"bytes":8}}}"#,
+            "\n"
+        );
+        fs::write(d.join("dump.jsonl"), text).unwrap();
+        assert_eq!(split_shim_dump(&d, Some(7)), ShimSplit::Written);
+        let v: serde_json::Value =
+            serde_json::from_str(fs::read_to_string(d.join(SHIM_DUMP)).unwrap().trim()).unwrap();
+        assert_eq!(v["driver"]["x"], 20);
+        assert_eq!(v["driver"]["live_bytes"], 900);
+        assert_eq!(v["driver"]["live_blocks"], 4);
+        // A process with no checkpoint of its own gets no driver reading.
+        assert!(driver_reading(text, 99).is_none());
+        let _ = fs::remove_dir_all(&d);
     }
 }

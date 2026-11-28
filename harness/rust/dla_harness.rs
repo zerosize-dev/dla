@@ -217,6 +217,36 @@ fn malloc_trim() -> Option<String> {
     None
 }
 
+/// Hands the allocator shim the live state while the program still holds it: the shim's exit
+/// record is written after `exit()` has freed thread-locals and statics, which hides growth held
+/// there. The shim exports `dla_shim_snapshot`, looked up by name at run time (no link-time
+/// reference, no crate); without the shim, or with `DLA_SHIM_DISABLE=1`, this does nothing.
+/// `dlsym` is in glibc (std links `libdl` on glibc before 2.34). Windows has no shim.
+#[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))]
+fn shim_snapshot(x: u64) {
+    use std::ffi::{c_char, c_void};
+    @@DLA_UNSAFE_EXTERN@@extern "C" {
+        fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
+    }
+    // RTLD_DEFAULT: a null handle on glibc, (void*)-2 on macOS.
+    #[cfg(target_os = "macos")]
+    let default = -2isize as *mut c_void;
+    #[cfg(not(target_os = "macos"))]
+    let default = std::ptr::null_mut::<c_void>();
+    // SAFETY: `dlsym` only reads the NUL-terminated name; a found symbol is the shim's
+    // `void dla_shim_snapshot(uint64_t)`, called once, after the last unit.
+    unsafe {
+        let f = dlsym(default, b"dla_shim_snapshot\0".as_ptr() as *const c_char);
+        if !f.is_null() {
+            let f: extern "C" fn(u64) = std::mem::transmute::<*mut c_void, extern "C" fn(u64)>(f);
+            f(x);
+        }
+    }
+}
+
+#[cfg(not(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos")))]
+fn shim_snapshot(_x: u64) {}
+
 fn json_map(pairs: &[(&str, u64)]) -> String {
     let body: Vec<String> = pairs.iter().map(|(k, v)| format!("\"{k}\":{v}")).collect();
     format!("{{{}}}", body.join(","))
@@ -416,5 +446,8 @@ fn main() {
             fit(limit, started, loop_start, round + 1, total, 0, done, &mut step, &mut warned);
         }
     }
+    // After the last unit and the last checkpoint, before `state` is dropped: an allocator shim
+    // in the process takes its record now, while the units' state is alive.
+    shim_snapshot(done);
     // The process ends when `main` returns: threads and servers of the units do not hold it.
 }

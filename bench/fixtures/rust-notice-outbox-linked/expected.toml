@@ -1,0 +1,17 @@
+schema_version = 1
+id = "rust-notice-outbox-linked"
+runtime = "rust"
+category = "decoy-control"
+pair = "rust-notice-outbox"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+Operators report that the relay desk's resident memory grows in step with the number of alert waves it has processed, and the process is restarted every few days. The desk keeps no history of the alerts on purpose: every notice is handed to the uplink queue, which is a few hundred entries long. Find out what is holding the memory.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "src/outbox.rs:44"
+cause = "N-WARM"
+discriminator = "the uplink is attached, so every collect empties the queue and each worker's outbox hands its held notices back; each outbox's vector stays empty, live bytes are the same at 2000 and 8000 waves and the slope of the second half is zero"

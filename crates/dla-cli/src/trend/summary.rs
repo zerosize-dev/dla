@@ -49,6 +49,37 @@ pub fn declared_first(passed: &mut [&ColumnTrend], declared: &[dla_core::Finding
     passed.sort_by_key(|c| !c.candidates.iter().any(|f| declared.contains(f)));
 }
 
+/// Puts the live heap columns of the columns that are bound to no finding or site first, then the
+/// other heap columns, then the rest (the process columns): a steadily rising `os.rss` has a
+/// smaller p-value than a heap stair, so by p alone the heap column that decides is the one a
+/// bounded print cuts. Columns bound to a finding or a site keep their place and their order
+/// (the steps `dla trend` prints name the first column's finding).
+pub fn live_heap_first(passed: &mut [&ColumnTrend]) {
+    passed.sort_by_key(|c| {
+        if bound_to_something(c) {
+            0
+        } else {
+            1 + dla_core::trend::column_lead_rank(
+                &c.name,
+                c.region == dla_core::series::SeriesRegion::Heap,
+            )
+        }
+    });
+}
+
+/// How many of `passed` are in each region, as `dla trend` prints it (`heap`, `off-heap`,
+/// `non-heap`, `process`): a short list that holds a cut says what it holds.
+pub fn by_region(passed: &[&ColumnTrend]) -> serde_json::Map<String, serde_json::Value> {
+    let mut m = serde_json::Map::new();
+    for c in passed {
+        let n = m
+            .entry(c.region.as_str().to_owned())
+            .or_insert(serde_json::Value::from(0u64));
+        *n = serde_json::Value::from(n.as_u64().unwrap_or(0) + 1);
+    }
+    m
+}
+
 /// The passing columns of `columns`, most important first: bound to a finding or a
 /// site, then by p-value (columns without a p last), then by name; allocation-site columns that tie on those keys come with a finding at the line first, then largest Sen slope first. A column in seconds
 /// (`jvm.jit_seconds`, the compile time so far) counts runtime activity, not memory: it

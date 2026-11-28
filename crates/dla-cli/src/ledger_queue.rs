@@ -248,6 +248,10 @@ enum HolderMeasured {
     /// No column: these harnesses (targeted ones) have an allocation-stack or heap capture
     /// summary, which shows nothing at the writer lines.
     CapturesOnly(Vec<String>),
+    /// No column, and the captures of these harnesses (targeted ones) were summarized and are
+    /// blind: they could not see state the process measured, so they say nothing of the holder.
+    /// Each with what the summary said.
+    Blind(Vec<(String, String)>),
     /// Nothing measured the holder.
     Nothing,
 }
@@ -272,10 +276,18 @@ fn holder_measured(view: &RunView, ix: &Index, f: &Finding) -> HolderMeasured {
         .map(|(h, _)| h)
         .filter(|h| scan.summarized.contains(h))
         .collect();
-    if captured.is_empty() {
+    if !captured.is_empty() {
+        return HolderMeasured::CapturesOnly(captured);
+    }
+    let blind: Vec<(String, String)> = ix
+        .targeted_in(&f.id)
+        .into_iter()
+        .filter_map(|(h, _)| scan.blind.get(&h).map(|t| (h, t.clone())))
+        .collect();
+    if blind.is_empty() {
         HolderMeasured::Nothing
     } else {
-        HolderMeasured::CapturesOnly(captured)
+        HolderMeasured::Blind(blind)
     }
 }
 
@@ -288,6 +300,15 @@ fn executed_outcome(measured: &HolderMeasured, runtime: Option<&str>) -> String 
             "its code ran; its holder was not measured ({} has no probe for it) and the captures of {} show no growth at its writer lines",
             runtime.unwrap_or("the runtime"),
             hs.join(", ")
+        ),
+        HolderMeasured::Blind(hs) => format!(
+            "its code ran; its holder was not measured ({} has no probe for it) and the captures of {} could not see the state (blind: {})",
+            runtime.unwrap_or("the runtime"),
+            hs.iter()
+                .map(|(h, _)| h.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            hs[0].1
         ),
         HolderMeasured::Nothing => format!(
             "its code ran; its holder was not measured ({} has no probe for it)",
@@ -355,6 +376,19 @@ fn default_remedy(
         Some(Verdict::Unknown) => queue::NO_COVERAGE.to_owned(),
         Some(Verdict::Changed) => "its holder changed but did not pass the growth gate".to_owned(),
         Some(Verdict::Grew) => "its holder grew".to_owned(),
+        Some(Verdict::GrewUntied) => match ix.heap_lead(&f.id) {
+            // Its writer lines ran: never "write a unit".
+            Some((h, detail)) => {
+                let what = detail
+                    .split_once(" and nothing measured")
+                    .map_or(detail.as_str(), |(a, _)| a);
+                format!(
+                    "{what} and nothing decided it; decide it with dla alloc-test {h} --finding {}",
+                    f.id
+                )
+            }
+            None => "the heap of its harness grew and nothing decided it".to_owned(),
+        },
         None => "no run of it was read with dla trend".to_owned(),
     };
     // A holder whose key comes from the caller: the unit must pass a key it has not passed
@@ -377,6 +411,9 @@ fn default_remedy(
         return format!(
             "targeted in {list}, {outcome}: write a unit that puts the object in the state in which those lines run (a state that normal set-up removes needs a unit or a set-up that does not remove it) and adds a new key to {place}{key}"
         );
+    }
+    if best == Some(Verdict::GrewUntied) {
+        return format!("targeted in {list}, {outcome}");
     }
     format!("targeted in {list}, {outcome}: write a unit that adds a new key to {place}{key}")
 }

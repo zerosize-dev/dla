@@ -856,7 +856,7 @@ pub const SECOND_LOOK_SLOTS: [(&str, usize, &str); 5] = [
     (
         "outcome",
         2,
-        "the success or the failure path where the API has one: 0 success, 1 failure (fail or drop half-way)",
+        "the success or the failure path where the API has one: 0 success, 1 failure (fail, or drop the object early: never forget or leak it)",
     ),
 ];
 
@@ -1534,6 +1534,14 @@ pub struct HarnessDump {
     pub dla_harness: u32,
     /// Checkpoint, exit or tick.
     pub phase: DumpPhase,
+    /// For the allocator shim's exit record: when it was taken (`exit`, `snapshot` or
+    /// `signal`). A snapshot holds the live state; an exit record only what survives `exit()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
+    /// The process's own last checkpoint, kept with the shim record of the same process by
+    /// `dla harness run`, so a summary can compare the exit view with what the process measured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver: Option<DumpDriver>,
     /// Process ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
@@ -1689,6 +1697,18 @@ impl LineRuns {
             .collect();
         (counts.len() >= 2).then(|| (counts[0], counts[counts.len() - 1]))
     }
+}
+
+/// A driver's own last checkpoint of the process that wrote the shim record it is kept with.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+pub struct DumpDriver {
+    /// Units completed at that checkpoint.
+    pub x: u64,
+    /// `native.live_bytes` the driver counted at it.
+    pub live_bytes: u64,
+    /// `native.live_blocks` the driver counted at it, when it counts blocks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_blocks: Option<u64>,
 }
 
 /// How the in-run readings of a record were taken (Go command mode).

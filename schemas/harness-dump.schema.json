@@ -14,6 +14,13 @@
         "type": "string"
       }
     },
+    "at": {
+      "description": "For the allocator shim's exit record: when it was taken (`exit`, `snapshot` or\n`signal`). A snapshot holds the live state; an exit record only what survives `exit()`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "captures": {
       "description": "Files the agent wrote for `DLA_CAPTURE` at this record.",
       "type": [
@@ -50,6 +57,17 @@
       "type": "integer",
       "format": "uint32",
       "minimum": 0
+    },
+    "driver": {
+      "description": "The process's own last checkpoint, kept with the shim record of the same process by\n`dla harness run`, so a summary can compare the exit view with what the process measured.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DumpDriver"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "exe": {
       "description": "Executable path.",
@@ -412,6 +430,37 @@
           ]
         }
       }
+    },
+    "DumpDriver": {
+      "description": "A driver's own last checkpoint of the process that wrote the shim record it is kept with.",
+      "type": "object",
+      "properties": {
+        "live_blocks": {
+          "description": "`native.live_blocks` the driver counted at it, when it counts blocks.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "live_bytes": {
+          "description": "`native.live_bytes` the driver counted at it.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "x": {
+          "description": "Units completed at that checkpoint.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "x",
+        "live_bytes"
+      ]
     },
     "DumpInRun": {
       "description": "How the in-run readings of a record were taken (Go command mode).",

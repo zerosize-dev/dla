@@ -70,6 +70,14 @@ pub struct Scan {
     pub summarized: BTreeSet<String>,
     /// When the newest of those summaries of each harness was written (the `ts` of its line).
     pub summarized_at: std::collections::BTreeMap<String, chrono::DateTime<chrono::Utc>>,
+    /// Harnesses (`H3`) whose allocation-stack summary was marked blind (its captures could not
+    /// see growth the process measured; `blind_text` of its result): what the summary said. Such
+    /// a summary is no capture of the harness: it is in neither `summarized` nor
+    /// `summarized_at`.
+    pub blind: std::collections::BTreeMap<String, String>,
+    /// Harnesses (`H3`) with a summary that shows growth: a retention record, or an
+    /// allocation-stack record (not blind) with at least one stack that grows at every capture.
+    pub grew: BTreeSet<String>,
 }
 
 /// The harness a file under `harness/<H>/...` belongs to.
@@ -221,11 +229,33 @@ pub fn scan_in(ledger: &Ledger, run_dir: Option<&Path>) -> Scan {
             if rec.kind == EvidenceKind::AllocStack {
                 hs.extend(capture_harnesses(run_dir, rec));
             }
+            if rec.kind == EvidenceKind::AllocStack
+                && rec.result.get("blind").and_then(Value::as_bool) == Some(true)
+            {
+                let text = rec
+                    .result
+                    .get("blind_text")
+                    .and_then(Value::as_str)
+                    .unwrap_or("the capture could not see growth the process measured");
+                for h in hs {
+                    out.blind.insert(h, text.to_owned());
+                }
+                continue;
+            }
             if let Some(at) = ledger.evidence_order(&rec.evidence_id) {
                 for h in &hs {
                     let t = out.summarized_at.entry(h.clone()).or_insert(at.ts);
                     *t = (*t).max(at.ts);
                 }
+            }
+            let shows_growth = rec.kind == EvidenceKind::RetentionPath
+                || rec
+                    .result
+                    .get("monotone")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|n| n > 0);
+            if shows_growth {
+                out.grew.extend(hs.iter().cloned());
             }
             out.summarized.extend(hs);
         }

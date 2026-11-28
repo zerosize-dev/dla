@@ -135,6 +135,13 @@ pub mod codes {
     /// The open item of a heap residual above its threshold was closed unresolved while its
     /// harness has no summarized capture.
     pub const CAPTURE_NOT_SUMMARIZED: &str = "capture-not-summarized";
+    /// The open item of a heap growth that a live heap column measured was closed unresolved
+    /// while nothing decided it (no capture that shows the growing stack, no alloc-test) and
+    /// the budget is over its floor.
+    pub const HEAP_GROWTH_UNDECIDED: &str = "heap-growth-undecided";
+    /// An open item with rows of several series above their thresholds was resolved by a
+    /// remedy that does not name each of those series.
+    pub const REMEDY_MISSES_SERIES: &str = "remedy-misses-series";
     /// A finding whose newest alloc-test favors leak was closed unresolved: it is confirmed or
     /// refuted, never closed.
     pub const LEAK_FAVORED: &str = "leak-favored";

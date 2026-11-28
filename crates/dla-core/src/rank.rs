@@ -105,6 +105,7 @@ const NON_PRODUCT_DIRS: &[&str] = &[
     "benchmark",
     "benchmarks",
     "bench",
+    "benches",
     "docs",
     "doc",
 ];
@@ -173,9 +174,9 @@ fn component_words(c: &str) -> Vec<String> {
 fn is_non_product_component(c: &str) -> bool {
     component_words(c).iter().any(|w| {
         NON_PRODUCT_COMPOUNDS.contains(&w.as_str())
-            || NON_PRODUCT_WORDS
-                .iter()
-                .any(|n| w == n || w.strip_suffix('s') == Some(n))
+            || NON_PRODUCT_WORDS.iter().any(|n| {
+                w == n || w.strip_suffix('s') == Some(n) || w.strip_suffix("es") == Some(n)
+            })
     })
 }
 
@@ -668,6 +669,34 @@ mod tests {
             removers: (0..removers).map(|i| format!("a.py:{}", i + 50)).collect(),
             ..Annotation::default()
         }
+    }
+
+    #[test]
+    fn cargo_conventional_directories_are_not_product_code() {
+        for site in [
+            "crate/benches/x.rs:78",
+            "crate/benches/compare.rs",
+            "crate/examples/demo.rs:3",
+            "crate/tests/it.rs:9",
+            "crate/benches/nested/dir/y.rs:1",
+        ] {
+            assert!(is_non_product_site(site), "{site}");
+        }
+        // A word that only starts like one of them is product code.
+        for site in [
+            "crate/src/benchmarked/lib.rs:1",
+            "crate/src/latest/lib.rs:1",
+        ] {
+            assert!(!is_non_product_site(site), "{site}");
+        }
+        // Tier 6 for a detector hit in a bench file, which led the queue before.
+        let f = finding(
+            "detector:dla/rust-mem-forget",
+            &[],
+            None,
+            "crate/benches/compare.rs:78",
+        );
+        assert_eq!(tier(&f, None), TIER_DEMOTED);
     }
 
     #[test]

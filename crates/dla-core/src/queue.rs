@@ -327,6 +327,9 @@ pub fn is_miss(v: Verdict) -> bool {
 pub struct Index {
     /// Every verdict stored for the finding, with the harness of its series.
     verdicts: BTreeMap<FindingId, Vec<(String, Verdict)>>,
+    /// The findings with a verdict `grew_untied` that an alloc-test decided
+    /// ([`crate::grown::alloc_decided`]): their lead is lifted.
+    decided: std::collections::BTreeSet<FindingId>,
     /// The series of harnesses that declared the finding.
     declared: BTreeMap<FindingId, Vec<DeclaredRun>>,
     /// Harnesses that declared the finding, series or not, oldest first.
@@ -474,6 +477,19 @@ impl Index {
                 });
             }
         }
+        let untied: Vec<FindingId> = ix
+            .verdicts
+            .iter()
+            .filter(|(_, v)| v.iter().any(|(_, x)| *x == Verdict::GrewUntied))
+            .map(|(f, _)| f.clone())
+            .collect();
+        // At the floor of the budget the lead is lifted: the run can always finish.
+        let over_floor = gate::budget_over_floor(&view.state, view.worker.as_deref()).is_some();
+        for f in untied {
+            if !over_floor || crate::grown::alloc_decided(view, &f) {
+                ix.decided.insert(f);
+            }
+        }
         ix
     }
 
@@ -513,6 +529,15 @@ impl Index {
             .any(|(_, v)| matches!(v, Verdict::Grew | Verdict::Changed))
         {
             return Standing::Settled(Why::Moved);
+        }
+        // The heap of a harness made for it grew and nothing measured its holder: a lead the
+        // queue does not settle. An alloc-test on the harness decides it (see `decided`).
+        if verdicts.iter().any(|(_, v)| *v == Verdict::GrewUntied) {
+            return if self.decided.contains(id) {
+                Standing::Settled(Why::Moved)
+            } else {
+                Standing::Pending
+            };
         }
         let runs = self.declared.get(id).map_or(&[][..], Vec::as_slice);
         // `unknown` (the run had no coverage data) says nothing about the target's code: it
@@ -614,7 +639,7 @@ impl Index {
         let runs = self.declared.get(id).map_or(&[][..], Vec::as_slice);
         let moved = self.verdicts.get(id).is_some_and(|v| {
             v.iter()
-                .any(|(_, x)| matches!(x, Verdict::Grew | Verdict::Changed))
+                .any(|(_, x)| matches!(x, Verdict::Grew | Verdict::Changed | Verdict::GrewUntied))
         });
         let live = |r: &&DeclaredRun| r.hook_driver && !r.entry;
         // One flat reading: a hook driver that read `executed`, or the test loop (the project's
@@ -714,6 +739,18 @@ impl Index {
         })
     }
 
+    /// The newest run that read `id` as `grew_untied`: its harness and the sentence of the
+    /// verdict (the heap of the harness grew and nothing measured its holder).
+    pub fn heap_lead(&self, id: &FindingId) -> Option<(String, String)> {
+        let r = self
+            .declared
+            .get(id)?
+            .iter()
+            .rev()
+            .find(|r| r.verdict == Some(Verdict::GrewUntied))?;
+        Some((r.harness.clone(), r.detail.clone().unwrap_or_default()))
+    }
+
     /// The focused harness whose miss settled `id` as not reached.
     pub fn not_reached_in(&self, id: &FindingId) -> Option<String> {
         self.misses(id)
@@ -804,6 +841,7 @@ pub enum Standing {
 pub fn priority(v: Verdict) -> u8 {
     match v {
         Verdict::Grew => 0,
+        Verdict::GrewUntied => 1,
         Verdict::Changed => 1,
         Verdict::Executed => 2,
         Verdict::Unknown => 3,
@@ -1597,7 +1635,7 @@ impl ReportFacts {
             targeted += 1;
             harnesses.extend(t.iter().map(|(h, _)| h.clone()));
             match self.index.best_verdict(id) {
-                Some(Verdict::Grew) => grew += 1,
+                Some(Verdict::Grew | Verdict::GrewUntied) => grew += 1,
                 Some(Verdict::Changed) => changed += 1,
                 Some(Verdict::Executed) => executed += 1,
                 Some(Verdict::Unknown) => no_coverage += 1,
@@ -1932,6 +1970,17 @@ mod tests {
         run.series("S1", "H1");
         run.trend("T1", "S1", &[(1, Verdict::Changed)]);
         assert_eq!(pending_of(&run.reload()), ["F2"]);
+    }
+
+    #[test]
+    fn a_heap_lead_does_not_settle_a_target_until_it_is_decided() {
+        // The heap of the harness grew and nothing measured the holder: the queue keeps F1
+        // pending (a changed verdict would settle it), whatever its sibling read.
+        let (run, _) = Run::new(2);
+        run.harness(&manifest("H1", &[1], true));
+        run.series("S1", "H1");
+        run.trend("T1", "S1", &[(1, Verdict::GrewUntied)]);
+        assert_eq!(pending_of(&run.reload()), ["F1", "F2"]);
     }
 
     #[test]

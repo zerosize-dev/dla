@@ -14,7 +14,9 @@
  *     DLA_HARNESS_OUT=<harness dir>/out/0.jsonl ./dla_harness
  * The driver reads the glibc allocator itself (mallinfo2, malloc_trim). Do not preload
  * libdlashim.so into it unless DLA_SHIM_DISABLE=1 is set; to get call sites for a driver run,
- * preload the shim WITHOUT the driver's records by using command mode instead.
+ * preload the shim WITHOUT the driver's records by using command mode instead. When a shim is
+ * preloaded and not disabled, the driver hands it a snapshot after the last round (the shim's
+ * exit record would miss state that exit() frees first); with none, nothing happens.
  */
 #define _GNU_SOURCE
 #include <stdint.h>
@@ -25,6 +27,12 @@
 #include <unistd.h>
 #ifdef __GLIBC__
 #include <malloc.h>
+#endif
+#ifdef __APPLE__
+#include <dlfcn.h>
+#else
+/* The allocator shim's snapshot, when one is preloaded: a weak reference, no link-time need. */
+extern void dla_shim_snapshot(uint64_t x) __attribute__((weak));
 #endif
 
 enum { DEFAULT_STEP = @@DLA_STEP@@, DEFAULT_WARMUP = @@DLA_WARMUP@@, DEFAULT_ROUNDS = @@DLA_ROUNDS@@,
@@ -268,5 +276,17 @@ int main(int argc, char **argv)
             choices_report(done);
         checkpoint(done, round == total, argv);
     }
+    /* After the last unit and checkpoint, before anything the units hold is dropped: a shim in the
+     * process takes its record now, while their state is alive (no shim: nothing happens). */
+#ifdef __APPLE__
+    {
+        void (*snap)(uint64_t) = (void (*)(uint64_t))dlsym(RTLD_DEFAULT, "dla_shim_snapshot");
+        if (snap != NULL)
+            snap(done);
+    }
+#else
+    if (dla_shim_snapshot != NULL)
+        dla_shim_snapshot(done);
+#endif
     return 0;
 }

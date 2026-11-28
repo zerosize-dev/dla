@@ -28,11 +28,20 @@ fn shrink(v: &Value, max_str: usize, max_arr: usize, changed: &mut bool) -> Valu
                     .collect(),
             )
         }
-        Value::Object(o) => Value::Object(
-            o.iter()
-                .map(|(k, x)| (k.clone(), shrink(x, max_str, max_arr, changed)))
-                .collect(),
-        ),
+        Value::Object(o) => {
+            let mut out = Map::new();
+            for (k, x) in o {
+                out.insert(k.clone(), shrink(x, max_str, max_arr, changed));
+                // An array that was cut says which one and by how many: a bare `truncated`
+                // would read a cut list as the whole list.
+                if let Value::Array(a) = x
+                    && a.len() > max_arr
+                {
+                    out.insert(format!("{k}_cut"), json!(a.len() - max_arr));
+                }
+            }
+            Value::Object(out)
+        }
         other => other.clone(),
     }
 }
@@ -97,14 +106,15 @@ fn protected_copy(v: &Value, max_str: usize, max_arr: usize) -> Value {
 /// cut is named in `left_out` (a dropped key, or "<list>: N more items"), so nothing reads as
 /// complete when it is not.
 const DETAIL: [&str; 8] = [
-    "revisit",
     "harnesses_generated",
     "harnesses_run",
     "closed_static_only",
     "budget_estimate",
-    "budget",
     "stages_passed",
     "actions",
+    // The time left and what can still be revisited decide whether a run goes on: dropped last.
+    "revisit",
+    "budget",
 ];
 const CONTEXT: [&str; 6] = ["triggers", "queue", "ledger", "report", "record", "counts"];
 
@@ -498,5 +508,41 @@ mod tests {
     fn fit_leaves_a_value_that_fits_alone() {
         let v = json!({"ok": true, "blocking": [{"id": "a"}]});
         assert_eq!(fit(v.clone(), "blocking"), v);
+    }
+
+    #[test]
+    fn a_cut_array_names_its_key_and_how_many_items_were_cut() {
+        let v = json!({
+            "ok": true,
+            "passed": (0..8).map(|i| json!({"column": format!("c{i}"), "text": "x".repeat(260)})).collect::<Vec<_>>(),
+            "other": ["a", "b"],
+        });
+        let b = bound(v);
+        assert_eq!(b["truncated"], true, "{b}");
+        let kept = b["passed"].as_array().unwrap().len();
+        assert!(kept < 8, "{b}");
+        assert_eq!(b["passed_cut"], 8 - kept, "{b}");
+        // An array that was not cut says nothing.
+        assert!(b.get("other_cut").is_none(), "{b}");
+    }
+
+    #[test]
+    fn the_time_left_and_the_revisit_list_are_the_last_details_a_status_gives_up() {
+        // Every detail but those two is too much: they stay while anything else can go.
+        let mut v = status_like(3, "blocking");
+        v["budget"] = json!({"remaining_seconds": 9000, "total_seconds": 10020});
+        v["revisit"] = json!(["F1", "F2"]);
+        for k in [
+            "harnesses_generated",
+            "closed_static_only",
+            "budget_estimate",
+            "stages_passed",
+        ] {
+            v[k] = json!("y".repeat(300));
+        }
+        v["actions"] = json!(vec!["z".repeat(500); 3]);
+        let out = fit(v, "blocking");
+        assert!(out.get("budget").is_some(), "{out}");
+        assert!(out.get("revisit").is_some(), "{out}");
     }
 }

@@ -4059,3 +4059,32 @@ unattended run at a time and no builder beside it.
   'dependency'", offline and online, 398 s). Not round X code. rerun_failed_jobs queued; waiter bxgl69shp
   (out u173/ci-rerun). If green: commit-snapshot-tree.sh 9a37c3f message-49, push main+dev, preview.16, release,
   rig, r9-fastrace alone (start-run.sh fastrace r9-fastrace; 6 GB free).
+- Re-run GREEN 15/15. Round X COMMITTED 3ab6788 on main (tree 9a37c3f minus .wip, message 49); Version
+  0.9.0-preview.16 d9d0a4e; main + dev pushed (both d9d0a4e). release.yml publish=true queued on main;
+  waiter blxd871ro. Next: verify assets + musl sha, rig refresh (bin + plugin from d9d0a4e), r9-fastrace alone.
+- 05:0x UTC: preview.16 PUBLISHED (tag on d9d0a4e, 11 assets; musl sha b12366b6... matches .sha256).
+  NOTE: gh release view uses GraphQL (403 here); use gh api repos/zerosize-dev/dla/releases/tags/<tag>.
+  Rig: bin/dla = .16 (dla.prev = .15), plugin = git archive d9d0a4e (marketplace.json removed, skills diff
+  clean), plugin.prev = .15. cargo clean (4.9 GB) -> 11 GB free (rebuild before the next builder).
+  r9-fastrace STARTED 05:11 (pid 20444), alone. Waiter broq8oaqy (wait-run.sh r9-fastrace 13000; bash cap 2 h,
+  re-arm if it ends without "ended").
+- 05:16 r9-fastrace ENDED: exit 0, 268 s, COMPLETE, no leak confirmed, 4 of 167 min. Kept: /root/dla-real/r9-fastrace-keep
+  (redacted transcript). Run dir kept (1.2 GB) for diagnosis. Facts: H3 = stuck reporter (park forever in report),
+  8 sampled roots/unit on main thread -> S5 native.live_bytes 2.72->3.58->4.56->6.53 MB, live_blocks 12886 constant
+  (pending_messages Vec realloc), T4 PASS stair. H3 capture S8 (x 440..3520): 17 live sites, nothing grows.
+  CONFIRMED C0 (u175/tls): shim dumps in ELF destructor; glibc exit runs TLS dtors first -> thread_local state freed
+  before the dump (tls 548 B vs global 8,000,548 B). O1 resolved inconclusive ("live heap flat" - wrong), F41
+  closed unresolved by close-rest ("captures of H2, H3 show no growth at its writer lines").
+  Diagnosis workflow wfjaicjtw (4 Sonnet analysts: capture, stop, decisions, targeting + verifiers), scratch u176. Task 135.
+- Diagnosis wfjaicjtw done (20 Sonnet agents), u176/summary.txt. Held: capture A/B/C (C0 + no reconcile; worker
+  thread alive at exit visible; C++ statics/TLS also lost; patched snapshot works, one record), stop A/B/D, decisions
+  A1 (trend stdout cut passed list to 4 by out.rs bound, hid native.live_bytes), A2, A3, targeting A1-A4
+  (benches not non-product). Refuted as stated: stop C (Changed is settled), decisions A4/A5 (narrowed).
+- Builder Y (Sonnet) started on wip-notes/y-capture-alive-brief.md (Y1-Y7), scratch u177. No unattended run beside it.
+  Deleted u173 binaries (dla-w, dla-x, dla-bench, mut.keep).
+
+## Round Y verify (in progress)
+- Builder a51de5bfb0e510fda done: Y1-Y7 in working tree (34 files + 5 new). Report: dyn 64/66 + xfail; rust-delayed-queue failed once (passed alone).
+- Disk: target/debug deleted (9 GB, new cargo build layout). Rebuild with CARGO_PROFILE_DEV_DEBUG=line-tables-only CARGO_PROFILE_TEST_DEBUG=line-tables-only. Old scratch u8acc u140 u143 u153 u159 deleted, r9 project + work dirs deleted (r9-fastrace-keep stays).
+- Real-library Y1 check ($sp/u177/fr-*.jsonl): r9 H3 driver + snapshot: shim live 3.54/3.54/4.52/6.49 MB at x 880/1320/2200/3960 = driver; exit record flat 2.51 MB (= r9).
+- Review workflow wmvyycpkb (sonnet, 4 areas + verify) running. Full suite bb1hdtwz0 -> $sp/u177/full-suite.txt, full-test.log.
