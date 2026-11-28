@@ -4054,3 +4054,8 @@ unattended run at a time and no builder beside it.
 - My mutations MUTX1-7 all caught. Full suite green (u173/check.log). Snapshot 9a37c3f (CI) waiting.
 - Commit message: wip-notes/commit-message-49.txt. Next: commit to main, bump preview.16, release,
   rig refresh, r9-fastrace alone.
+- CI 9a37c3f (run 46101925596): 14/15; ubuntu clippy+test failed in harness_junit
+  maven_project_series_grows_with_the_repeated_tests: Maven Central unreachable ("No plugin found for prefix
+  'dependency'", offline and online, 398 s). Not round X code. rerun_failed_jobs queued; waiter bxgl69shp
+  (out u173/ci-rerun). If green: commit-snapshot-tree.sh 9a37c3f message-49, push main+dev, preview.16, release,
+  rig, r9-fastrace alone (start-run.sh fastrace r9-fastrace; 6 GB free).
