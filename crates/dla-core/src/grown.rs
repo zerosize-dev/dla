@@ -558,7 +558,7 @@ pub enum HarnessAbout {
 /// [`crate::harness::CaptureFile::digest`]; a file deleted to keep the run under its size limit
 /// keeps its entry and digest, so the link holds). A capture that a later run replaced no longer
 /// matches, so this link says nothing for it.
-fn made_from_capture_of(
+pub fn made_from_capture_of(
     run_dir: &std::path::Path,
     e: &crate::evidence::EvidenceRecord,
     harness: &str,

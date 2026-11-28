@@ -1237,3 +1237,210 @@ fn every_table_a_hook_drivers_registration_call_grows_is_direct_not_only_its_tar
         assert_eq!(e["code"], "registration-only", "{id}: {e}");
     }
 }
+
+/// Copies the harness `from` of the run to `to` (its manifest with the new id, its driver and,
+/// when `with_coverage`, its coverage records).
+fn copy_harness(run_dir: &Path, from: &str, to: &str, with_coverage: bool) {
+    let src = run_dir.join("harness").join(from);
+    let dst = run_dir.join("harness").join(to);
+    fs::create_dir_all(dst.join("driver")).unwrap();
+    let mut m: Value =
+        serde_json::from_str(&fs::read_to_string(src.join("harness.json")).unwrap()).unwrap();
+    m["id"] = json!(to);
+    fs::write(dst.join("harness.json"), m.to_string()).unwrap();
+    for e in fs::read_dir(src.join("driver")).unwrap().flatten() {
+        fs::copy(e.path(), dst.join("driver").join(e.file_name())).unwrap();
+    }
+    if with_coverage {
+        for e in fs::read_dir(&src).unwrap().flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if n.starts_with("executed") {
+                fs::copy(e.path(), dst.join(&n)).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn the_bundle_shows_the_driver_and_what_ran_in_each_harness_behind_the_evidence() {
+    let r = Run::new(&["--budget", "3h", "--queue", "off"]);
+    let (cache, table) = (r.id_at("app/router.py:11"), r.id_at("app/sessions.py:1"));
+    let g = r.ok(&[
+        "harness", "gen", "--lang", "python", "--driver", "--probe", &cache, "--probe", &table,
+    ]);
+    let workload = g["evidence"][0].as_str().unwrap().to_owned();
+    r.fill("H1", CACHE_SETUP, DIRECT_UNIT);
+    r.ok(&["harness", "run", "H1", "--mode", "both"]);
+    let t = r.ok(&["trend", "S1"]);
+    let growth = t["evidence"].as_array().unwrap().clone();
+    r.confirm(&cache, &workload, &growth);
+
+    // The coverage of the measured program: the project functions and the driver's own.
+    let h1 = r.run_dir.join("harness/H1");
+    let first = fs::read_dir(&h1)
+        .unwrap()
+        .flatten()
+        .filter_map(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            Some(n.strip_prefix("run-")?.strip_suffix(".json")?.to_owned())
+        })
+        .next()
+        .unwrap();
+    let funcs = |list: &[(&str, &str, u64)]| -> Vec<Value> {
+        list.iter()
+            .map(|(f, n, l)| json!({"file": f, "name": n, "line": l}))
+            .collect()
+    };
+    fs::write(
+        h1.join(format!("executed-{first}.json")),
+        json!({
+            "runtime": "python", "kind": "functions", "fresh_units": 3520,
+            "functions": funcs(&[
+                ("app/router.py", "Router.dispatch", 20),
+                ("app/router.py", "wrap", 11),
+                ("app/main.py", "serve", 11),
+                ("dla_harness.py", "unit", 5),
+            ]),
+        })
+        .to_string(),
+    )
+    .unwrap();
+    // Another record of the same harness repeats a function and adds one.
+    fs::write(
+        h1.join("executed.json"),
+        json!({
+            "runtime": "python", "kind": "functions",
+            "functions": funcs(&[("app/router.py", "Router.dispatch", 20), ("app/sessions.py", "Sessions.get", 8)]),
+        })
+        .to_string(),
+    )
+    .unwrap();
+    // Five more harnesses of the same finding; H3 has no coverage record.
+    for (h, cov) in [
+        ("H2", true),
+        ("H3", false),
+        ("H4", true),
+        ("H5", true),
+        ("H6", true),
+    ] {
+        copy_harness(&r.run_dir, "H1", h, cov);
+    }
+
+    let b = r.ok(&["bundle", &cache]);
+    let dir = r.dir.path().join(b["dir"].as_str().unwrap());
+    let text = |rel: &str| fs::read_to_string(dir.join(rel)).unwrap();
+
+    // The driver, without the target block, the finding id or the site.
+    let driver = text("harnesses/H1/driver/dla_harness.py");
+    assert!(driver.contains("r.wrap(r.Handler(i))"), "{driver}");
+    assert!(
+        driver.contains("the generated target block is not part of the bundle"),
+        "{driver}"
+    );
+    for hidden in ["Targets of harness", "app/router.py:11", cache.as_str()] {
+        assert!(!driver.contains(hidden), "{hidden} in the bundled driver");
+    }
+
+    // What ran: sorted, deduplicated, the driver's own function left out, the site scrubbed.
+    let ran = text("harnesses/H1/ran.txt");
+    let lines: Vec<&str> = ran.lines().collect();
+    assert_eq!(
+        lines[0],
+        "# project functions that ran in the measured program of H1 (coverage of 3520 units; a function not listed did not run there)"
+    );
+    assert!(ran.contains("app/router.py:20 Router.dispatch\n"), "{ran}");
+    assert!(ran.contains("app/sessions.py:8 Sessions.get\n"), "{ran}");
+    assert!(ran.contains("app/main.py:11 serve\n"), "{ran}");
+    assert_eq!(ran.matches("Router.dispatch").count(), 1, "{ran}");
+    assert!(!ran.contains("dla_harness"), "{ran}");
+    assert!(!ran.contains("app/router.py:11"), "{ran}");
+    assert!(!ran.contains(&cache), "{ran}");
+    // The line of the site itself is scrubbed (it has no `file:line`); the others are in order.
+    let body: Vec<&str> = lines[1..]
+        .iter()
+        .copied()
+        .filter(|l| l.split_once(' ').is_some_and(|(loc, _)| loc.contains(':')))
+        .collect();
+    assert_eq!(body.len(), 3, "{ran}");
+    let mut sorted = body.clone();
+    sorted.sort_by_key(|l| {
+        let (loc, _) = l.split_once(' ').unwrap();
+        let (f, n) = loc.rsplit_once(':').unwrap();
+        (f.to_owned(), n.parse::<u64>().unwrap())
+    });
+    assert_eq!(body, sorted, "{ran}");
+
+    // `index.json`: the files, the count, at most four harnesses and how many were left out.
+    let index: Value = serde_json::from_str(&text("index.json")).unwrap();
+    let hs = index["harnesses"].as_array().unwrap();
+    let ids: Vec<&str> = hs.iter().map(|h| h["id"].as_str().unwrap()).collect();
+    // Order and the cap only. That cited harnesses come first is covered by the unit test
+    // `cited_harnesses_come_first_and_the_rest_are_counted`: here the only cited harness is H1,
+    // which is first in id order anyway.
+    assert_eq!(ids, ["H1", "H2", "H3", "H4"], "{index}");
+    assert_eq!(index["harnesses_left_out"], 2, "{index}");
+    assert_eq!(hs[0]["ran"], "harnesses/H1/ran.txt");
+    assert_eq!(hs[0]["functions_ran"], 4);
+    assert_eq!(hs[0]["driver"][0], "harnesses/H1/driver/dla_harness.py");
+    assert!(
+        hs[2]["ran"].as_str().unwrap().starts_with("not recorded: "),
+        "{index}"
+    );
+    assert_eq!(hs[2]["functions_ran"], 0);
+    assert!(!dir.join("harnesses/H3/ran.txt").exists());
+    assert!(dir.join("harnesses/H4/ran.txt").is_file());
+    assert!(!dir.join("harnesses/H5").exists());
+    // The bundle names neither the finding nor its site anywhere.
+    for rel in [
+        "index.json",
+        "harnesses/H2/ran.txt",
+        "harnesses/H4/driver/dla_harness.py",
+    ] {
+        let t = text(rel);
+        assert!(
+            !t.contains(&cache) && !t.contains("app/router.py:11"),
+            "{rel}"
+        );
+    }
+}
+
+#[test]
+fn a_long_list_of_functions_that_ran_is_cut_and_says_how_many_were_left_out() {
+    let r = Run::new(&["--budget", "3h", "--queue", "off"]);
+    let cache = r.id_at("app/router.py:11");
+    let g = r.ok(&[
+        "harness", "gen", "--lang", "python", "--driver", "--probe", &cache,
+    ]);
+    let workload = g["evidence"][0].as_str().unwrap().to_owned();
+    r.fill("H1", CACHE_SETUP, DIRECT_UNIT);
+    r.ok(&["harness", "run", "H1", "--mode", "both"]);
+    let t = r.ok(&["trend", "S1"]);
+    let growth = t["evidence"].as_array().unwrap().clone();
+    r.confirm(&cache, &workload, &growth);
+    let many: Vec<Value> = (1..=3050)
+        .map(|n| json!({"file": "app/big.py", "name": format!("f{n}"), "line": n}))
+        .collect();
+    for e in fs::read_dir(r.run_dir.join("harness/H1"))
+        .unwrap()
+        .flatten()
+    {
+        if e.file_name().to_string_lossy().starts_with("executed") {
+            fs::remove_file(e.path()).unwrap();
+        }
+    }
+    fs::write(
+        r.run_dir.join("harness/H1/executed.json"),
+        json!({"runtime": "python", "kind": "functions", "functions": many}).to_string(),
+    )
+    .unwrap();
+    let b = r.ok(&["bundle", &cache]);
+    let dir = r.dir.path().join(b["dir"].as_str().unwrap());
+    let ran = fs::read_to_string(dir.join("harnesses/H1/ran.txt")).unwrap();
+    let lines: Vec<&str> = ran.lines().collect();
+    assert_eq!(lines.len(), 1 + 3000 + 1, "{}", lines.len());
+    assert_eq!(lines[3000], "app/big.py:3000 f3000");
+    assert_eq!(lines[3001], "# 50 more not listed (cap 3000)");
+    let index: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("index.json")).unwrap()).unwrap();
+    assert_eq!(index["harnesses"][0]["functions_ran"], 3050, "{index}");
+}

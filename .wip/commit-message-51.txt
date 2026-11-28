@@ -1,0 +1,36 @@
+A writer that starts late is counted, a capture's growth is a verdict, the verifier sees what ran
+
+A real Rust run confirmed its documented leak in 5 of 167 minutes: a list that takes values only when
+a bounded ring is full, with no consumer started. Three general defects were in the way:
+
+Coverage of one step missed a writer that starts after a threshold:
+
+- The Rust and Go coverage process ran one round of `step` units. The ring was not full yet, so the
+  writer lines counted 0 and `dla trend` read `writer_not_executed` in every series of the driver made
+  for the finding while its heap grew.
+- When every writer line of a target counted 0, the coverage process now runs again for the length of
+  the measured process (the units the driver did are read back from its checkpoints), and the run
+  record says so. On the real driver: 3520 units, the writer lines counted 2877, 959 and 960 times
+  (0, 0 and 0 in the run), and the target read `executed`.
+
+A capture series gave its harness's targets no verdict:
+
+- The allocation-stack series `dla summarize` writes from a harness's captures had `targets: []`, so
+  a passed column tied to the finding never became `grew`, no trigger item was raised and the run
+  ended complete with the public-API trigger never checked.
+- Its tied targets are now `grew` (untied ones get no verdict), the trigger rule reads it as growth
+  of its harness, and `dla run status` holds the run until an entry-path harness checks the trigger.
+
+The verifier chose a non-leak reading against the measurements:
+
+- `agents/verifier.md` has rules for readings that say the level stops or the memory is given back:
+  a growing alloc-test, a doubling block, a remover that runs only on a condition, a stated purpose.
+- `dla ledger verify` refuses `N-WARM` and `N-HWM` (`verify-contradicts-measurement`) when an
+  alloc-test on the finding measured a live heap column still growing, unless the mechanism cites it.
+- `dla bundle` gives the verifier, for each harness behind the evidence (at most four), its driver
+  without the target block and `ran.txt`, the project functions that ran in its measured program
+  (with the coverage length, a note when the list is cut or the length is unknown, and the loaded
+  classes for a JVM harness). A reading that needs a drain must find it there.
+- On the real run's bundle, three reruns each: before `N-HWM`, `N-HWM`, `N-INTENT`, all assuming a
+  consumer that drains; now `L-COLLECT`, `L-COLLECT`, `N-RELEASE`, all naming the consumer that never
+  started.

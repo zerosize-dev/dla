@@ -618,7 +618,9 @@ hold the site, the hypothesis, the label or the explanation. The bundle of a fin
 also carries `test-loop/<H>/tests.json`: the test classes that fed the holder in the loop, with the entries each
 added per run, and the classes that ran and added nothing (measured by `dla alloc-test <H> --finding F3`; without
 that run it lists the classes that ran and says which of them feeds the holder was not measured; a Python test loop lists the
-test files that ran and measures nothing per file). The verifier states a site, holder and
+test files that ran and measures nothing per file). For each harness behind the evidence (at most four) the bundle also holds
+`harnesses/<H>/`: its driver without the generated target block and `ran.txt`, the project functions that ran in its measured
+program (`ran-classes.txt`, the classes loaded, for a JVM harness; the header says when the coverage length is not recorded or the list was cut, and then an unlisted function may still have run), so the verifier can tell whether a consumer or a drain it assumes ran at all. The verifier states a site, holder and
 mechanism in words, decides from them whether the owner would call this a defect, picks an ID or
 UNCLASSIFIED and runs `dla ledger verify`. A verifier that reads the finding as bounded, intended or
 proportional to load records the matching `N-*` ID; the ledger accepts it, the label disagrees and the open
