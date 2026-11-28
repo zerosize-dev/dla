@@ -4149,3 +4149,16 @@ unattended run at a time and no builder beside it.
   workflow wf_51d85194-d3a / task w0x3lf1lb): harnesses/<H>/driver + ran.txt + verifier rule.
 - Disk 1.4 GB: target/debug 10.2 GB (stale 08h/09h hash dirs) cannot be deleted by me (safety check); full local
   suite skipped (no room); CI runs it. Plugin copy /root/dla-real/plugin-z, bin /root/dla-real/bin-z.
+
+## 2026-11-28 12:50 round Z complete (Z1-Z4), snapshot 33aea7c in CI
+- Z4 (workflow wf_51d85194-d3a): bundle harnesses/<H>/driver (target block removed) + ran.txt (project functions
+  that ran, header with coverage units, cap 3000 with count, ran-classes.txt for JVM, "not recorded" otherwise);
+  verifier rule; 5 review findings confirmed and fixed.
+- Verifier on the r10 bundle (3 runs each): preview.17 N-HWM,N-HWM,N-INTENT; Z1-3 rules N-SCALE,N-SCALE,L-COLLECT;
+  Z4 L-COLLECT,L-COLLECT,N-RELEASE (all three name the consumer that never started). Refusal never fired.
+- My checks: fmt ok; dla-core lib 417, dla-workload lib 277, dla-cli bin 414, trigger_items 14, report trigger 11,
+  cli trigger 9, ledger_m6 46, skill_text 33, heap_decided 15, capture_blind 6: all pass. Full suite: CI only (disk).
+- Commit message: wip-notes/commit-message-51.txt. CI waiter bvktj2mdv (u182/ci).
+- Deleted /root/dla-real/r10-fastrace and r9-fastrace (keeps exist; r10-vbase is the replay base). 1.5 GB free.
+- Next: CI green -> commit-snapshot-tree.sh 33aea7c msg-51; push main+dev; preview.18; release; rig; next real run.
+  Disk blocks heavy set B runs (micrometer Gradle cache 630 MB + builds): target/debug 10 GB only the owner can delete.
