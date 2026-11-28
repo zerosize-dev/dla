@@ -1399,25 +1399,50 @@ fn too_short_for_the_gate(series: &crate::series::SeriesFile) -> bool {
     series.points.len().saturating_sub(series.warmup as usize) < need
 }
 
-/// True when a capture of `harness` was summarized after the file of `series` was written: the
-/// capture of that series' own run, not one taken before it (a summary of the first captures
-/// of a harness says nothing of a later, larger series). A series file whose time cannot be read
-/// counts any summary of the harness.
+/// True when a capture of `harness` was summarized after the first series of the driver that
+/// wrote `series` was written: the capture of that driver, not one taken before it. A summary of
+/// the first captures of a harness says nothing of a later series of a driver that was changed
+/// since (its hooks differ), while a later run of the same driver (the same `driver_digest` in
+/// the run records of the harness) is the one that capture explained. A series with no run
+/// record (an alloc-test writes none) is of the driver of the newest run record. A series file
+/// whose time cannot be read counts any summary of the harness.
 fn capture_of_series(
     scan: &crate::measured_holders::Scan,
     run_dir: &std::path::Path,
     harness: &str,
     series: &str,
+    of_harness: &std::collections::BTreeMap<String, String>,
 ) -> bool {
     let Some(at) = scan.summarized_at.get(harness) else {
         return scan.summarized.contains(harness);
     };
-    let written = std::fs::metadata(crate::series::SeriesFile::path_in(run_dir, series))
-        .and_then(|m| m.modified())
-        .ok()
-        .map(chrono::DateTime::<chrono::Utc>::from)
-        .and_then(|t| chrono::DateTime::from_timestamp_millis(t.timestamp_millis()));
-    written.is_none_or(|w| *at >= w)
+    let written = |s: &str| {
+        std::fs::metadata(crate::series::SeriesFile::path_in(run_dir, s))
+            .and_then(|m| m.modified())
+            .ok()
+            .map(chrono::DateTime::<chrono::Utc>::from)
+            .and_then(|t| chrono::DateTime::from_timestamp_millis(t.timestamp_millis()))
+    };
+    let all: Vec<&str> = of_harness
+        .iter()
+        .filter(|(_, h)| h.as_str() == harness)
+        .map(|(s, _)| s.as_str())
+        .collect();
+    let known = |s: &str| crate::harness::run_record_of(run_dir, harness, s)?.driver_digest;
+    // The driver of the newest series that has a run record.
+    let newest = all
+        .iter()
+        .filter_map(|s| Some((written(s)?, known(s)?)))
+        .max()
+        .map(|(_, d)| d);
+    let driver = |s: &str| known(s).or_else(|| newest.clone());
+    let mine = driver(series);
+    let first = all
+        .iter()
+        .filter(|s| **s == series || driver(s) == mine)
+        .filter_map(|s| written(s))
+        .min();
+    first.is_none_or(|w| *at >= w)
 }
 
 /// The over-threshold heap residual rows whose harness has no summarized capture, one entry per
@@ -1461,7 +1486,7 @@ pub fn uncaptured_residuals(view: &RunView) -> Vec<UncapturedResidual> {
         let Some(runtime) = file.source.runtime.filter(|rt| supports_capture(*rt)) else {
             continue;
         };
-        if capture_of_series(scan, run_dir, harness, series)
+        if capture_of_series(scan, run_dir, harness, series, &view.series_harness)
             || (runtime == crate::runtime::Runtime::Rust
                 && capture_wrote_no_stacks(run_dir, harness))
             || residual_growth_bytes(r.residual, &file) < MIN_CAPTURE_GROWTH_BYTES

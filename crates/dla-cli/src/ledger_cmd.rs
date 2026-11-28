@@ -1268,7 +1268,7 @@ fn refuse_uncaptured_residual(ctx: &Ctx, id: &OpenItemId) -> Res<()> {
     Err(Failure::refuse(
         core_codes::CAPTURE_NOT_SUMMARIZED,
         format!(
-            "{id} cannot be left unresolved: it is a heap residual above its threshold and no summarized capture of its largest row ({}) exists: no retention or allocation-stack summary computed from capture files under harness/{}/ was written after that series was (a capture taken before it, or of other series, says nothing of it; a capture run that records it could not write stacks releases it)",
+            "{id} cannot be left unresolved: it is a heap residual above its threshold and no summarized capture of its largest row ({}) exists: no retention or allocation-stack summary computed from capture files under harness/{}/ was written after the first series of the driver that wrote it (a capture taken before it, or of an earlier driver, says nothing of it; a capture run that records it could not write stacks releases it)",
             u.series.join(", "),
             u.harness
         ),

@@ -82,6 +82,16 @@ impl Run {
         // The ledger and the files are stamped to the millisecond: keep the order readable.
         sleep(Duration::from_millis(30));
     }
+    /// The run record of the run of H1 that wrote `series`, with the digest of its driver.
+    fn run_record(&self, series: &str, digest: &str) {
+        let dir = self.run_dir.join("harness/H1");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(format!("run-{series}.json")),
+            json!({"series": [series], "driver_digest": digest}).to_string(),
+        )
+        .unwrap();
+    }
     /// A summarized allocation-stack capture of harness H1, as `dla summarize` records it.
     fn summarize(&self) {
         let mut l = Ledger::load(&self.run_dir).unwrap();
@@ -154,11 +164,14 @@ fn an_item_that_lists_a_larger_row_of_another_series_is_not_resolved_by_the_smal
     // S1: 0.94 bytes per iteration (under the 64 KiB a capture can attribute); the same harness
     // later writes S2 and S3 of 2 MB per iteration.
     r.series("S1", 0.94);
+    r.run_record("S1", "d0");
     let v = r.ok(&["gap", "S1", "--residual"]);
     assert_eq!(v["open_items"]["opened"], json!(["O1"]), "{v}");
     // The capture of the first runs is summarized before the big series exists.
     r.summarize();
     r.series("S2", 2_000_000.0);
+    // The driver was edited between the runs: the capture of the first one is of another driver.
+    r.run_record("S2", "d1");
     let v = r.ok(&["gap", "S2", "--residual"]);
     assert_eq!(v["open_items"]["opened"], json!([]), "{v}");
     assert_eq!(v["open_items"]["added"], json!(["O1"]), "{v}");
@@ -194,6 +207,7 @@ fn an_item_that_lists_a_larger_row_of_another_series_is_not_resolved_by_the_smal
     // S3 is a row added after the resolution: O1 does not cover it. The item is re-opened as a new
     // one that names S3, and the final gate lists it.
     r.series("S3", 2_500_000.0);
+    r.run_record("S3", "d1");
     let v = r.ok(&["gap", "S3", "--residual"]);
     assert_eq!(v["open_items"]["opened"], json!(["O2"]), "{v}");
     let texts = r.ledger_item_texts();
@@ -212,6 +226,33 @@ fn an_item_that_lists_a_larger_row_of_another_series_is_not_resolved_by_the_smal
         "{report}"
     );
     assert!(report.contains("O1 resolved as inconclusive"), "{report}");
+
+    // S3 was written by the same driver as S2 (the same digest in the run records): the capture
+    // taken after S2 is the capture of that driver and releases O2.
+    let (code, v) = r.resolve("O2", "the same driver as S2, captured after it");
+    assert_eq!(code, 0, "{v}");
+    assert!(r.residual_items().is_empty(), "{:?}", r.items());
+
+    // A series with no run record (an alloc-test writes none) is of the newest driver: S5 is
+    // covered by the capture of S2 and S3, written long before it.
+    r.series("S5", 2_200_000.0);
+    let v = r.ok(&["gap", "S5", "--residual"]);
+    assert_eq!(v["open_items"]["opened"], json!(["O3"]), "{v}");
+    let (code, v) = r.resolve("O3", "the newest driver, captured");
+    assert_eq!(code, 0, "{v}");
+
+    // S4 is the series of another driver (its hooks changed): no capture of the old one says
+    // anything of it, and O3 cannot be left until the harness is captured again.
+    r.series("S4", 3_000_000.0);
+    r.run_record("S4", "d2");
+    let v = r.ok(&["gap", "S4", "--residual"]);
+    assert_eq!(v["open_items"]["opened"], json!(["O4"]), "{v}");
+    let (code, v) = r.resolve("O4", "no new capture");
+    assert_ne!(code, 0, "{v}");
+    assert_eq!(v["error"]["code"], "capture-not-summarized", "{v}");
+    r.summarize();
+    let (code, v) = r.resolve("O4", "captured after S4");
+    assert_eq!(code, 0, "{v}");
 }
 
 #[test]
