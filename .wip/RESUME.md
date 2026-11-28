@@ -4088,3 +4088,7 @@ unattended run at a time and no builder beside it.
 - Disk: target/debug deleted (9 GB, new cargo build layout). Rebuild with CARGO_PROFILE_DEV_DEBUG=line-tables-only CARGO_PROFILE_TEST_DEBUG=line-tables-only. Old scratch u8acc u140 u143 u153 u159 deleted, r9 project + work dirs deleted (r9-fastrace-keep stays).
 - Real-library Y1 check ($sp/u177/fr-*.jsonl): r9 H3 driver + snapshot: shim live 3.54/3.54/4.52/6.49 MB at x 880/1320/2200/3960 = driver; exit record flat 2.51 MB (= r9).
 - Review workflow wmvyycpkb (sonnet, 4 areas + verify) running. Full suite bb1hdtwz0 -> $sp/u177/full-suite.txt, full-test.log.
+- Full suite on round Y tree (before review fixes): 3941 passed, 0 failed, 5 ignored; clippy -D warnings clean; fmt ok.
+- Review wmvyycpkb: 3 confirmed (blind order in measured_holders; undecided-heap commands w/o lead; out.rs _cut stale for protected keys), 5 refuted. Brief y-review-fixes-brief.md; Sonnet builder a0cf0c095e40ef664 running (no commit).
+- Snapshots on wip/progress: 2ec77ee, 1fdb76b [skip ci].
+- Next: verify builder, rerun touched tests + mutations, dyn bench (--json $sp/u178/dyn.json), snapshot with CI, then main + preview.17, rig, r10-fastrace.

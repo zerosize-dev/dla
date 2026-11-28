@@ -214,6 +214,7 @@ pub fn scan(view: &RunView) -> Scan {
 pub fn scan_in(ledger: &Ledger, run_dir: Option<&Path>) -> Scan {
     let mut out = Scan::default();
     let own = run_dir.map(crate::measurement::Measurement::of_run);
+    let mut stacks: BTreeMap<String, Vec<StackSummary>> = BTreeMap::new();
     for rec in ledger.evidence() {
         if matches!(
             rec.kind,
@@ -229,35 +230,42 @@ pub fn scan_in(ledger: &Ledger, run_dir: Option<&Path>) -> Scan {
             if rec.kind == EvidenceKind::AllocStack {
                 hs.extend(capture_harnesses(run_dir, rec));
             }
-            if rec.kind == EvidenceKind::AllocStack
-                && rec.result.get("blind").and_then(Value::as_bool) == Some(true)
-            {
-                let text = rec
-                    .result
-                    .get("blind_text")
-                    .and_then(Value::as_str)
-                    .unwrap_or("the capture could not see growth the process measured");
-                for h in hs {
-                    out.blind.insert(h, text.to_owned());
-                }
-                continue;
-            }
-            if let Some(at) = ledger.evidence_order(&rec.evidence_id) {
-                for h in &hs {
-                    let t = out.summarized_at.entry(h.clone()).or_insert(at.ts);
-                    *t = (*t).max(at.ts);
-                }
-            }
             let shows_growth = rec.kind == EvidenceKind::RetentionPath
                 || rec
                     .result
                     .get("monotone")
                     .and_then(Value::as_u64)
                     .is_some_and(|n| n > 0);
-            if shows_growth {
-                out.grew.extend(hs.iter().cloned());
+            if rec.kind == EvidenceKind::AllocStack {
+                // Resolved per harness after the loop: the newest summary decides.
+                let blind_text = (rec.result.get("blind").and_then(Value::as_bool) == Some(true))
+                    .then(|| {
+                        rec.result
+                            .get("blind_text")
+                            .and_then(Value::as_str)
+                            .unwrap_or("the capture could not see growth the process measured")
+                            .to_owned()
+                    });
+                let order = ledger.evidence_order(&rec.evidence_id);
+                for h in hs {
+                    stacks.entry(h).or_default().push(StackSummary {
+                        order,
+                        blind_text: blind_text.clone(),
+                        shows_growth,
+                    });
+                }
+            } else {
+                if let Some(at) = ledger.evidence_order(&rec.evidence_id) {
+                    for h in &hs {
+                        let t = out.summarized_at.entry(h.clone()).or_insert(at.ts);
+                        *t = (*t).max(at.ts);
+                    }
+                }
+                if shows_growth {
+                    out.grew.extend(hs.iter().cloned());
+                }
+                out.summarized.extend(hs);
             }
-            out.summarized.extend(hs);
         }
         if rec.kind != EvidenceKind::RetentionPath
             || rec.authority == Authority::Static
