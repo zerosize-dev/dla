@@ -4092,3 +4092,41 @@ unattended run at a time and no builder beside it.
 - Review wmvyycpkb: 3 confirmed (blind order in measured_holders; undecided-heap commands w/o lead; out.rs _cut stale for protected keys), 5 refuted. Brief y-review-fixes-brief.md; Sonnet builder a0cf0c095e40ef664 running (no commit).
 - Snapshots on wip/progress: 2ec77ee, 1fdb76b [skip ci].
 - Next: verify builder, rerun touched tests + mutations, dyn bench (--json $sp/u178/dyn.json), snapshot with CI, then main + preview.17, rig, r10-fastrace.
+- Review fixes done (builder a0cf0c095e40ef664): F1 newest alloc-stack summary decides; F2 commands name `dla alloc-test H`; F3 _cut via restore(). VERIFY: Y1 row has real-library numbers; new "Y review" row.
+- Snapshot db6040a WITH CI (wip/progress): waiter bbgt9fbu5 -> $sp/u179/ci. Dyn bench Sonnet agent a23b55e216038dd84 -> $sp/u179/dyn.json.
+- After both green: commit-snapshot-tree.sh db6040a <msgfile> to main; push main + dev; bump preview.17; release; rig; r10-fastrace.
+
+## 2026-11-28 round Y committed, preview.17, r10-fastrace
+- Local dynamic (u179/dyn.json): 65/66 + xfail rust-tree-parent-links; rust-delayed-queue now passes; 0
+  heap-growth-undecided / grew_untied in fixtures; remedy-misses-series 54 retries in 37 fixtures (one retry each).
+- CI db6040a run 46130081239: 15/15 green. Round Y COMMITTED fa5814c on main (tree db6040a minus .wip, message 50);
+  Version 0.9.0-preview.17 38c6207; main + dev pushed. Release run 46136426652 success: v0.9.0-preview.17, 11 assets,
+  musl sha e5c78726... ok. Rig: bin/dla = .17 (dla.prev .16), plugin = git archive 38c6207 (diff: plugin.json,
+  references/rust.md), plugin.prev = .16.
+- Disk: rm -rf target/debug was REFUSED by the safety check (cwd had been inside it); not retried. Freed old
+  scratch dirs instead (u142-rel u146-rel u168 u174 u134 u34 u33 u35 u54 u94 u95 u96 replay* u22 u26 u28 u98 u110
+  u115 u155 u162 u164 u119/dla-R2a check-lp-B p2-B1 p2chk-B1 p2chk-B4 u151 u24 b check-r-RB real ext): 3.65 GB free.
+  Fastrace test build measured 908 MB (u180). target/debug (8.5 GB) still there for the next builder.
+- r10-fastrace STARTED 10:47 UTC (pid 21147), alone. Waiter: wait-run.sh r10-fastrace 7000 (re-arm if it times out).
+  After: keep files (+alloc, histograms), redact transcript, diagnose against r9 (C0 fixed? snapshot record at
+  "at":"snapshot"? blind check? heap-growth-undecided refusal? grew_untied?).
+
+## 2026-11-28 11:00 r10-fastrace FOUND (preview.17), round Z started
+- r10-fastrace: 314 s, COMPLETE. F41 = documented holder spsc.rs:21 Sender::pending_messages, adder spsc.rs:55
+  force_send, mechanism "no reporter, nothing drains": CONFIRMED via alloc capture (E38/E39, 4 snapshot records,
+  shim live == driver live, Vec block 61 KB->3.9 MB, stair, gate pass); alloc-test E32 native.live_bytes
+  growth-continues favors leak. Verifier DISAGREES: N-HWM ("doubling realloc of one block = burst HWM", "each
+  later send drains it", "did not see evidence the collector stops draining"). Kept r10-fastrace-keep (3 MB);
+  run dir kept with H4 only (cov-build used for hand check); r10-vbase/project (5 MB) = base for vrun.py.
+- Set A latest: otel-python FOUND (r3), otel-go FOUND (r5), interceptors FOUND (r5), fastrace FOUND (r10,
+  disputed), logstash PARTLY (r5).
+- General causes from r10 (round Z, brief wip-notes/z-brief.md, workflow wf_afd7e4ca-0b4 / task w3egge4ly):
+  Z1 coverage process runs ONE step (440 units): threshold writers (push only when ring full) count 0 ->
+     writer_not_executed in every series of the no-reporter driver. Hand check (u180/cov): 440 units ->
+     lines 38/49 count 0; 3960 units -> 4197/1399. Tools: /usr/lib/llvm-18/bin (driver built with 1.80.0).
+  Z2 capture series (source kind dump) get targets [] (verdicts::compute uses run_harness()) -> grew never
+     recorded -> trigger item never raised -> COMPLETE at 5 min, "Trigger: not checked (no harness series that
+     grew is tied to it)".
+  Z3 verifier N-HWM against its own bundle's alloc-test (growth-continues); bundle excerpts are only stack
+     frames (max 4), the conditional remover/consumer code never shown.
+- Verifier baseline: vrun.py r10-v17-{1,2,3} on r10-vbase with plugin/bin preview.17 (task bg3lnx2z1).

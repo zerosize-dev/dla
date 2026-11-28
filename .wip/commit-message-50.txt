@@ -1,0 +1,68 @@
+An allocation capture sees the state while it is alive; a blind capture is no capture
+
+A real run on a Rust library ended COMPLETE after 4 of 167 minutes with its leak measured and never
+attributed. The driver's own count of live bytes rose from 2.68 to 6.49 MB across the captures,
+while the allocator shim's exit record read 2.51 MB at every one: exit() frees the calling
+thread's thread-locals, the atexit state and the C++ statics before the shim's destructor runs, so
+state held there is gone from the record. The flat capture then counted as "the capture", and one
+free-text `inconclusive` closed the measured growth.
+
+The shim takes its record while the state is alive:
+
+- The shim exports `dla_shim_snapshot(x)`. It writes the one record of the process now, with
+  `"at":"snapshot"` and the driver's x; the destructor and the SIGTERM path then write nothing.
+  Every record says when it was taken (`exit`, `snapshot` or `signal`).
+- The Rust and C drivers `dla harness gen` writes call it after the last unit and checkpoint,
+  before their state is dropped (looked up by name at run time; no shim, nothing happens).
+- On the real library of the run, its driver rebuilt with the call: the snapshot read 3.54, 3.54,
+  4.52 and 6.49 MB live at four sizes, the same as the driver's own count; the exit record of the
+  same driver read 2.51 MB at all four.
+
+A capture is checked against the process's own readings:
+
+- `dla harness run` keeps the measured process's last checkpoint (x, live bytes, live blocks) with
+  its shim record.
+- `dla summarize` marks a capture series blind when the driver's live bytes rose past a floor
+  (64 KiB and 10% of the first reading) and the shim's total rose by less than half of that. It
+  prints both series and names the snapshot, or, after a snapshot that is still blind, the
+  alloc-test. The shim's peak rising with a flat live total is a hint only.
+- A blind summary is no capture for the gates. Of the allocation-stack summaries of a harness the
+  newest decides, by the ledger's own order.
+- "Capture a point with more work" is gone; the "factor of two" advice is given only when the
+  captures differ by less than that.
+
+A measured heap growth is decided by a measurement:
+
+- `ledger resolve O<n> --as unresolved` is refused with `heap-growth-undecided` while the budget is
+  over its floor, a heap row of the item is above its threshold, its series passed a live heap
+  column, and neither a capture that shows the growing stack nor an alloc-test on the harness
+  decided it. The refusal names `dla alloc-test <H> --finding <F>` for each lead, else
+  `dla alloc-test <H>` (after the capture when none was summarized).
+- A remedy for an item with rows of several series above their thresholds names each series
+  (`remedy-misses-series`).
+- The gate text of the item says what the capture already showed instead of asking for it again.
+
+A no-probe target of a harness whose heap grew is a lead:
+
+- `dla trend` reads a declared heap target with no probe, whose writer lines ran, in a harness
+  whose series passed a live heap column that nothing ties to a declared target, as `grew_untied`,
+  not `executed`. `dla trend` puts its alloc-test first; the queue keeps it pending, and close-rest
+  and the final gate hold it while the budget is over its floor. It is never credited to the
+  finding and never confirms it.
+
+Outputs that drop what matters say so:
+
+- `dla trend` lists the live heap columns first and prints the count of passed columns per
+  region. A cut array is named as `<key>_cut` with the number of items left out, for the list
+  that is printed. `run status` gives up its budget and revisit list last.
+
+Small fixes:
+
+- Cargo `benches/` directories are not product code in the ranking.
+- The second-look slot text says to drop an object early and never forget or leak it, and
+  `dla harness run` warns when a Rust driver's own code calls `mem::forget`, `Box::leak` or
+  `ManuallyDrop::new`.
+
+A new fixture pair keeps the class: worker threads keep notices in a per-thread outbox when a
+fixed-size hand-off is full, and the hand-off empties only when an uplink is attached (the decoy
+attaches it).

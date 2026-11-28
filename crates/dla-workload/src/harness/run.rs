@@ -2341,13 +2341,13 @@ fn run_driver_mode(
         run.limitations.extend(s.limitations.iter().cloned());
     }
     if manifest.runtime == dla_core::runtime::Runtime::Go && !res.timed_out {
-        go_cover_point(ctx, manifest, paths, mode, timeout, &mut run)?;
+        go_cover_point(ctx, manifest, paths, mode, timeout, rounds, &mut run)?;
     }
     if manifest.runtime == dla_core::runtime::Runtime::Rust
         && manifest.mode == HarnessMode::Driver
         && !res.timed_out
     {
-        rust_cover_point(ctx, manifest, paths, mode, timeout, &mut run)?;
+        rust_cover_point(ctx, manifest, paths, mode, timeout, rounds, &mut run)?;
     }
     let file: DumpFile = dumps::read_dumps(&dump);
     if file.bad_lines > 0 {
@@ -2459,12 +2459,16 @@ fn go_coverpkg(spec: &ExecSpec<'_>) -> String {
 /// sampler, built with `-coverprofile` and `-coverpkg` over the whole module (or every module of
 /// the workspace). Its profile goes to `cov/` like a command-mode one, and `dla trend` and
 /// the entry-point coverage read it from there. Its failure is a limitation, never a refusal.
+/// When every writer line of a target counted 0 in that one round and the measured process ran
+/// more than one round, the process is run once more for `rounds` rounds (see [`longer_cover`])
+/// and its profile replaces the first; a longer run that fails leaves the first profile.
 fn go_cover_point(
     ctx: &ToolCtx,
     manifest: &HarnessManifest,
     paths: &Paths,
     mode: KeyMode,
     timeout: Duration,
+    rounds: u32,
     run: &mut ModeRun,
 ) -> Result<(), Refusal> {
     let label = format!("p1-{}-cover", mode.as_str());
@@ -2486,25 +2490,10 @@ fn go_cover_point(
     fs::create_dir_all(&paths.cov).map_err(|e| io_refusal(&paths.cov, e))?;
     let profile = paths.cov.join(format!("{label}.out"));
     let _ = fs::remove_file(&profile);
-    let mut spec = pe.exec_spec(timeout, "", &[("DLA_WARMUP", "0".to_owned())]);
-    let Some(at) = spec.argv.iter().position(|a| a == "test") else {
+    let Some((res, log_rel)) = go_cover_process(ctx, &pe, &profile, timeout, None)? else {
         return Ok(());
     };
-    let pkgs = go_coverpkg(&spec);
-    spec.argv.splice(
-        at + 1..at + 1,
-        [
-            "-coverprofile".to_owned(),
-            profile.to_string_lossy().into_owned(),
-            pkgs,
-        ],
-    );
-    spec.sample = false;
-    let command = spec.argv.join(" ");
-    spec.command = &command;
-    let res = exec(ctx, &spec)?;
-    run.logs.push(paths.rel(ctx, &spec.log));
-    let log_rel = paths.rel(ctx, &spec.log);
+    run.logs.push(log_rel.clone());
     if let Some(e) = &res.spawn_error {
         run.limitations
             .push(format!("the coverage run {label} did not start: {e}"));
@@ -2520,7 +2509,167 @@ fn go_cover_point(
                 .map_or_else(|| "a signal".to_owned(), |c| format!("code {c}"))
         ));
     }
+    if res.spawn_error.is_some() || res.timed_out || !profile.is_file() {
+        return Ok(());
+    }
+    let counted = lines::go_line_counts(&paths.cov, &writer_lines(ctx, manifest));
+    let Some(missed) = longer_cover(&writer_groups(ctx, manifest), &counted, rounds) else {
+        return Ok(());
+    };
+    let units = manifest.step.saturating_mul(u64::from(rounds));
+    let left = timeout.saturating_sub(Duration::from_millis(res.wall_ms));
+    if left < Duration::from_secs(1) {
+        run.limitations.push(format!(
+            "the coverage of {label} was not taken again at {units} units: no time was left of the {} s limit (the counts of one round of {} units are kept)",
+            timeout.as_secs(),
+            manifest.step
+        ));
+        return Ok(());
+    }
+    // The longer run writes beside the first profile; it replaces it only when it finished.
+    let long_pe = PointEnv {
+        n: units,
+        rounds,
+        ..pe
+    };
+    let long_profile = paths.cov.join(format!("{label}-long.out.tmp"));
+    let _ = fs::remove_file(&long_profile);
+    let log = paths.logs.join(format!("{label}-long.log"));
+    let Some((long, long_rel)) = go_cover_process(ctx, &long_pe, &long_profile, left, Some(&log))?
+    else {
+        return Ok(());
+    };
+    run.logs.push(long_rel.clone());
+    let failed = if let Some(e) = &long.spawn_error {
+        Some(format!("it did not start: {e}"))
+    } else if long.timed_out {
+        Some(format!(
+            "it did not finish in {} s and was killed",
+            left.as_secs()
+        ))
+    } else if long.code != Some(0) {
+        Some(format!(
+            "it exited with {}",
+            long.code
+                .map_or_else(|| "a signal".to_owned(), |c| format!("code {c}"))
+        ))
+    } else if !long_profile.is_file() {
+        Some("it wrote no profile".to_owned())
+    } else {
+        None
+    };
+    match failed {
+        None => {
+            fs::rename(&long_profile, &profile).map_err(|e| io_refusal(&profile, e))?;
+            run.limitations
+                .push(longer_cover_note(&label, units, &missed, manifest.step));
+        }
+        Some(why) => {
+            let _ = fs::remove_file(&long_profile);
+            run.limitations.push(format!(
+                "the coverage of {label} could not be taken again at {units} units: {why} (log {long_rel}); the counts of one round of {} units are kept",
+                manifest.step
+            ));
+        }
+    }
     Ok(())
+}
+
+/// One process of the Go coverage point: the driver under `go test` with `-coverprofile`
+/// writing `profile` and `-coverpkg` over the module, for the units and rounds of `pe`. `log`
+/// is its log file when it is not the label's own. Returns the result and the log's run-relative
+/// path, or `None` when the command has no `go test` to add the flags to.
+fn go_cover_process(
+    ctx: &ToolCtx,
+    pe: &PointEnv<'_>,
+    profile: &Path,
+    timeout: Duration,
+    log: Option<&Path>,
+) -> Result<Option<(ExecResult, String)>, Refusal> {
+    let mut spec = pe.exec_spec(timeout, "", &[("DLA_WARMUP", "0".to_owned())]);
+    let Some(at) = spec.argv.iter().position(|a| a == "test") else {
+        return Ok(None);
+    };
+    let pkgs = go_coverpkg(&spec);
+    spec.argv.splice(
+        at + 1..at + 1,
+        [
+            "-coverprofile".to_owned(),
+            profile.to_string_lossy().into_owned(),
+            pkgs,
+        ],
+    );
+    spec.sample = false;
+    if let Some(l) = log {
+        spec.log = l.to_path_buf();
+    }
+    let command = spec.argv.join(" ");
+    spec.command = &command;
+    let res = exec(ctx, &spec)?;
+    let log_rel = pe.paths.rel(ctx, &spec.log);
+    Ok(Some((res, log_rel)))
+}
+
+/// The writer lines of each finding a harness targets or probes, by finding id: the lines that
+/// add to the holder (`adding_writer_lines`), without the release lines [`writer_lines`] puts
+/// first. Empty when the ledger cannot be read.
+fn writer_groups(ctx: &ToolCtx, manifest: &HarnessManifest) -> Vec<(String, Vec<lines::Wanted>)> {
+    let Ok(ledger) = ctx.ledger() else {
+        return Vec::new();
+    };
+    let mut ids: Vec<&dla_core::FindingId> = manifest.targets.iter().collect();
+    ids.extend(manifest.probes.iter().filter_map(|p| p.finding.as_ref()));
+    let mut out: Vec<(String, Vec<lines::Wanted>)> = Vec::new();
+    for id in ids {
+        let Some(a) = ledger.annotation(id) else {
+            continue;
+        };
+        let w = a.adding_writer_lines();
+        if !w.is_empty() && !out.iter().any(|(i, _)| *i == id.to_string()) {
+            out.push((id.to_string(), w));
+        }
+    }
+    out
+}
+
+/// Whether a coverage process of one step has to be run again for the length of the series, and
+/// for which findings. A finding is `missed` when it has writer lines and every one of them
+/// counted 0 (a line that could not be counted, `count: null`, is not 0, and a line the record
+/// does not list is not 0): a writer that starts after a threshold, such as a full buffer, has
+/// not run in one step. The answer is `None` when no finding is missed, or when the measured
+/// process ran one round or fewer (a longer run would be the same run).
+fn longer_cover(
+    groups: &[(String, Vec<lines::Wanted>)],
+    counted: &[Value],
+    rounds: u32,
+) -> Option<Vec<String>> {
+    if rounds <= 1 {
+        return None;
+    }
+    let count_of = |file: &str, line: u32| -> Option<u64> {
+        counted
+            .iter()
+            .find(|e| {
+                e.get("file").and_then(Value::as_str) == Some(file)
+                    && e.get("line").and_then(Value::as_u64) == Some(u64::from(line))
+            })
+            .and_then(|e| e.get("count"))
+            .and_then(Value::as_u64)
+    };
+    let missed: Vec<String> = groups
+        .iter()
+        .filter(|(_, w)| w.iter().all(|(f, l)| count_of(f, *l) == Some(0)))
+        .map(|(id, _)| id.clone())
+        .collect();
+    (!missed.is_empty()).then_some(missed)
+}
+
+/// The note a coverage run that was taken again leaves in the run record.
+fn longer_cover_note(label: &str, units: u64, missed: &[String], step: u64) -> String {
+    format!(
+        "the coverage of {label} was taken again at {units} units: a writer line of {} had not run in one step of {step} (a writer that starts after a threshold, such as a full buffer)",
+        missed.join(", ")
+    )
 }
 
 /// Process counts of the allocation-stack points of a Rust driver.
@@ -2831,12 +2980,19 @@ fn rust_llvm_tools(cwd: &Path, env: &[(String, String)]) -> Result<(PathBuf, Pat
 /// functions that ran exported with `llvm-cov` into `cov/<label>.rust.json`. `dla trend` and
 /// the entry-point coverage read that file. Its failure, or tools that are missing or of
 /// another LLVM version, is a limitation (the targets read `unknown`), never a refusal.
+///
+/// One step can end before a writer that starts after a threshold (a bounded buffer that has
+/// to fill first) has run. When every writer line of a target counted 0 in that step and the
+/// measured process ran more than one round, the process is run once more for the `rounds` of
+/// the measured process (one process, no warm-up) within the time left of `timeout`, and its
+/// counts and units replace the first ones (see [`longer_cover`]).
 fn rust_cover_point(
     ctx: &ToolCtx,
     manifest: &HarnessManifest,
     paths: &Paths,
     mode: KeyMode,
     timeout: Duration,
+    rounds: u32,
     run: &mut ModeRun,
 ) -> Result<(), Refusal> {
     let label = format!("p1-{}-cover", mode.as_str());
@@ -2925,6 +3081,93 @@ fn rust_cover_point(
         capture: None,
         dumps: 0,
     };
+    let first_log = paths.logs.join(format!("{label}.log"));
+    run.logs.push(paths.rel(ctx, &first_log));
+    let mut notes: Vec<String> = Vec::new();
+    let (doc, wall_ms) = rust_cover_process(
+        ctx, paths, &pe, &tools, &exe, timeout, &first_log, &mut notes,
+    )?;
+    run.limitations.append(&mut notes);
+    let Some(mut doc) = doc else {
+        return Ok(());
+    };
+    // The writer lines of the targets, counted from the regions of the same export, with the
+    // key mode and the units of this point (what the counts are per unit of).
+    let wanted = writer_lines(ctx, manifest);
+    let mut counted = lines::rust_line_counts(&doc, &paths.work, &wanted);
+    let mut units = manifest.step;
+    if let Some(missed) = longer_cover(&writer_groups(ctx, manifest), &counted, rounds) {
+        let long_units = manifest.step.saturating_mul(u64::from(rounds));
+        let left = timeout.saturating_sub(Duration::from_millis(wall_ms));
+        let again = longer_cover_note(&label, long_units, &missed, manifest.step);
+        let log = paths.logs.join(format!("{label}-long.log"));
+        let log_rel = paths.rel(ctx, &log);
+        if left < Duration::from_secs(1) {
+            run.limitations.push(format!(
+                "the coverage of {label} was not taken again at {long_units} units: no time was left of the {} s limit (the counts of one step of {} units are kept)",
+                timeout.as_secs(),
+                manifest.step
+            ));
+        } else {
+            let long = PointEnv {
+                n: long_units,
+                rounds,
+                ..pe
+            };
+            let mut notes: Vec<String> = Vec::new();
+            run.logs.push(log_rel.clone());
+            let (again_doc, _) =
+                rust_cover_process(ctx, paths, &long, &tools, &exe, left, &log, &mut notes)?;
+            match again_doc {
+                Some(d) => {
+                    run.limitations.append(&mut notes);
+                    counted = lines::rust_line_counts(&d, &paths.work, &wanted);
+                    doc = d;
+                    units = long_units;
+                    run.limitations.push(again);
+                }
+                None => {
+                    run.limitations.push(format!(
+                        "the coverage of {label} could not be taken again at {long_units} units (log {log_rel}); the counts of one step of {} units are kept: {}",
+                        manifest.step,
+                        notes.join("; ")
+                    ));
+                }
+            }
+        }
+    }
+    let functions = cover::rust_export_functions(&doc, &paths.work);
+    let file = paths
+        .cov
+        .join(format!("{label}{}", cover::RUST_COVER_SUFFIX));
+    fs::write(
+        &file,
+        json!({
+            "functions": functions, "lines": counted,
+            "mode": mode.as_str(), "units": units,
+        })
+        .to_string(),
+    )
+    .map_err(|e| io_refusal(&file, e))?;
+    Ok(())
+}
+
+/// One process of the Rust coverage point: `exe` run under `pe` (its units and rounds), its
+/// `.profraw` merged and exported. Returns the `llvm-cov export` document, or `None` with the
+/// reason in `notes` (a process that exits with an error but wrote a profile is still read, its
+/// exit is a note), and the wall time of the process in milliseconds. `log` is its log file.
+#[allow(clippy::too_many_arguments)]
+fn rust_cover_process(
+    ctx: &ToolCtx,
+    paths: &Paths,
+    pe: &PointEnv<'_>,
+    tools: &(PathBuf, PathBuf),
+    exe: &str,
+    timeout: Duration,
+    log: &Path,
+    notes: &mut Vec<String>,
+) -> Result<(Option<Value>, u64), Refusal> {
+    let label = &pe.label;
     let dump = pe.dump_path();
     if let Some(d) = dump.parent() {
         fs::create_dir_all(d).map_err(|e| io_refusal(d, e))?;
@@ -2934,7 +3177,9 @@ fn rust_cover_point(
     if let Ok(rd) = fs::read_dir(&paths.cov) {
         for e in rd.filter_map(Result::ok) {
             let n = e.file_name().to_string_lossy().into_owned();
-            if n.starts_with(&label) && (n.ends_with(".profraw") || n.ends_with(".profdata")) {
+            if n.starts_with(label.as_str())
+                && (n.ends_with(".profraw") || n.ends_with(".profdata"))
+            {
                 let _ = fs::remove_file(e.path());
             }
         }
@@ -2954,25 +3199,24 @@ fn rust_cover_point(
             ),
         ],
     );
-    spec.argv[0] = exe.clone();
+    spec.argv[0] = exe.to_owned();
     spec.sample = false;
+    spec.log = log.to_path_buf();
     let command = spec.argv.join(" ");
     spec.command = &command;
     let res = exec(ctx, &spec)?;
     let log_rel = paths.rel(ctx, &spec.log);
-    run.logs.push(log_rel.clone());
     if let Some(e) = &res.spawn_error {
-        run.limitations
-            .push(format!("the coverage run {label} did not start: {e}"));
-        return Ok(());
+        notes.push(format!("the coverage run {label} did not start: {e}"));
+        return Ok((None, res.wall_ms));
     }
     if res.timed_out {
-        run.limitations.push(format!(
+        notes.push(format!(
             "the coverage run {label} did not finish in {} s and was killed (log {log_rel}): which entry points ran is not known",
             timeout.as_secs()
         ));
     } else if res.code != Some(0) {
-        run.limitations.push(format!(
+        notes.push(format!(
             "the coverage run {label} exited with {} (log {log_rel}): which entry points ran may be incomplete",
             res.code
                 .map_or_else(|| "a signal".to_owned(), |c| format!("code {c}"))
@@ -2986,14 +3230,14 @@ fn rust_cover_point(
         .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with(&label) && n.ends_with(".profraw"))
+                .is_some_and(|n| n.starts_with(label.as_str()) && n.ends_with(".profraw"))
         })
         .collect();
     if profraws.is_empty() {
-        run.limitations.push(format!(
+        notes.push(format!(
             "the coverage run {label} wrote no profile (log {log_rel}): the targets read unknown"
         ));
-        return Ok(());
+        return Ok((None, res.wall_ms));
     }
     let profdata = raw(".profdata");
     let merged = Command::new(&tools.0)
@@ -3021,16 +3265,16 @@ fn rust_cover_point(
                 Err(e) => e.to_string(),
             };
             tidy(&profraws);
-            run.limitations.push(format!(
+            notes.push(format!(
                 "llvm-profdata could not merge the profile of {label}: {why}: the targets read unknown"
             ));
-            return Ok(());
+            return Ok((None, res.wall_ms));
         }
     }
     tidy(&profraws);
     let exported = Command::new(&tools.1)
         .arg("export")
-        .arg(&exe)
+        .arg(exe)
         .arg(format!("-instr-profile={}", profdata.display()))
         .arg("--ignore-filename-regex=/\\.cargo/|/\\.rustup/|/rustc/")
         .stdin(Stdio::null())
@@ -3041,27 +3285,12 @@ fn rust_cover_point(
         .ok()
         .filter(|o| o.status.success())
         .and_then(|o| serde_json::from_slice::<Value>(&o.stdout).ok());
-    let Some(doc) = doc else {
-        run.limitations.push(format!(
+    if doc.is_none() {
+        notes.push(format!(
             "llvm-cov could not export the profile of {label}: the targets read unknown"
         ));
-        return Ok(());
-    };
-    let functions = cover::rust_export_functions(&doc, &paths.work);
-    // The writer lines of the targets, counted from the regions of the same export, with the
-    // key mode and the units of this point (what the counts are per unit of).
-    let counted = lines::rust_line_counts(&doc, &paths.work, &writer_lines(ctx, manifest));
-    let file = raw(cover::RUST_COVER_SUFFIX);
-    fs::write(
-        &file,
-        json!({
-            "functions": functions, "lines": counted,
-            "mode": mode.as_str(), "units": manifest.step,
-        })
-        .to_string(),
-    )
-    .map_err(|e| io_refusal(&file, e))?;
-    Ok(())
+    }
+    Ok((doc, res.wall_ms))
 }
 
 // ---------------------------------------------------------------------------------------
